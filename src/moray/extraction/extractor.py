@@ -75,6 +75,7 @@ class Extractor:
         # 该领域对应的动态结构化模型与系统提示词（构造一次即可复用）
         self._schema_model: Type[BaseModel] = build_extraction_model(self.domain)
         self._system_prompt: str = build_system_prompt(self.domain)
+        self.model_name: str = get_settings()["chat_model"]
 
     # ---- 可在测试中替换的两个接缝 ----------------------------------------
     def _build_agent(self) -> Agent:
@@ -128,7 +129,7 @@ class Extractor:
                 document_id=document.id,
                 domain_code=self.domain.code,
                 result=core,
-                model_name=get_settings()["chat_model"],
+                model_name=self.model_name,
                 usage=usage,
                 attempts=attempt,
             )
