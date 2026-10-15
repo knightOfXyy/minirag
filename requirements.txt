@@ -1,0 +1,16 @@
+# ===== AgentScope 2.0 核心（模型层内置 openai/anthropic 等依赖）=====
+agentscope==2.0.10
+
+# ===== 配置 =====
+python-dotenv>=1.0.0
+
+# ===== 第 7 课起：PostgreSQL + pgvector =====
+# asyncpg>=0.29.0
+# sqlalchemy[asyncio]>=2.0.0
+
+# ===== 第 7 课起：本地中文嵌入模型 =====
+# sentence-transformers>=3.0.0
+
+# ===== 第 14 课起：服务化 =====
+# fastapi>=0.115.0
+# uvicorn>=0.30.0
