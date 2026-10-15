@@ -64,14 +64,14 @@ def build_agent() -> Agent:
     model = VolcengineChatModel(
         credential=credential,
         model=os.environ.get("ARK_CHAT_MODEL", "deepseek-v4-flash-ga"),
-        stream=False,  # 先关掉底层流式，方便你看清"完整块"事件；L02 再开
+        stream=True,  # 先关掉底层流式，方便你看清"完整块"事件；L02 再开
     )
 
     # ③ Agent：2.0 统一内核。此时没有 toolkit，所以它只会"推理"，不会"行动"。
     agent = Agent(
         name="Moray",
         system_prompt=(
-            "你是 Moray，一个企业知识助手。回答简洁、专业，"
+            "你是 Moray，一名金融行业的实体抽取专家。回答简洁、专业，"
             "当前你还没有任何工具，只能凭自身知识回答。"
         ),
         model=model,
