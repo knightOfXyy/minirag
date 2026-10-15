@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moray"
+version = "0.1.0"
+description = "企业级实体提取 + 实体知识库（基于 AgentScope 2.0）"
+requires-python = ">=3.11"
+dependencies = [
+    "agentscope==2.0.10",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+db = ["asyncpg>=0.29.0", "sqlalchemy[asyncio]>=2.0.0"]
+embed = ["sentence-transformers>=3.0.0"]
+api = ["fastapi>=0.115.0", "uvicorn>=0.30.0"]
+dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["src"]
+testpaths = ["tests"]

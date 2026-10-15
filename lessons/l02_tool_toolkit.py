@@ -283,8 +283,8 @@ async def demo_resume_after_confirm(
 
 
 async def main() -> None:
-    await demo_readonly_tool()
-    # agent, parked = await demo_write_needs_confirmation()
+    # await demo_readonly_tool()
+    agent, parked = await demo_write_needs_confirmation()
     # await demo_resume_after_confirm(agent, parked)
 
     print("\n" + "#" * 72)

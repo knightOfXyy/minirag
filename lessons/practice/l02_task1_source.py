@@ -69,7 +69,7 @@ def build_agent() -> Agent:
     )
     return Agent(
         name="Moray",
-        system_prompt="你是实体知识库助手，需要查询时调用 lookup_entity。",
+        system_prompt="你是实体知识库助手，需要查询时调用 lookup_entity。信息不足时可以反问",
         model=model,
         toolkit=Toolkit(tools=[FunctionTool(lookup_entity, is_read_only=True)]),
     )
@@ -116,6 +116,9 @@ async def main() -> None:
     print("# 进阶：故意把 docstring 里 baike/internal 的说明删掉再跑，")
     print("# 你会发现模型开始乱猜或瞎填——这就是 docstring 的威力。")
     print("#" * 72)
+
+    await ask(agent, "能按那些来源查阿里巴巴")
+    await ask(agent, "查一下阿里巴巴")
 
 
 if __name__ == "__main__":

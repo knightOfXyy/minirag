@@ -11,3 +11,4 @@
 |---|---|---|
 | L01 | `l01_hello_agent.py` | `Agent`、`reply`、`reply_stream`、Event 事件流、Credential/Model |
 | L02 | `l02_tool_toolkit.py` | `FunctionTool`、`Toolkit`、ReAct 循环事件、权限与 HITL（确认/挂起/恢复） |
+| L03 | `l03_structured_output.py` | Pydantic 结构化输出、`structured_schema`、Schema 设计、出处溯源、校验失败处理 |
