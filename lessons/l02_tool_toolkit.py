@@ -135,17 +135,79 @@ async def demo_readonly_tool() -> None:
 
     msg = UserMsg(name="student", content="我想了解一下「阿里」这家公司，总部在哪里？")
 
+    # ★ 怎么拿到模型返回的信息？
+    #   *_END / *_START 大多只是"边界标记"，真正的内容挂在 *_DELTA 上：
+    #   · TEXT_BLOCK_DELTA        .delta -> 模型最终回答文本（流式可多片，需拼接）
+    #   · TOOL_CALL_START         .tool_call_name -> 调了哪个工具
+    #   · TOOL_CALL_DELTA         .delta -> 工具入参 JSON（可多片）
+    #   · TOOL_RESULT_TEXT_DELTA  .delta -> 工具返回 JSON（可多片）
+    #   · THINKING_BLOCK_DELTA    .delta -> 模型的思考
+    answer_parts: list[str] = []
+    thinking_parts: list[str] = []
+    tool_calls: list[dict] = []  # 本轮每次工具调用：{name, args, result}
+    current_tool: dict | None = None
+
     event_counter: dict[str, int] = {}
     async for event in agent.reply_stream(msg):
         event_counter[event.type.name] = event_counter.get(event.type.name, 0) + 1
 
-        # 把最能体现 ReAct 循环的三类事件实时打出来
         if event.type == EventType.TOOL_CALL_START:
-            print("\n🔧 [模型决定调用工具]")
+            current_tool = {"name": event.tool_call_name, "args": "", "result": ""}
+            tool_calls.append(current_tool)
+            print(f"\n🔧 [模型决定调用工具] {event.tool_call_name}")
+        elif event.type == EventType.TOOL_CALL_DELTA:
+            current_tool["args"] += str(event.delta)
+        elif event.type == EventType.TOOL_RESULT_TEXT_DELTA:
+            current_tool["result"] += str(event.delta)
         elif event.type == EventType.TOOL_RESULT_END:
             print("📦 [工具执行完毕，结果已回灌模型]")
+        elif event.type == EventType.THINKING_BLOCK_DELTA:
+            thinking_parts.append(str(getattr(event, "delta", "") or ""))
+        elif event.type == EventType.TEXT_BLOCK_DELTA:
+            answer_parts.append(str(getattr(event, "delta", "") or ""))
         elif event.type == EventType.TEXT_BLOCK_END:
             print("💬 [模型生成最终回答]")
+        elif event.type == EventType.REPLY_END:
+            # finished_reason: completed / tool_calls_interrupted(被人工中断) ...
+            print(f"[本轮结束] finished_reason={event.finished_reason}")
+
+    # ---------- 像写业务代码一样，把三类内容取出来用 ----------
+    import json
+
+    print("\n" + "-" * 72)
+    print("✅ 方式一：从事件流里取（做服务/前端最常用，能拿到全过程）")
+    print("-" * 72)
+    print("【模型思考】", "".join(thinking_parts).strip()[:100], "...")
+
+    for i, tc in enumerate(tool_calls, 1):
+        print(f"\n【第 {i} 次工具调用】工具名: {tc['name']}")
+        print("  原始入参:", tc["args"])
+        # 入参/结果是 JSON 字符串，解析成 dict 就能在程序里直接用（比如落库）
+        try:
+            print("  入参(dict):", json.loads(tc["args"]))
+        except json.JSONDecodeError:
+            pass
+        try:
+            print("  返回(dict):", json.loads(tc["result"]))
+        except json.JSONDecodeError:
+            print("  返回(文本):", tc["result"])
+
+    final_answer = "".join(answer_parts).strip()
+    print("\n【模型最终回答】", final_answer)
+
+    # 方式二：只想要最终答案、不关心过程 —— 用 reply()，从 Msg.content 的块里取
+    print("\n" + "-" * 72)
+    print("✅ 方式二：reply() 只要最终 Msg，再从 content 的 TextBlock 取文本")
+    print("-" * 72)
+    reply_msg = await agent.reply(
+        UserMsg(name="student", content="字节跳动总部在哪？一句话。")
+    )
+    text_blocks = [
+        b.text for b in reply_msg.content if type(b).__name__ == "TextBlock"
+    ]
+    print("【TextBlock 拼接】", "".join(text_blocks))
+    # token 用量也挂在 Msg 上（企业做成本核算就靠它，第 6 课 Middleware 细讲）
+    print("【token 用量】", reply_msg.usage)
 
     print("\n--- 本轮事件序列（按类型计数）---")
     for k, v in event_counter.items():
@@ -221,8 +283,8 @@ async def demo_resume_after_confirm(
 
 async def main() -> None:
     await demo_readonly_tool()
-    agent, parked = await demo_write_needs_confirmation()
-    await demo_resume_after_confirm(agent, parked)
+    # agent, parked = await demo_write_needs_confirmation()
+    # await demo_resume_after_confirm(agent, parked)
 
     print("\n" + "#" * 72)
     print("# 动手任务：")
