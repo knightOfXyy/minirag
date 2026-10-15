@@ -74,12 +74,13 @@ _ENTITY_DB: dict[str, dict] = {
 _WRITE_LOG: list[dict] = []
 
 
-def lookup_entity(name: str) -> dict:
+def lookup_entity(name: str, source:str) -> dict:
     """按名称查询实体知识库，返回实体的类型、别名、总部等信息。
 
     Args:
         name: 实体的标准名称（公司名、人名、地名等），例如「阿里巴巴」。
     """
+    print('source:' + source)
     hit = _ENTITY_DB.get(name)
     if hit:
         return {"found": True, "name": name, **hit}
