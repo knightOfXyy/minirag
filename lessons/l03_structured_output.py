@@ -66,6 +66,7 @@ from moray.schema import ExtractionResult  # 生产 Schema
 SAMPLE_TEXT = (
     "阿里巴巴（简称阿里，NYSE:BABA）由马云等人于1999年在杭州创立，"
     "总部位于杭州。2024年，阿里巴巴宣布其云计算子公司将在张家口投建新数据中心。"
+    "苹果发布了新手机，果农也在卖苹果"
 )
 
 
@@ -85,6 +86,7 @@ def build_agent(system_prompt: str) -> Agent:
 class NaiveEntity(BaseModel):
     name: str
     type: str  # 注意：纯 str，模型可以随便造类型
+    description: str
 class NaiveResult(BaseModel):
     entities: list[NaiveEntity]
 

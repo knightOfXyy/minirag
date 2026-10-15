@@ -88,6 +88,12 @@ class Entity(BaseModel):
             "没有专有属性时返回空对象 {}"
         ),
     )
+    description: str = Field(
+        default_factory=str,
+        description=(
+            "该实体类型的整体简介，从原文中抽取"
+        )
+    )
 
 
 # ---------------------------------------------------------------------------

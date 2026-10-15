@@ -13,3 +13,4 @@
 | L02 | `l02_tool_toolkit.py` | `FunctionTool`、`Toolkit`、ReAct 循环事件、权限与 HITL（确认/挂起/恢复） |
 | L03 | `l03_structured_output.py` | Pydantic 结构化输出、`structured_schema`、Schema 设计、出处溯源、校验失败处理 |
 | L04(上) | `l04_domain_schema.py` | 动态 Schema：领域配置目录、`create_model` 动态枚举、稳定内核 + `attributes`、热插拔 |
+| L04(下) | `l04b_extraction_service.py` | 抽取服务 `Extractor`、校验失败带错重试、span 质量探针、token 计量、JSON 落盘 |

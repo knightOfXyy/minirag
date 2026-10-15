@@ -42,3 +42,7 @@ __all__ = [
     "to_core_result",
     "validate_against_domain",
 ]
+
+
+def ENTITY_TYPE_GUIDE():
+    return None

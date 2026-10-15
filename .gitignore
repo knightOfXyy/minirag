@@ -58,3 +58,7 @@ coverage.xml
 # OS
 .DS_Store
 Thumbs.db
+
+# Moray 运行产物（抽取结果、向量缓存等）
+data/outputs/
+
