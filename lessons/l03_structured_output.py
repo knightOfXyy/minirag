@@ -119,26 +119,26 @@ async def demo_production() -> ExtractionResult:
     print("Demo B：生产级 Schema（受控枚举/别名/出处/关系）——同一个模型")
     print("=" * 74)
 
-    from moray.schema import ENTITY_TYPE_GUIDE
-
-    guide = "\n".join(f"  - {k}: {v}" for k, v in ENTITY_TYPE_GUIDE.items())
-    system_prompt = (
-        "你是严谨的实体与关系抽取专家。只抽取文本中明确出现的命名实体，"
-        "并判断实体之间有明确文本证据的关系。\n"
-        "实体类型只能使用以下枚举，含义如下：\n"
-        f"{guide}\n"
-        "要求：标准名取最完整正式的叫法；文中其他叫法放进 aliases；"
-        "日期、年份、纯数字、普通名词一律不要抽取。"
+    # 注：L04 起，类型枚举与提示词由"领域配置"动态生成（见 l04_domain_schema.py）。
+    # 这里用通用领域的工厂，等价于 L03 当初写死的 PER/ORG/LOC/EVENT/MISC。
+    from moray.schema import (
+        GENERAL_DOMAIN,
+        build_extraction_model,
+        build_system_prompt,
+        to_core_result,
     )
+
+    general_model = build_extraction_model(GENERAL_DOMAIN)
+    system_prompt = build_system_prompt(GENERAL_DOMAIN)
 
     agent = build_agent(system_prompt)
     reply = await agent.reply(
         UserMsg(name="u", content=f"请从下面文本抽取实体与关系：\n{SAMPLE_TEXT}"),
-        structured_schema=ExtractionResult,
+        structured_schema=general_model,
     )
 
-    # ★ dict -> 强类型对象：这一步会做严格校验，模型乱来这里就会抛错
-    result = ExtractionResult.model_validate(reply.structured_output)
+    # ★ 先按（带枚举的）动态模型强校验，再转回稳定内核 ExtractionResult
+    result = to_core_result(general_model.model_validate(reply.structured_output))
 
     print(f"\n✅ 抽取结果（已通过 Pydantic 校验）：实体 {len(result.entities)} 个，"
           f"关系 {len(result.relations)} 条\n")
@@ -209,22 +209,34 @@ async def demo_validation() -> None:
     print("Demo D：强类型校验如何拦下脏数据")
     print("=" * 74)
 
-    # 模拟模型返回了非法枚举和越界置信度
-    dirty = {
-        "entities": [
-            {"name": "某公司", "type": "企业集团", "confidence": 1.5},
-        ],
+    # L04 起校验分两层，这里分别演示：
+    from moray.schema import GENERAL_DOMAIN, build_extraction_model
+
+    general_model = build_extraction_model(GENERAL_DOMAIN)
+
+    # ① 动态模型层：拦"枚举越界"（type=企业集团 不在 PER/ORG/... 中）
+    dirty_type = {"entities": [{"name": "某公司", "type": "企业集团"}], "relations": []}
+    try:
+        general_model.model_validate(dirty_type)
+    except ValidationError as exc:
+        print("❌ 动态模型拦截非法类型：")
+        for err in exc.errors():
+            print(f"   · 位置 {err['loc']}: {err['type']} —— {err['msg'][:70]}")
+
+    # ② 稳定内核层：拦"数值越界"（confidence=1.5，任何领域都不允许）
+    dirty_conf = {
+        "entities": [{"name": "某公司", "type": "ORG", "confidence": 1.5}],
         "relations": [],
     }
     try:
-        ExtractionResult.model_validate(dirty)
+        ExtractionResult.model_validate(dirty_conf)
     except ValidationError as exc:
-        print("❌ Pydantic 拒绝入库，错误明细：")
+        print("\n❌ 稳定内核拦截越界置信度：")
         for err in exc.errors():
-            print(f"   · 位置 {err['loc']}: {err['type']} —— {err['msg']}")
-    print("\n👉 真实系统里：捕获 ValidationError -> 让模型按错误重试（第10课校验闭环）")
-    print("   这就是结构化输出相对'让模型返回 JSON 字符串'的根本优势：")
-    print("   有契约、有校验、失败可定位，而不是 json.loads 随时可能炸。")
+            print(f"   · 位置 {err['loc']}: {err['type']} —— {err['msg'][:70]}")
+
+    print("\n👉 两层分工：动态模型管'这个领域允许哪些类型'，内核管'永远成立的规则'。")
+    print("   真实系统捕获 ValidationError -> 让模型按错误重试（第10课校验闭环）。")
 
 
 async def main() -> None:

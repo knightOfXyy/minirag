@@ -3,7 +3,18 @@
 import pytest
 from pydantic import ValidationError
 
-from moray.schema import Entity, ExtractionResult, Relation, Span
+from moray.schema import (
+    Entity,
+    ExtractionResult,
+    FINANCE_DOMAIN,
+    GENERAL_DOMAIN,
+    Relation,
+    Span,
+    build_extraction_model,
+    get_domain,
+    to_core_result,
+    validate_against_domain,
+)
 
 
 def test_entity_defaults():
@@ -11,13 +22,52 @@ def test_entity_defaults():
     assert e.aliases == []
     assert e.mentions == []
     assert e.confidence == 0.0
+    assert e.attributes == {}
 
 
-def test_invalid_entity_type_rejected():
-    """受控枚举：模型自造的类型必须在校验阶段被拦下。"""
-    with pytest.raises(ValidationError) as exc:
-        Entity(name="某公司", type="企业集团")
-    assert "type" in str(exc.value)
+def test_core_type_is_free_string_but_domain_validates():
+    """核心 Entity 的 type 是稳定字符串；枚举约束由领域层负责（动态 schema）。"""
+    # 核心层不再因类型字符串报错（存储稳定，允许任意领域代码）
+    e = Entity(name="某主体", type="PARTY")
+    assert e.type == "PARTY"
+
+    # 但通用领域校验会拒绝 PARTY
+    bad = ExtractionResult(entities=[Entity(name="某主体", type="PARTY")])
+    errors = validate_against_domain(bad, GENERAL_DOMAIN)
+    assert errors and "PARTY" in errors[0]
+
+    # 金融领域则接受 PARTY
+    ok = ExtractionResult(entities=[Entity(name="某主体", type="PARTY")])
+    assert validate_against_domain(ok, FINANCE_DOMAIN) == []
+
+
+def test_dynamic_model_enum_matches_domain():
+    """动态生成的模型，其 type 枚举必须等于领域配置的类型码。"""
+    model = build_extraction_model(FINANCE_DOMAIN)
+    literal = model.model_fields["entities"].annotation
+    # 构造一个越界类型应被动态模型拒绝
+    payload = {"entities": [{"name": "x", "type": "ORG"}], "relations": []}
+    with pytest.raises(ValidationError):
+        model.model_validate(payload)
+    # 合法领域类型通过
+    payload["entities"][0]["type"] = "CONTRACT"
+    assert model.model_validate(payload).entities[0].type == "CONTRACT"
+
+
+def test_to_core_result_is_domain_agnostic():
+    """任意领域的动态结果都能转成同一套稳定内核（下游无感知）。"""
+    model = build_extraction_model(get_domain("finance"))
+    dyn = model.model_validate({
+        "entities": [{
+            "name": "采购合同", "type": "CONTRACT",
+            "attributes": {"amount": 500000000, "currency": "CNY"},
+        }],
+        "relations": [],
+    })
+    core = to_core_result(dyn)
+    assert isinstance(core, ExtractionResult)
+    assert core.entities[0].type == "CONTRACT"
+    assert core.entities[0].attributes["amount"] == 500000000
 
 
 def test_confidence_bounds():

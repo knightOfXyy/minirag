@@ -14,28 +14,14 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import BaseModel, Field
 
-# ---------------------------------------------------------------------------
-# ① 受控实体类型：通用内核（领域类型将来通过配置扩展，不在此写死业务类型）
-# ---------------------------------------------------------------------------
-EntityType = Literal[
-    "PER",    # 人物：真实或虚构的人
-    "ORG",    # 机构：公司、政府、学校、团队等组织
-    "LOC",    # 地点：国家、城市、地址、地理实体
-    "EVENT",  # 事件：有明确名称的事件、会议、事故、项目
-    "MISC",   # 其他：确实不属于以上四类、但有抽取价值的命名实体（谨慎使用）
-]
-# 给模型看的类型说明（会拼进抽取 prompt，帮助它正确归类、克制使用 MISC）
-ENTITY_TYPE_GUIDE = {
-    "PER": "人物（真实或虚构的人名）",
-    "ORG": "组织机构（公司、政府机构、学校、团队、协会等）",
-    "LOC": "地点（国家、城市、区域、地址、山川等地名）",
-    "EVENT": "事件（有专名的会议、事故、项目、赛事、战役等）",
-    "MISC": "其他确有价值但不属于上述类别的命名实体；日期、年份、纯数字、普通名词不要抽取",
-}
+# 注意（L04 演进）：
+# 核心 Entity 不再把类型写死成 Literal 枚举。允许哪些类型，由「领域配置目录」
+# （domains.py）在运行时决定，再由 factory.py 动态生成带枚举约束的模型。
+# 这样核心存储层永远稳定（type 只是一个字符串代码），而金融的 PARTY/CONTRACT、
+# 医疗的 DRUG/DISEASE 都能热插拔，无需改动内核与数据库表结构。
+# 通用领域的类型 PER/ORG/LOC/EVENT/MISC 见 domains.py 的 GENERAL_DOMAIN。
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +61,10 @@ class Entity(BaseModel):
             "例如文中出现「阿里」时标准名应写「阿里巴巴」"
         ),
     )
-    type: EntityType = Field(description="实体类型，必须从给定枚举中选择")
+    # 稳定内核只要求它是字符串类型代码；具体允许哪些值由领域配置约束。
+    type: str = Field(
+        description="实体类型代码，必须使用当前领域配置中允许的类型",
+    )
     aliases: list[str] = Field(
         default_factory=list,
         description="该实体在本文中的其他叫法/简称/英文名/旧称，去重后列出",
@@ -89,6 +78,15 @@ class Entity(BaseModel):
         ge=0.0,
         le=1.0,
         description="抽取置信度，0~1；越确信越接近 1",
+    )
+    # 动态属性包：领域专有的、不稳定的字段都放这里（如合同金额、药品剂量）。
+    # L08 入库时映射到 PostgreSQL 的 JSONB 列，可索引、加领域字段不改表结构。
+    attributes: dict = Field(
+        default_factory=dict,
+        description=(
+            "该实体类型专有的附加属性键值对，如金额/币种/日期/规格等；"
+            "没有专有属性时返回空对象 {}"
+        ),
     )
 
 

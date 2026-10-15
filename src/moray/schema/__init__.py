@@ -1,24 +1,44 @@
-"""强类型数据模型（Pydantic）——整个知识库的"契约层"。
+"""强类型数据模型（Pydantic）——整个知识库的"契约层"。"""
 
-抽取 Agent 产出这些对象，存储层消费这些对象，校验逻辑也围绕它们展开。
-"""
-
+from .domains import (
+    DOMAIN_REGISTRY,
+    FINANCE_DOMAIN,
+    GENERAL_DOMAIN,
+    DomainSpec,
+    TypeSpec,
+    get_domain,
+)
 from .entities import (
-    ENTITY_TYPE_GUIDE,
     Entity,
     EntityMention,
-    EntityType,
     ExtractionResult,
     Relation,
     Span,
 )
+from .factory import (
+    build_extraction_model,
+    build_system_prompt,
+    to_core_result,
+    validate_against_domain,
+)
 
 __all__ = [
-    "ENTITY_TYPE_GUIDE",
+    # 稳定内核
     "Entity",
     "EntityMention",
-    "EntityType",
     "ExtractionResult",
     "Relation",
     "Span",
+    # 领域配置
+    "DomainSpec",
+    "TypeSpec",
+    "DOMAIN_REGISTRY",
+    "GENERAL_DOMAIN",
+    "FINANCE_DOMAIN",
+    "get_domain",
+    # 动态工厂
+    "build_extraction_model",
+    "build_system_prompt",
+    "to_core_result",
+    "validate_against_domain",
 ]

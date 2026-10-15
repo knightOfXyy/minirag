@@ -52,7 +52,7 @@
 - [x] **L01 第一个 Agent**：`Agent.reply` 与 `reply_stream` 事件流
 - [x] **L02 工具与 Toolkit**：知识库读写工具、ReAct 循环、权限与 HITL
 - [x] **L03 结构化输出（项目地基）**：Pydantic `Entity`/`Relation`/出处 Schema、受控枚举、溯源、校验
-- [ ] **L04 抽取流水线 v1**：单文档 → 实体/关系（单 Agent + 结构化输出），Schema 热插拔 ← *当前*
+- [~] **L04 抽取流水线 v1**：（上）领域动态 Schema 热插拔已完成；（下）封装可复用抽取服务 + 真实文档端到端 ← *当前*
 - [ ] **L05 记忆与长文档**：分块、Memory 压缩、长文本抽取策略
 - [ ] **L06 Middleware**：抽取审计日志、token 成本统计、质量打分（替代 1.x Hook）
 - [ ] **L07 向量嵌入与 pgvector**：本地 bge 模型 + Docker PostgreSQL
