@@ -86,3 +86,28 @@ CREATE TABLE IF NOT EXISTS relation_evidence (
 );
 CREATE INDEX IF NOT EXISTS idx_relev_relation ON relation_evidence(relation_id);
 CREATE INDEX IF NOT EXISTS idx_relev_doc ON relation_evidence(document_id);
+
+-- ---------------------------------------------------------------------------
+-- 人工审核队列（L09 HITL）：消歧器拿不准的候选放这里，等人裁决后再合并
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS merge_reviews (
+    id              BIGSERIAL PRIMARY KEY,
+    domain_code     TEXT NOT NULL DEFAULT 'general',
+    document_id     TEXT,
+    survivor_id     BIGINT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    duplicate_id    BIGINT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    survivor_name   TEXT NOT NULL,          -- 冗余存名字，审核台展示用（实体可能先被删）
+    duplicate_name  TEXT NOT NULL,
+    similarity      REAL NOT NULL,          -- 向量相似度（决策依据之一）
+    reason          TEXT NOT NULL DEFAULT '',-- 消歧器/Agent 给出的判断理由
+    status          TEXT NOT NULL DEFAULT 'pending', -- pending/approved/rejected
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    decided_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_review_status ON merge_reviews(status);
+CREATE INDEX IF NOT EXISTS idx_review_dup ON merge_reviews(duplicate_id);
+-- 同一对实体只允许有一条待审记录（裁决后可再次入队）
+CREATE UNIQUE INDEX IF NOT EXISTS uq_review_pending
+    ON merge_reviews(LEAST(survivor_id, duplicate_id),
+                     GREATEST(survivor_id, duplicate_id))
+    WHERE status = 'pending';

@@ -18,3 +18,4 @@
 | L06 | `l06_middleware.py` | Middleware 洋葱模型、审计/成本/质量三中间件、可解释质量分（支持 `OFFLINE=1`） |
 | L07 | `l07_pgvector.py` | 本地 bge 嵌入、余弦相似度、pgvector 向量入库/最近邻检索、别名精确+向量双通道 |
 | L08 | `l08_knowledge_base.py` | relations/evidence 表、Ingestor 入库器（幂等）、结构化+语义联合检索、实体知识卡片（离线默认，`--live` 真实抽取） |
+| L09 | `l09_disambiguation_hitl.py` | 实体消歧三档（自动合并/人工/新建）、规则与 LLM Judge、母子公司防护、事务合并、审核队列 HITL（`--llm` 用消歧 Agent） |

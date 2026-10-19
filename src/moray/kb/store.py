@@ -320,3 +320,134 @@ class EntityStore:
 
     async def count_relations(self) -> int:
         return await self.pool.fetchval("SELECT count(*) FROM relations")
+
+    # ------------------------------------------------------------------
+    # 实体合并（L09 消歧）
+    # ------------------------------------------------------------------
+    async def merge_entities(self, survivor_id: int, duplicate_id: int) -> None:
+        """把 duplicate 合并进 survivor（保留 survivor），在一个事务里完成：
+
+        1. duplicate 的别名搬到 survivor（去重）；
+        2. duplicate 的出处（mentions）搬到 survivor；
+        3. 指向 duplicate 的关系外键改指 survivor；
+           自指/重复关系删除，避免破坏 relations 唯一约束；
+        4. duplicate 的标准名作为 survivor 的别名保留（不丢叫法）；
+        5. 删除 duplicate。
+        """
+        if survivor_id == duplicate_id:
+            return
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                dup = await conn.fetchrow(
+                    "SELECT name FROM entities WHERE id=$1", duplicate_id)
+                if dup is None:
+                    return  # 已被合并/删除，幂等返回
+
+                # 1) 别名迁移（含标准名本身）
+                await conn.execute(
+                    "INSERT INTO entity_aliases(entity_id, alias) "
+                    "SELECT $1, alias FROM entity_aliases WHERE entity_id=$2 "
+                    "ON CONFLICT DO NOTHING",
+                    survivor_id, duplicate_id,
+                )
+                await conn.execute(
+                    "INSERT INTO entity_aliases(entity_id, alias) VALUES ($1,$2) "
+                    "ON CONFLICT DO NOTHING", survivor_id, dup["name"],
+                )
+
+                # 2) 出处迁移
+                await conn.execute(
+                    "UPDATE entity_mentions SET entity_id=$1 WHERE entity_id=$2",
+                    survivor_id, duplicate_id,
+                )
+
+                # 3) 关系外键改指；先删会变成自指的关系
+                await conn.execute(
+                    "DELETE FROM relations WHERE source_entity_id=$2 AND target_entity_id=$1 "
+                    "OR source_entity_id=$1 AND target_entity_id=$2",
+                    survivor_id, duplicate_id,
+                )
+                # 与 survivor 既有关系重复的，删除旧重复行
+                await conn.execute(
+                    """
+                    DELETE FROM relations rdup USING relations rkeep
+                    WHERE rdup.target_entity_id=$2 AND rkeep.target_entity_id=$1
+                      AND rdup.source_entity_id=rkeep.source_entity_id
+                      AND rdup.predicate=rkeep.predicate AND rdup.domain_code=rkeep.domain_code
+                    """,
+                    survivor_id, duplicate_id,
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM relations rdup USING relations rkeep
+                    WHERE rdup.source_entity_id=$2 AND rkeep.source_entity_id=$1
+                      AND rdup.target_entity_id=rkeep.target_entity_id
+                      AND rdup.predicate=rkeep.predicate AND rdup.domain_code=rkeep.domain_code
+                    """,
+                    survivor_id, duplicate_id,
+                )
+                await conn.execute(
+                    "UPDATE relations SET source_entity_id=$1 WHERE source_entity_id=$2",
+                    survivor_id, duplicate_id,
+                )
+                await conn.execute(
+                    "UPDATE relations SET target_entity_id=$1 WHERE target_entity_id=$2",
+                    survivor_id, duplicate_id,
+                )
+
+                # 5) 删 duplicate（级联清理其残留别名等）
+                await conn.execute("DELETE FROM entities WHERE id=$1", duplicate_id)
+
+    # ------------------------------------------------------------------
+    # 人工审核队列（L09 HITL）
+    # ------------------------------------------------------------------
+    async def enqueue_review(
+        self, *, survivor_id: int, duplicate_id: int,
+        survivor_name: str, duplicate_name: str,
+        similarity: float, reason: str = "",
+        domain_code: str = "general", document_id: str | None = None,
+    ) -> int:
+        """登记一条待人工裁决的合并建议；同一对实体只入队一次。"""
+        row = await self.pool.fetchrow(
+            """
+            INSERT INTO merge_reviews
+                (domain_code, document_id, survivor_id, duplicate_id,
+                 survivor_name, duplicate_name, similarity, reason, status)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending')
+            ON CONFLICT DO NOTHING
+            RETURNING id
+            """,
+            domain_code, document_id, survivor_id, duplicate_id,
+            survivor_name, duplicate_name, similarity, reason,
+        )
+        # 已存在待审记录时取其 id
+        if row is None:
+            return await self.pool.fetchval(
+                "SELECT id FROM merge_reviews WHERE survivor_id=$1 AND duplicate_id=$2 "
+                "AND status='pending' ORDER BY id DESC LIMIT 1",
+                survivor_id, duplicate_id,
+            )
+        return row["id"]
+
+    async def pending_reviews(self, limit: int = 50) -> list[dict]:
+        rows = await self.pool.fetch(
+            "SELECT * FROM merge_reviews WHERE status='pending' "
+            "ORDER BY similarity DESC, id LIMIT $1", limit,
+        )
+        return [dict(r) for r in rows]
+
+    async def decide_review(self, review_id: int, approved: bool) -> bool:
+        """人工裁决：approved=True 则执行合并；无论结果都把队列项置终态。"""
+        row = await self.pool.fetchrow(
+            "SELECT * FROM merge_reviews WHERE id=$1 AND status='pending'", review_id)
+        if row is None:
+            return False
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                if approved:
+                    await self.merge_entities(row["survivor_id"], row["duplicate_id"])
+                await conn.execute(
+                    "UPDATE merge_reviews SET status=$1, decided_at=now() WHERE id=$2",
+                    "approved" if approved else "rejected", review_id,
+                )
+        return True

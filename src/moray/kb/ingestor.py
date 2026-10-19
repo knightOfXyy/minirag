@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 from ..embedding import Embedder, get_embedder
 from ..extraction.document import ExtractionOutput
+from .disambiguation import Disambiguator
 from .store import EntityStore
 
 
@@ -32,6 +33,10 @@ class IngestReport:
     relations_written: int = 0
     relations_skipped: list[str] = field(default_factory=list)
     entity_ids: dict[str, int] = field(default_factory=dict)
+    # L09：消歧统计
+    merged: list[str] = field(default_factory=list)       # 自动并到已有实体
+    queued: list[str] = field(default_factory=list)       # 进人工审核队列
+    created: list[str] = field(default_factory=list)      # 确为新实体
 
 
 class Ingestor:
@@ -41,11 +46,14 @@ class Ingestor:
         embedder: Embedder | None = None,
         *,
         create_missing_endpoints: bool = True,
+        disambiguator: Disambiguator | None = None,
     ) -> None:
         self.store = store
         self.embedder = embedder or get_embedder()
         # 关系头/尾若不在实体列表也不在库里时，是否自动建一个占位实体
         self.create_missing_endpoints = create_missing_endpoints
+        # L09：传入即启用"入库前消歧 + HITL"；不传则保持 L08 直接写入行为
+        self.disambiguator = disambiguator
 
     async def ingest(self, output: ExtractionOutput, *, chunk_id: str | None = None) -> IngestReport:
         result = output.result
@@ -53,7 +61,7 @@ class Ingestor:
         doc_id = output.document_id
         report = IngestReport()
 
-        # ---------- 1) 实体 ----------
+        # ---------- 1) 实体（L09：先消歧再入库） ----------
         for ent in result.entities:
             vector = self.embedder.embed_one(ent.name)
             mentions = [
@@ -66,17 +74,67 @@ class Ingestor:
                 }
                 for m in ent.mentions
             ]
+
+            # 不做消歧时，沿用 L08 直接 upsert
+            if self.disambiguator is None:
+                eid = await self.store.upsert_entity(
+                    name=ent.name, type=ent.type, embedding=vector,
+                    domain_code=domain, aliases=ent.aliases,
+                    attributes=ent.attributes, confidence=ent.confidence,
+                    mentions=mentions,
+                )
+                report.entity_ids[ent.name] = eid
+                report.created.append(ent.name)
+                continue
+
+            # —— L09 消歧路径 ——
+            decision = await self.disambiguator.resolve_new_entity(
+                name=ent.name, type=ent.type, aliases=ent.aliases,
+                domain_code=domain, document_id=doc_id,
+            )
+
+            if decision.action == "merged" and decision.target_id:
+                # 同一实体：把本次的别名/出处挂到已有规范实体上（不新建）
+                eid = await self.store.upsert_entity(
+                    name=(await self.store.get(decision.target_id))["name"],
+                    type=ent.type, embedding=vector, domain_code=domain,
+                    aliases=ent.aliases + [ent.name],
+                    attributes=ent.attributes, confidence=ent.confidence,
+                    mentions=mentions,
+                )
+                report.entity_ids[ent.name] = eid
+                report.merged.append(ent.name)
+                continue
+
+            if decision.action == "queued":
+                # 拿不准：先正常写入成独立实体，再入审核队列，等人裁决是否合并
+                eid = await self.store.upsert_entity(
+                    name=ent.name, type=ent.type, embedding=vector,
+                    domain_code=domain, aliases=ent.aliases,
+                    attributes=ent.attributes, confidence=ent.confidence,
+                    mentions=mentions,
+                )
+                unc = next(d for d in decision.decisions if d.verdict == "uncertain")
+                review_id = await self.disambiguator.enqueue_for_review(
+                    survivor_id=decision.target_id, duplicate_id=eid,
+                    survivor_name=unc.candidate.name, duplicate_name=ent.name,
+                    similarity=unc.similarity, reason=unc.reason,
+                    domain_code=domain, document_id=doc_id,
+                )
+                report.entity_ids[ent.name] = eid
+                report.queued.append(ent.name)
+                continue
+
+            # 确为新实体
             eid = await self.store.upsert_entity(
-                name=ent.name,
-                type=ent.type,
-                embedding=vector,
-                domain_code=domain,
-                aliases=ent.aliases,
-                attributes=ent.attributes,
-                confidence=ent.confidence,
+                name=ent.name, type=ent.type, embedding=vector,
+                domain_code=domain, aliases=ent.aliases,
+                attributes=ent.attributes, confidence=ent.confidence,
                 mentions=mentions,
             )
             report.entity_ids[ent.name] = eid
+            report.created.append(ent.name)
+
         report.entities_written = len(result.entities)
 
         # ---------- 2) 关系 ----------
