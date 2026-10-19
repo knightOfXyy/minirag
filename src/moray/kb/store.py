@@ -128,12 +128,20 @@ class EntityStore:
                         )
 
                 for m in (mentions or []):
+                    # 用 NOT EXISTS 守卫做幂等：配合 schema.sql 里 COALESCE 的
+                    # 表达式唯一索引，span/chunk 为 NULL 时也能正确去重。
                     await conn.execute(
                         """
                         INSERT INTO entity_mentions
                             (entity_id, document_id, surface, start_off, end_off, chunk_id)
-                        VALUES ($1,$2,$3,$4,$5,$6)
-                        ON CONFLICT DO NOTHING
+                        SELECT $1,$2,$3,$4,$5,$6
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM entity_mentions
+                            WHERE entity_id=$1 AND document_id=$2 AND surface=$3
+                              AND COALESCE(start_off,-1)=COALESCE($4,-1)
+                              AND COALESCE(end_off,-1)=COALESCE($5,-1)
+                              AND COALESCE(chunk_id,'')=COALESCE($6,'')
+                        )
                         """,
                         entity_id,
                         m.get("document_id"),
@@ -224,3 +232,91 @@ class EntityStore:
             "FROM entities WHERE id=$1", entity_id
         )
         return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # 关系
+    # ------------------------------------------------------------------
+    async def get_entity_id(
+        self, name: str, *, domain_code: str = "general", type: str | None = None
+    ) -> int | None:
+        """按规范名或别名解析实体 id；可限定类型。"""
+        sql = (
+            "SELECT e.id FROM entities e "
+            "LEFT JOIN entity_aliases a ON a.entity_id=e.id "
+            "WHERE e.domain_code=$1 AND (e.name=$2 OR a.alias=$2)"
+        )
+        params: list[Any] = [domain_code, name]
+        if type:
+            sql += " AND e.type=$3"
+            params.append(type)
+        sql += " ORDER BY (e.name=$2) DESC LIMIT 1"
+        return await self.pool.fetchval(sql, *params)
+
+    async def upsert_relation(
+        self,
+        *,
+        source_id: int,
+        predicate: str,
+        target_id: int,
+        domain_code: str = "general",
+        confidence: float = 0.0,
+    ) -> int:
+        row = await self.pool.fetchrow(
+            """
+            INSERT INTO relations
+                (domain_code, source_entity_id, predicate, target_entity_id, confidence)
+            VALUES ($1,$2,$3,$4,$5)
+            ON CONFLICT (domain_code, source_entity_id, predicate, target_entity_id)
+            DO UPDATE SET confidence = GREATEST(relations.confidence, EXCLUDED.confidence)
+            RETURNING id
+            """,
+            domain_code, source_id, predicate, target_id, confidence,
+        )
+        return row["id"]
+
+    async def add_relation_evidence(
+        self, relation_id: int, *, document_id: str, ev: dict
+    ) -> None:
+        await self.pool.execute(
+            """
+            INSERT INTO relation_evidence
+                (relation_id, document_id, surface, start_off, end_off, chunk_id)
+            VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING
+            """,
+            relation_id, document_id,
+            ev.get("surface"), ev.get("start"), ev.get("end"), ev.get("chunk_id"),
+        )
+
+    async def relations_of(
+        self,
+        entity_id: int,
+        *,
+        direction: str = "both",
+        predicate: str | None = None,
+    ) -> list[dict]:
+        """查某实体的关系（出边/入边/两者），关联返回对方实体名。"""
+        conds, params = [], []
+        if direction in ("out", "both"):
+            conds.append("r.source_entity_id=$1")
+        if direction in ("in", "both"):
+            conds.append("r.target_entity_id=$1")
+        where = "(" + " OR ".join(conds) + ")"
+        params.append(entity_id)
+        if predicate:
+            where += f" AND r.predicate=${len(params)+1}"
+            params.append(predicate)
+
+        sql = f"""
+            SELECT r.id, r.predicate, r.confidence,
+                   r.source_entity_id AS src_id, se.name AS src_name, se.type AS src_type,
+                   r.target_entity_id AS dst_id, te.name AS dst_name, te.type AS dst_type
+            FROM relations r
+            JOIN entities se ON se.id=r.source_entity_id
+            JOIN entities te ON te.id=r.target_entity_id
+            WHERE {where}
+            ORDER BY r.confidence DESC
+        """
+        return [dict(r) for r in await self.pool.fetch(sql, *params)]
+
+    async def count_relations(self) -> int:
+        return await self.pool.fetchval("SELECT count(*) FROM relations")

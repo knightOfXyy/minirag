@@ -56,8 +56,8 @@
 - [x] **L05 记忆与长文档**：`Chunker`（token预算+句子边界+overlap）、块内→全局偏移换算、分块 map-reduce 抽取、朴素归并、规则法抽取器/语料清洗
 - [x] **L06 Middleware**：洋葱模型 7 挂载点；审计/成本/质量三中间件、token 与耗时自动采集、可解释质量分（34 测试）
 - [x] **L07 向量嵌入与 pgvector**：本地 bge-small-zh（ONNX/fastembed）+ Docker pgvector，实体向量入库/余弦最近邻/别名精确匹配（37 单测 + 3 DB 集成测试）
-- [ ] **L08 知识库存储层**：关系表补全、ExtractionOutput → 知识库的入库器、语义/结构化联合检索 ← *当前*
-- [ ] **L09 实体消歧与 HITL**：相似度候选 → 消歧 Agent 判定 → 人工确认入库
+- [x] **L08 知识库存储层**：relations/evidence 表、幂等 Ingestor（ExtractionOutput→向量+实体/关系/出处）、KnowledgeBase 精确+向量定位与关系图知识卡片（44 测试，含 7 DB 集成）
+- [ ] **L09 实体消歧与 HITL**：相似度候选 → 消歧 Agent 判定 → 人工确认入库 ← *当前*
 - [ ] **L10 多智能体编排**：抽取/消歧/校验三 Agent + `GoalPipeline` 质量闭环
 - [ ] **L11 状态与 Session**：批量文档任务、断点续跑、多用户隔离
 - [ ] **L12 MCP 扩展**：把知识库查询挂为 MCP 工具，给任意 Agent 复用

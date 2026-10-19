@@ -17,3 +17,4 @@
 | L05 | `l05_chunking.py` | 分块器、块内→全局偏移换算、map-reduce 分块抽取、跨块朴素归并、规则法金标准（支持 `OFFLINE=1`） |
 | L06 | `l06_middleware.py` | Middleware 洋葱模型、审计/成本/质量三中间件、可解释质量分（支持 `OFFLINE=1`） |
 | L07 | `l07_pgvector.py` | 本地 bge 嵌入、余弦相似度、pgvector 向量入库/最近邻检索、别名精确+向量双通道 |
+| L08 | `l08_knowledge_base.py` | relations/evidence 表、Ingestor 入库器（幂等）、结构化+语义联合检索、实体知识卡片（离线默认，`--live` 真实抽取） |

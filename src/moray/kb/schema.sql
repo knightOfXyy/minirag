@@ -41,8 +41,48 @@ CREATE TABLE IF NOT EXISTS entity_mentions (
 );
 CREATE INDEX IF NOT EXISTS idx_mention_doc ON entity_mentions(document_id);
 CREATE INDEX IF NOT EXISTS idx_mention_entity ON entity_mentions(entity_id);
+-- 幂等：同一实体在同一文档、同一位置的同面写法只保留一条。
+-- 用 COALESCE 归一 NULL（PostgreSQL 唯一索引把 NULL 视为互不相等），
+-- 否则 span/chunk 缺失时重复入库无法去重。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mention
+    ON entity_mentions (
+        entity_id, document_id, surface,
+        COALESCE(start_off, -1), COALESCE(end_off, -1), COALESCE(chunk_id, '')
+    );
 
 -- 向量相似度索引（IVFFLAT，数据量大时走 ANN；小数据量 PG 自动全量精确计算）
 -- lists 按数据规模调整；建索引后需要 ANALYZE / 一定数据量才会被规划器选用。
 CREATE INDEX IF NOT EXISTS idx_entities_embedding
     ON entities USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+
+-- ---------------------------------------------------------------------------
+-- 关系表：头实体 -[谓词]-> 尾实体（L08）。实体用外键 id 关联。
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS relations (
+    id              BIGSERIAL PRIMARY KEY,
+    domain_code     TEXT NOT NULL DEFAULT 'general',
+    source_entity_id BIGINT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    predicate       TEXT NOT NULL,
+    target_entity_id BIGINT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    confidence      REAL NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (domain_code, source_entity_id, predicate, target_entity_id)
+);
+CREATE INDEX IF NOT EXISTS idx_rel_source ON relations(source_entity_id);
+CREATE INDEX IF NOT EXISTS idx_rel_target ON relations(target_entity_id);
+CREATE INDEX IF NOT EXISTS idx_rel_predicate ON relations(predicate);
+
+-- 关系的文本证据（provenance）：一条关系可由多篇文档的多个句子支撑
+CREATE TABLE IF NOT EXISTS relation_evidence (
+    id          BIGSERIAL PRIMARY KEY,
+    relation_id BIGINT NOT NULL REFERENCES relations(id) ON DELETE CASCADE,
+    document_id TEXT NOT NULL,
+    surface     TEXT NOT NULL,
+    start_off   INTEGER,
+    end_off     INTEGER,
+    chunk_id    TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (relation_id, document_id, start_off, end_off)
+);
+CREATE INDEX IF NOT EXISTS idx_relev_relation ON relation_evidence(relation_id);
+CREATE INDEX IF NOT EXISTS idx_relev_doc ON relation_evidence(document_id);
