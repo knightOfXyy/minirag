@@ -54,7 +54,7 @@
 - [x] **L03 结构化输出（项目地基）**：Pydantic `Entity`/`Relation`/出处 Schema、受控枚举、溯源、校验
 - [x] **L04 抽取流水线 v1**：领域动态 Schema 热插拔；`Extractor` 抽取服务（校验重试/span 质检/token 计量）、真实文档端到端、JSON 落盘
 - [x] **L05 记忆与长文档**：`Chunker`（token预算+句子边界+overlap）、块内→全局偏移换算、分块 map-reduce 抽取、朴素归并、规则法抽取器/语料清洗
-- [ ] **L06 Middleware**：抽取审计日志、token 成本统计、质量打分（替代 1.x Hook） ← *当前*
+- [x] **L06 Middleware**：洋葱模型 7 挂载点；审计/成本/质量三中间件、token 与耗时自动采集、可解释质量分（34 测试）
 - [ ] **L07 向量嵌入与 pgvector**：本地 bge 模型 + Docker PostgreSQL
 - [ ] **L08 知识库存储层**：实体表/关系表/出处表/向量列，CRUD 与语义检索
 - [ ] **L09 实体消歧与 HITL**：相似度候选 → 消歧 Agent 判定 → 人工确认入库

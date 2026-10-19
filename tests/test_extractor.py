@@ -18,7 +18,8 @@ class _FakeExtractor(Extractor):
         self.sent_contents: list[str] = []
 
     def _build_agent(self):
-        return object()  # 不会真正被使用
+        # 用 SimpleNamespace：真实 extract() 会在 agent 上挂 _audit_source_text
+        return SimpleNamespace()
 
     async def _call_structured(self, agent, content):
         self.sent_contents.append(content)

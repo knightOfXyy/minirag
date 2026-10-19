@@ -67,11 +67,14 @@ class Extractor:
         domain: DomainSpec | str = "general",
         *,
         max_retries: int = 2,
+        middlewares: list | None = None,
     ) -> None:
         self.domain: DomainSpec = (
             get_domain(domain) if isinstance(domain, str) else domain
         )
         self.max_retries = max_retries
+        # 可选的可观测中间件（审计/成本/质量），由调用方传入
+        self._middlewares = list(middlewares or [])
         # 该领域对应的动态结构化模型与系统提示词（构造一次即可复用）
         self._schema_model: Type[BaseModel] = build_extraction_model(self.domain)
         self._system_prompt: str = build_system_prompt(self.domain)
@@ -83,6 +86,7 @@ class Extractor:
             name="Extractor",
             system_prompt=self._system_prompt,
             model=build_chat_model(stream=False),
+            middlewares=self._middlewares,
         )
 
     async def _call_structured(self, agent: Agent, content: str) -> object:
@@ -95,6 +99,8 @@ class Extractor:
     # ---- 核心流程 ---------------------------------------------------------
     async def extract(self, document: Document) -> ExtractionOutput:
         agent = self._build_agent()
+        # 供 ExtractionMetricsMiddleware 核对 span（中间件存在时才有用）
+        setattr(agent, "_audit_source_text", document.text)
         usage = Usage()
         last_error = ""
 

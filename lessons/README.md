@@ -15,3 +15,4 @@
 | L04(上) | `l04_domain_schema.py` | 动态 Schema：领域配置目录、`create_model` 动态枚举、稳定内核 + `attributes`、热插拔 |
 | L04(下) | `l04b_extraction_service.py` | 抽取服务 `Extractor`、校验失败带错重试、span 质量探针、token 计量、JSON 落盘 |
 | L05 | `l05_chunking.py` | 分块器、块内→全局偏移换算、map-reduce 分块抽取、跨块朴素归并、规则法金标准（支持 `OFFLINE=1`） |
+| L06 | `l06_middleware.py` | Middleware 洋葱模型、审计/成本/质量三中间件、可解释质量分（支持 `OFFLINE=1`） |
