@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: moray-pgvector
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-moray}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-moray_dev_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-moray_kb}
+    ports:
+      # 映射到宿主机 5433，避免和本机可能已有的 5432 冲突
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - moray_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-moray}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  moray_pgdata:

@@ -38,6 +38,19 @@ cp .env.example .env                           # 填入 ARK_API_KEY
 python lessons/l01_hello_agent.py
 ```
 
+## 基础设施：PostgreSQL + pgvector（L07 起）
+
+```bash
+docker run -d --name moray-pgvector \
+  -e POSTGRES_USER=moray -e POSTGRES_PASSWORD=moray_dev_2026 \
+  -e POSTGRES_DB=moray_kb -p 5433:5432 pgvector/pgvector:pg16
+# 或：docker compose up -d（需 compose 插件）
+```
+
+本地中文嵌入模型 `BAAI/bge-small-zh-v1.5`（512 维，ONNX 免 torch）。
+国内首次下载会自动走 `https://hf-mirror.com` 并关闭 HF xet 协议
+（见 `src/moray/embedding/embedder.py`）。
+
 ## 模型配置
 
 默认使用火山方舟 Coding Plan 网关（OpenAI 兼容，已实测 chat 与 function calling）：

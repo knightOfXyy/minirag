@@ -55,8 +55,8 @@
 - [x] **L04 抽取流水线 v1**：领域动态 Schema 热插拔；`Extractor` 抽取服务（校验重试/span 质检/token 计量）、真实文档端到端、JSON 落盘
 - [x] **L05 记忆与长文档**：`Chunker`（token预算+句子边界+overlap）、块内→全局偏移换算、分块 map-reduce 抽取、朴素归并、规则法抽取器/语料清洗
 - [x] **L06 Middleware**：洋葱模型 7 挂载点；审计/成本/质量三中间件、token 与耗时自动采集、可解释质量分（34 测试）
-- [ ] **L07 向量嵌入与 pgvector**：本地 bge 模型 + Docker PostgreSQL
-- [ ] **L08 知识库存储层**：实体表/关系表/出处表/向量列，CRUD 与语义检索
+- [x] **L07 向量嵌入与 pgvector**：本地 bge-small-zh（ONNX/fastembed）+ Docker pgvector，实体向量入库/余弦最近邻/别名精确匹配（37 单测 + 3 DB 集成测试）
+- [ ] **L08 知识库存储层**：关系表补全、ExtractionOutput → 知识库的入库器、语义/结构化联合检索 ← *当前*
 - [ ] **L09 实体消歧与 HITL**：相似度候选 → 消歧 Agent 判定 → 人工确认入库
 - [ ] **L10 多智能体编排**：抽取/消歧/校验三 Agent + `GoalPipeline` 质量闭环
 - [ ] **L11 状态与 Session**：批量文档任务、断点续跑、多用户隔离
