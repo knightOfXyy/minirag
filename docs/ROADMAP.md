@@ -59,8 +59,8 @@
 - [x] **L08 知识库存储层**：relations/evidence 表、幂等 Ingestor（ExtractionOutput→向量+实体/关系/出处）、KnowledgeBase 精确+向量定位与关系图知识卡片（44 测试，含 7 DB 集成）
 - [x] **L09 实体消歧与 HITL**：可替换 Judge（RuleBasedJudge 阈值+类型+母子公司防护 / LLMJudge 消歧 Agent）、三档决策（same 自动事务合并 / uncertain 进持久化审核队列 / different 新建）、Ingestor 接入消歧、外键别名出处迁移（56 测试）
 - [x] **L10 多智能体编排**：抽取-审校-返工质量闭环（可注入 async 角色函数，离线可测）、规则审校员（错span/臆测关系/漏抽端点/重复实体）、对照 AgentScope `TeamPipeline`/`GoalPipeline` 源码、`--live` 真实团队（49 单测）
-- [ ] **L11 状态与 Session**：批量文档任务、断点续跑、多用户隔离 ← *当前*
-- [ ] **L12 MCP 扩展**：把知识库查询挂为 MCP 工具，给任意 Agent 复用
+- [x] **L11 状态与 Session**：持久化 `extraction_jobs` 表、JobStore（幂等创建/`FOR UPDATE SKIP LOCKED` 原子认领/状态机/`recover_stale` 孤儿回收）、BatchRunner 批量+断点续跑（失败回 pending、超限 failed 终态、reset 重试）、文档 handler 串 L10 审校→L08/09 幂等入库；asyncpg jsonb codec（67 测试）
+- [ ] **L12 MCP 扩展**：把知识库查询挂为 MCP 工具，给任意 Agent 复用 ← *当前*
 - [ ] **L13 可观测性**：Tracing/Studio、抽取质量指标看板
 - [ ] **L14 服务化**：FastAPI（提交文档/查询实体/人工审核接口）
 - [ ] **L15 评测与收尾**：黄金数据集、精确率/召回率、CI、部署

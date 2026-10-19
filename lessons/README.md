@@ -20,3 +20,4 @@
 | L08 | `l08_knowledge_base.py` | relations/evidence 表、Ingestor 入库器（幂等）、结构化+语义联合检索、实体知识卡片（离线默认，`--live` 真实抽取） |
 | L09 | `l09_disambiguation_hitl.py` | 实体消歧三档（自动合并/人工/新建）、规则与 LLM Judge、母子公司防护、事务合并、审核队列 HITL（`--llm` 用消歧 Agent） |
 | L10 | `l10_multi_agent.py` | 抽取-审校-返工质量闭环、可注入角色函数、规则审校员；AgentScope `TeamPipeline`（leader 用 TeamAssign 派活、成员并发隔离）、`GoalPipeline`（`--live`） |
+| L11 | `l11_batch_resume.py` | 持久化作业表 extraction_jobs、JobStore（幂等创建/原子认领 `FOR UPDATE SKIP LOCKED`/状态机/孤儿回收）、BatchRunner 批量与断点续跑、毒丸重试上限、jsonb codec |

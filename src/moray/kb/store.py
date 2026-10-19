@@ -35,8 +35,22 @@ def _dsn() -> str:
     )
 
 
+async def _init_connection(conn: asyncpg.Connection) -> None:
+    """让 asyncpg 用 Python 对象收发 json/jsonb（否则读出来是字符串）。"""
+    import json
+
+    for t in ("json", "jsonb"):
+        await conn.set_type_codec(
+            t,
+            encoder=lambda v: json.dumps(v, ensure_ascii=False),
+            decoder=json.loads,
+            schema="pg_catalog",
+        )
+
+
 async def init_pool(min_size: int = 1, max_size: int = 5) -> asyncpg.Pool:
-    return await asyncpg.create_pool(_dsn(), min_size=min_size, max_size=max_size)
+    return await asyncpg.create_pool(
+        _dsn(), min_size=min_size, max_size=max_size, init=_init_connection)
 
 
 async def close_pool(pool: asyncpg.Pool) -> None:
@@ -96,16 +110,15 @@ class EntityStore:
         同一 (domain, type, name) 已存在则更新向量与属性，并合并别名/出处。
         mentions: [{'document_id','surface','start','end','chunk_id'}]
         """
-        import json
-
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 # INSERT ... ON CONFLICT DO UPDATE
+                # jsonb 经连接 codec 自动编解码（见 init_pool._init_connection）
                 row = await conn.fetchrow(
                     """
                     INSERT INTO entities
                         (domain_code, name, type, attributes, confidence, embedding)
-                    VALUES ($1,$2,$3,$4::jsonb,$5,$6::vector)
+                    VALUES ($1,$2,$3,$4,$5,$6::vector)
                     ON CONFLICT (domain_code, type, name) DO UPDATE SET
                         attributes = EXCLUDED.attributes,
                         confidence = GREATEST(entities.confidence, EXCLUDED.confidence),
@@ -113,8 +126,7 @@ class EntityStore:
                         updated_at = now()
                     RETURNING id
                     """,
-                    domain_code, name, type,
-                    json.dumps(attributes or {}, ensure_ascii=False),
+                    domain_code, name, type, (attributes or {}),
                     confidence, _vec_literal(embedding),
                 )
                 entity_id = row["id"]
