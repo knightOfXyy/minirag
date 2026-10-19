@@ -34,13 +34,19 @@ async def build_document_handler(
     ingestor: Ingestor,
     extractor_fn,
     source: str = "batch",
+    dashboard=None,
+    model_name: str = "batch-pipeline",
 ):
     """构造一个符合 BatchRunner 要求的 async (JobRecord)->dict handler。
 
     extractor_fn: async (text, feedback) -> ExtractionResult（可注入离线实现）。
+    dashboard: 可选的 observability.Dashboard；传入则每处理一篇写一行
+               pipeline_runs 质量指标（L13）。
     """
+    import time
 
     async def handle(job: JobRecord) -> dict:
+        t0 = time.perf_counter()
         path = Path(job["document_ref"])
         text = path.read_text(encoding="utf-8").strip()
 
@@ -60,10 +66,20 @@ async def build_document_handler(
             document_id=doc.id,
             domain_code=doc.domain_code,
             result=reviewed.result,
-            model_name="batch-pipeline",
+            model_name=model_name,
             attempts=reviewed.review.iterations,
         )
         report = await ingestor.ingest(output)
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+
+        # ③ L13 质量看板（可选）
+        if dashboard is not None:
+            from ..observability import RunRecorder
+
+            await dashboard.record(RunRecorder.from_pipeline(
+                document_id=doc.id, reviewed=reviewed, ingest_report=report,
+                domain_code=doc.domain_code, model_name=model_name,
+                latency_ms=latency_ms))
 
         return {
             "accepted_by_review": reviewed.accepted,
@@ -74,6 +90,7 @@ async def build_document_handler(
             "created": report.created,
             "relations_written": report.relations_written,
             "open_issues": reviewed.review.issues if not reviewed.accepted else [],
+            "latency_ms": latency_ms,
         }
 
     return handle

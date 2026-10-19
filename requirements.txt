@@ -13,6 +13,11 @@ fastembed>=0.4.0
 # ===== 第 12 课起：MCP 服务端（把知识库暴露为标准工具）=====
 mcp>=1.2.0
 
+# ===== 第 13 课起：OpenTelemetry 调用链追踪（agentscope TracingMiddleware）=====
+opentelemetry-api>=1.45
+opentelemetry-sdk>=1.45
+opentelemetry-exporter-otlp>=1.45
+
 # ===== 第 14 课起：服务化 =====
 # fastapi>=0.115.0
 # uvicorn>=0.30.0

@@ -22,3 +22,4 @@
 | L10 | `l10_multi_agent.py` | 抽取-审校-返工质量闭环、可注入角色函数、规则审校员；AgentScope `TeamPipeline`（leader 用 TeamAssign 派活、成员并发隔离）、`GoalPipeline`（`--live`） |
 | L11 | `l11_batch_resume.py` | 持久化作业表 extraction_jobs、JobStore（幂等创建/原子认领 `FOR UPDATE SKIP LOCKED`/状态机/孤儿回收）、BatchRunner 批量与断点续跑、毒丸重试上限、jsonb codec |
 | L12 | `l12_mcp.py` | FastMCP server（locate/card/similar/relations 4 工具）、stdio/HTTP、AgentScope `MCPClient` 接入、Agent 自主 ReAct 调用 MCP 工具（默认进程内，`--stdio`/`--agent`） |
+| L13 | `l13_observability.py` | OTEL `TracingMiddleware`（agent/model span，memory/console/otlp）、`pipeline_runs` 质量看板（通过率/span 一致率/返工/消歧自动化率/成本聚合）、handler 接线（`--console`） |
