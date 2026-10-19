@@ -73,8 +73,8 @@ async def test_failure_goes_back_pending_then_succeeds(jobs):
 
     runner = BatchRunner(jobs, flaky, max_attempts=3)
     s1 = await runner.run_once()
-    # 第一次失败回 pending，本轮 claim 不会立刻再拿（已标 pending 但循环会再取到）
-    # 第二次成功：
+    # 每轮对同一任务只试一次：第一次失败回 pending，下一轮再试时成功
+    assert s1.failed == 0 and s1.processed == 1
     s2 = await runner.run_once(recover=False)
     assert state["calls"] == 2
     succeeded = await jobs.list_jobs(JobStatus.SUCCEEDED)
@@ -89,11 +89,12 @@ async def test_max_attempts_marks_terminal_failed(jobs):
         raise ValueError("文档格式损坏")
 
     runner = BatchRunner(jobs, always_fail, max_attempts=2)
-    # 每轮对同一任务只试一次：需要跑满 2 轮才到 failed 终态
+    # 每轮对同一任务只试一次：第 1 轮回 pending，第 2 轮 attempts 到顶进终态
     r1 = await runner.run_once()
-    assert r1.failed == 1
+    assert r1.processed == 1 and r1.failed == 0  # 首败可重试，未计终态失败
     assert len(await jobs.list_jobs(JobStatus.PENDING)) == 1  # 回 pending 等下轮
-    await runner.run_once(recover=False)
+    r2 = await runner.run_once(recover=False)
+    assert r2.failed == 1
     failed = await jobs.list_jobs(JobStatus.FAILED)
     assert len(failed) == 1
     assert "格式损坏" in failed[0]["error"]
@@ -110,11 +111,17 @@ async def test_max_attempts_marks_terminal_failed(jobs):
 @pytest.mark.asyncio
 async def test_crash_recovery_stale_running(jobs):
     await jobs.create_job(job_id="crash", document_id="d", document_ref="/c.txt")
-    # 模拟 worker 认领后崩溃：任务停在 running
-    job = await jobs.claim_next()
+    # 模拟 worker 认领后崩溃：任务停在 running，且租约尚未过期
+    job = await jobs.claim_next(worker_id="dead-worker")
     assert job.status == JobStatus.RUNNING
 
-    # 新进程启动：recover_stale 收回 pending，再跑能正常成功
+    # 租约未过期：新 worker 不会抢（仍在正常租约内）
+    assert await jobs.reclaim_expired() == 0
+    # 让租约过期（模拟崩溃后过了很久）
+    await jobs.pool.execute(
+        "UPDATE extraction_jobs SET expires_at=now()-interval '1 second'")
+
+    # 新进程启动：recover_stale 只收【过期】任务回 pending，再跑成功
     assert await jobs.recover_stale() == 1
     async def ok(job):
         return {"entities": 1}

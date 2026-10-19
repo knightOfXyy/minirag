@@ -44,11 +44,39 @@ docker run -d --name moray-api -p 8000:8000 \
 > 镜像已默认 `HF_ENDPOINT=https://hf-mirror.com`、`HF_HUB_DISABLE_XET=1`；
 > 离线环境请把模型缓存目录挂载进容器。
 
-## 4. 批量 worker（L11）
+## 4. 批量 worker（L11，多 worker 租约机制）
 
-worker 是独立进程，轮询 `extraction_jobs`，靠**作业幂等 + Ingestor 幂等**实现
-至少一次投递下的断点续跑（`FOR UPDATE SKIP LOCKED` 抢占、陈旧作业回收）。
-可用 cron / k8s CronJob 周期启动；多副本安全。
+worker 是独立进程，消费 `extraction_jobs`，可用 cron / k8s CronJob 周期启动，
+也可 `--poll` 常驻。可以**同时起多个进程/副本**水平扩展，跨进程互斥与崩溃恢复
+由数据库**租约（lease）**保证：
+
+- **认领**：`claim_next` 用 `UPDATE ... FOR UPDATE SKIP LOCKED` 原子取走
+  `pending` 新任务或**租约已过期**的僵死任务，并写 `locked_by / locked_at /
+  expires_at`；两个 worker 绝不会领到同一行。
+- **心跳**：处理期间后台协程按 `lease/3` 周期续租。只要活在跑、心跳不断，
+  别的 worker 绝不抢；若心跳失败（说明已被接管），该 worker 放弃写该任务状态。
+- **接管**：worker 崩溃/卡死 → 心跳停止 → 租约过期 → 另一 worker 接管重跑。
+  因 Ingestor 幂等，重跑只重复劳动、不产生脏数据。
+- **优雅停机**：收到 SIGINT/SIGTERM 后不再认领新任务，在途任务做完或
+  `release` 回 pending（不必等租约超时）。
+- **进程内并发**：`--concurrency N` 让单进程并行处理 N 个任务（贴合 LLM 的
+  RPM/TPM 配额）；跨进程互斥仍由 DB 租约保证，两者正交。
+
+```bash
+# 真实 LLM 抽取（默认处理一轮后退出，适合 cron / k8s CronJob，多副本安全）
+python -m moray.jobs.worker
+python -m moray.jobs.worker --worker-id w1     # 多副本建议给稳定 id 便于排查
+
+# 常驻轮询 + 单进程并行 3 个 + 10 分钟租约（适合长文档/慢推理模型）
+python -m moray.jobs.worker --poll --poll-interval 10 \
+    --concurrency 3 --lease-seconds 600
+
+# 离线教学：确定性假抽取，零 token 演示多 worker 分发
+python -m moray.jobs.worker --offline --once
+```
+
+> 租约时长要大于单任务最坏耗时：推理模型 + 长文档建议 `--lease-seconds 600`
+> 以上；心跳自动按租约 1/3 续租，正常情况下活多久都不会被判死。
 
 ## 5. 可观测性（L13）
 

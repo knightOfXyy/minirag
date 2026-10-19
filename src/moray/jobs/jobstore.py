@@ -105,9 +105,24 @@ class JobStore:
         return JobRecord(dict(row)), False
 
     async def claim_next(
-        self, *, exclude_seen: set[str] | None = None
+        self,
+        *,
+        worker_id: str = "worker",
+        lease_seconds: int = 300,
+        exclude_seen: set[str] | None = None,
+        claim_expired: bool = True,
     ) -> JobRecord | None:
-        """原子认领下一个 pending 任务并置 running。多 worker 安全。
+        """原子认领下一个任务并置 running，带租约（lease）。多 worker 安全。
+
+        可认领两类行（按 id 先到先得）：
+          1. status='pending' 的新任务；
+          2. status='running' 但租约已过期（expires_at < now()）的"疑似僵死"
+             任务——前一个 worker 崩溃或卡住，由本 worker 接管重跑。
+             claim_expired=False 可只领新任务（如做新任务/接管分通道时）。
+
+        认领地写入：locked_by=worker_id、locked_at=now、
+        expires_at=now()+lease_seconds。处理期间应周期性 heartbeat 续租；
+        只要活还在干、心跳不断，别的 worker 绝不会抢走它。
 
         exclude_seen: 本轮已尝试过的 job_id（失败回 pending 后不立即重取，
         重试留到下一轮 run_once）。
@@ -117,37 +132,102 @@ class JobStore:
             """
             UPDATE extraction_jobs
             SET status='running', attempts=attempts+1,
-                started_at=now(), updated_at=now(), error=''
+                started_at=now(), updated_at=now(), error='',
+                locked_by=$2, locked_at=now(),
+                expires_at=now() + make_interval(secs => $3)
             WHERE id = (
                 SELECT id FROM extraction_jobs
-                WHERE status='pending' AND NOT (job_id = ANY($1::text[]))
+                WHERE NOT (job_id = ANY($1::text[]))
+                  AND (
+                        status='pending'
+                        OR ($4 AND status='running' AND expires_at < now())
+                      )
                 ORDER BY id
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
             )
             RETURNING *
             """,
-            list(seen),
+            list(seen), worker_id, lease_seconds, claim_expired,
         )
         return JobRecord(dict(row)) if row else None
+
+    async def heartbeat(
+        self, job_id: str, worker_id: str, lease_seconds: int = 300
+    ) -> bool:
+        """续租：只有当前持有者能续。返回是否续成功（行仍属于本 worker）。
+
+        若返回 False，说明租约已过期并被别人接管——调用方应主动放弃处理
+        （继续写库可能与接管者并发；好在 Ingestor 幂等，结果仍正确，只是浪费）。
+        """
+        val = await self.pool.fetchval(
+            """
+            UPDATE extraction_jobs
+            SET locked_at=now(),
+                expires_at=now() + make_interval(secs => $3),
+                updated_at=now()
+            WHERE job_id=$1 AND locked_by=$2 AND status='running'
+            RETURNING 1
+            """,
+            job_id, worker_id, lease_seconds,
+        )
+        return val is not None
+
+    async def release(self, job_id: str, worker_id: str) -> None:
+        """主动释放：worker 优雅停机时把未做完的任务退回 pending，不必等租约超时。"""
+        await self.pool.execute(
+            """
+            UPDATE extraction_jobs
+            SET status='pending', locked_by=NULL, expires_at=NULL,
+                updated_at=now()
+            WHERE job_id=$1 AND locked_by=$2 AND status='running'
+            """,
+            job_id, worker_id,
+        )
+
+    async def reclaim_expired(self) -> int:
+        """把租约过期的 running 任务收回 pending。
+
+        与旧版 recover_stale 的关键区别：只回收【确实过期】的，绝不影响其他
+        worker 正在正常心跳的任务。通常无需单独调用——claim_next 会顺带接管，
+        这里保留给"只想清理、不处理"的运维场景/启动自检。
+        """
+        n = await self.pool.fetchval(
+            """
+            WITH upd AS (
+                UPDATE extraction_jobs
+                SET status='pending', locked_by=NULL, expires_at=NULL,
+                    updated_at=now()
+                WHERE status='running' AND expires_at < now()
+                RETURNING 1
+            )
+            SELECT count(*) FROM upd
+            """)
+        return int(n or 0)
+
+    async def recover_stale(self) -> int:
+        """兼容旧接口：等价于 reclaim_expired（只收过期，不再无脑全收）。"""
+        return await self.reclaim_expired()
 
     async def mark_succeeded(self, job_id: str, summary: dict) -> None:
         await self.pool.execute(
             """
             UPDATE extraction_jobs
             SET status='succeeded', finished_at=now(), updated_at=now(),
-                result_summary=$2, error=''
+                result_summary=$2, error='',
+                locked_by=NULL, locked_at=NULL, expires_at=NULL
             WHERE job_id=$1
             """,
             job_id, summary or {},  # jsonb 经连接 codec 自动编码
         )
 
     async def mark_failed(self, job_id: str, error: str) -> None:
-        """失败回到 pending（可被重试），记录错误。"""
+        """失败回到 pending（可被重试），记录错误并释放租约。"""
         await self.pool.execute(
             """
             UPDATE extraction_jobs
-            SET status='pending', error=$2, updated_at=now()
+            SET status='pending', error=$2, updated_at=now(),
+                locked_by=NULL, locked_at=NULL, expires_at=NULL
             WHERE job_id=$1
             """,
             job_id, error[:2000],
@@ -157,7 +237,8 @@ class JobStore:
         await self.pool.execute(
             """
             UPDATE extraction_jobs
-            SET status='failed', finished_at=now(), updated_at=now(), error=$2
+            SET status='failed', finished_at=now(), updated_at=now(), error=$2,
+                locked_by=NULL, locked_at=NULL, expires_at=NULL
             WHERE job_id=$1
             """,
             job_id, error[:2000],
