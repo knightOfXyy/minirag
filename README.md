@@ -51,6 +51,14 @@ docker run -d --name moray-pgvector \
 国内首次下载会自动走 `https://hf-mirror.com` 并关闭 HF xet 协议
 （见 `src/moray/embedding/embedder.py`）。
 
+## HTTP API 服务（L14 起）
+
+```bash
+python -m moray.api.server --port 8000          # 查询/HITL/看板/作业
+python -m moray.api.server --port 8000 --llm    # 额外开启 POST /extract 实时抽取
+# 交互式文档：http://127.0.0.1:8000/docs
+```
+
 ## 模型配置
 
 默认使用火山方舟 Coding Plan 网关（OpenAI 兼容，已实测 chat 与 function calling）：

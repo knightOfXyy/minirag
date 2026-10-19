@@ -62,8 +62,8 @@
 - [x] **L11 状态与 Session**：持久化 `extraction_jobs` 表、JobStore（幂等创建/`FOR UPDATE SKIP LOCKED` 原子认领/状态机/`recover_stale` 孤儿回收）、BatchRunner 批量+断点续跑（失败回 pending、超限 failed 终态、reset 重试）、文档 handler 串 L10 审校→L08/09 幂等入库；asyncpg jsonb codec（67 测试）
 - [x] **L12 MCP 扩展**：官方 `mcp` FastMCP server（locate_entity/get_entity_card/find_similar/list_relations 4 工具，惰性建池、可注入 KB），stdio/streamable-http 两种传输，AgentScope `MCPClient` 经 stdio 发现并调用、Agent 挂载 MCP 工具 ReAct（72 测试）；教训：挂工具≠模型必用，需强制 grounding 提示
 - [x] **L13 可观测性**：OpenTelemetry + `TracingMiddleware`（agent/model/tool span，memory/console/OTLP 导出）、`pipeline_runs` 业务质量看板（span 一致率/审校通过率/返工轮数/消歧自动率·人工率/token·耗时聚合），文档 handler 接 Dashboard（81 测试）
-- [ ] **L14 服务化**：FastAPI（提交文档/查询实体/人工审核接口） ← *当前*
-- [ ] **L15 评测与收尾**：黄金数据集、精确率/召回率、CI、部署
+- [x] **L14 服务化**：FastAPI（依赖注入+lifespan 建池，httpx ASGITransport 离线测试）——`/extract`（L10 审校+可选入库，默认关 LLM 返回 501）、`/jobs` 作业、实体 locate/similar/card、`/relations`、`/reviews` HITL 裁决、`/metrics/dashboard`、`/healthz`，OpenAPI 自动文档（87 测试）
+- [ ] **L15 评测与收尾**：黄金数据集、精确率/召回率、CI、部署 ← *当前*
 
 ## 四、目录约定
 
