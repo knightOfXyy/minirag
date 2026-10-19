@@ -19,6 +19,40 @@ docker run -d --name moray-pgvector \
 连接配置走环境变量（见 `.env.example`）：`POSTGRES_HOST/PORT/USER/PASSWORD/DB`。
 首次启动各 Store 的 `init_schema()` 会自动建表（含 ivfflat 向量索引）。
 
+## 1b. Docker Compose 一键部署（含多 worker）
+
+`docker-compose.yml` 编排三个服务：`postgres`、`api`（查询，无 LLM）、
+`worker`（可多副本，跑 LLM）。多副本靠 DB 租约不重不漏（见第 4 节）。
+
+```bash
+cp .env.example .env          # 填好 ARK_API_KEY；可调 WORKER_REPLICAS 等
+docker compose up -d --build  # 默认起 1 api + WORKER_REPLICAS(默认2) 个 worker
+docker compose up -d --scale worker=4   # 临时扩到 4 个 worker
+docker compose logs -f worker           # 看各副本分发情况
+docker compose down
+```
+
+compose 部署的几个关键点（yml 里有注释）：
+
+- **容器内连库地址变了**：服务间走 compose 网络，`POSTGRES_HOST=postgres`、
+  `POSTGRES_PORT=5432`（不是宿主的 `localhost:5433`）。yml 已显式注入覆盖
+  `.env`，所以同一份 `.env` 宿主/容器通用。
+- **嵌入模型缓存共享**：api 和 worker 都挂命名卷 `hf_cache:/root/.cache`，
+  bge 模型只下载一次。
+- **作业文档要容器可见**：worker 按 `extraction_jobs.document_ref` 读文件，
+  故挂了 `./data:/app/data:ro`。若文档在别的路径，需额外挂载或改用对象存储。
+- **多副本不能写死 `container_name`**：worker 服务不设容器名（写死会重名），
+  `worker_id` 自动用 `主机名-pid-uuid` 生成，天然唯一、便于排查。
+- **优雅停机**：worker `stop_grace_period: 30s`，SIGTERM 后在途任务
+  `release` 回 pending，被其他副本/重启后接走。
+- **离线验证**：`docker compose --profile offline up worker-offline`
+  用确定性假抽取跑一轮，不需要 ARK key。
+
+> 若你之前用第 1 节的 `docker run` 起过名为 `moray-pgvector`、占用 5433 的
+> 容器，compose 的 postgres 会和它重名/撞端口。二选一：先
+> `docker rm -f moray-pgvector` 再 compose up，或把 compose 里 postgres 的
+> `container_name` 与宿主端口映射去掉（数据卷独立，互不影响）。
+
 ## 2. 本地运行 API
 
 ```bash

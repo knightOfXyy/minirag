@@ -1,3 +1,9 @@
+# ============================================================================
+# Moray 部署：postgres + api(查询,无LLM) + worker(可多副本,跑LLM)
+#   docker compose up -d                         # 起 1 个 api + WORKER_REPLICAS 个 worker
+#   docker compose up -d --scale worker=3       # 临时把 worker 扩到 3 副本
+#   docker compose --profile offline up -d worker-offline   # 离线假抽取演示
+# ============================================================================
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -8,7 +14,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-moray_dev_2026}
       POSTGRES_DB: ${POSTGRES_DB:-moray_kb}
     ports:
-      # 映射到宿主机 5433，避免和本机可能已有的 5432 冲突
+      # 仅为宿主机本地开发/调试暴露；compose 内部服务走 5432，不走这个映射
       - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - moray_pgdata:/var/lib/postgresql/data
@@ -17,6 +23,102 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    networks: [moraynet]
+
+  api:
+    build: .
+    image: moray:latest
+    restart: unless-stopped
+    # 查询服务默认不开 --llm（POST /extract 返 501）；慢/贵的 LLM 全在 worker
+    command: ["python", "-m", "moray.api.server",
+              "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "${API_PORT:-8000}:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # 关键：容器内用【服务名 postgres + 容器端口 5432】，不是宿主的 localhost:5433
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-moray}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-moray_dev_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-moray_kb}
+      HF_ENDPOINT: https://hf-mirror.com
+      HF_HUB_DISABLE_XET: "1"
+    volumes:
+      - hf_cache:/root/.cache          # 与 worker 共享嵌入模型缓存，只下载一次
+      - ./data:/app/data:ro            # 作业 document_ref 若指向 data/，容器内才可见
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # slim 镜像没有 curl，用自带 python 探活
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/healthz', timeout=3).status==200 else sys.exit(1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [moraynet]
+
+  worker:
+    image: moray:latest
+    build: .
+    restart: unless-stopped
+    # 常驻轮询；单进程内并发由 --concurrency 控制，跨副本互斥由 DB 租约保证。
+    # 多副本时【不要】设 container_name（会重名冲突），worker_id 自动唯一即可。
+    command: ["python", "-m", "moray.jobs.worker", "--poll",
+              "--poll-interval", "10",
+              "--concurrency", "${WORKER_CONCURRENCY:-2}",
+              "--lease-seconds", "${WORKER_LEASE_SECONDS:-600}"]
+    env_file:
+      - path: .env
+        required: false                 # worker 真实抽取需要 .env 里的 ARK_API_KEY
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-moray}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-moray_dev_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-moray_kb}
+      HF_ENDPOINT: https://hf-mirror.com
+      HF_HUB_DISABLE_XET: "1"
+    volumes:
+      - hf_cache:/root/.cache
+      - ./data:/app/data:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Compose v2 的 up 会据此起多副本；也可用 `--scale worker=N` 覆盖。
+    # 各副本靠 claim_next 的 FOR UPDATE SKIP LOCKED + 租约不重不漏。
+    deploy:
+      replicas: ${WORKER_REPLICAS:-2}
+    # 慢推理任务给足优雅停机时间：SIGTERM 后在途任务 release 回 pending
+    stop_grace_period: 30s
+    networks: [moraynet]
+
+  # 离线演示副本：确定性假抽取，不调 LLM、不需要 ARK_API_KEY
+  worker-offline:
+    image: moray:latest
+    profiles: ["offline"]
+    restart: "no"
+    command: ["python", "-m", "moray.jobs.worker", "--offline", "--once"]
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-moray}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-moray_dev_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-moray_kb}
+    volumes:
+      - ./data:/app/data:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [moraynet]
 
 volumes:
   moray_pgdata:
+  hf_cache:
+
+networks:
+  moraynet:
+    driver: bridge
