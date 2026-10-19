@@ -1,0 +1,5 @@
+{
+  "relations": [
+    {"head": "腾讯控股有限公司", "predicate": "总部位于", "tail": "深圳"}
+  ]
+}

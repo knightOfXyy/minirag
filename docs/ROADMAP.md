@@ -63,7 +63,7 @@
 - [x] **L12 MCP 扩展**：官方 `mcp` FastMCP server（locate_entity/get_entity_card/find_similar/list_relations 4 工具，惰性建池、可注入 KB），stdio/streamable-http 两种传输，AgentScope `MCPClient` 经 stdio 发现并调用、Agent 挂载 MCP 工具 ReAct（72 测试）；教训：挂工具≠模型必用，需强制 grounding 提示
 - [x] **L13 可观测性**：OpenTelemetry + `TracingMiddleware`（agent/model/tool span，memory/console/OTLP 导出）、`pipeline_runs` 业务质量看板（span 一致率/审校通过率/返工轮数/消歧自动率·人工率/token·耗时聚合），文档 handler 接 Dashboard（81 测试）
 - [x] **L14 服务化**：FastAPI（依赖注入+lifespan 建池，httpx ASGITransport 离线测试）——`/extract`（L10 审校+可选入库，默认关 LLM 返回 501）、`/jobs` 作业、实体 locate/similar/card、`/relations`、`/reviews` HITL 裁决、`/metrics/dashboard`、`/healthz`，OpenAPI 自动文档（87 测试）
-- [ ] **L15 评测与收尾**：黄金数据集、精确率/召回率、CI、部署 ← *当前*
+- [x] **L15 评测与收尾**：黄金集（`data/gold/` tagged + 关系 sidecar，span 重定位到干净文本）、严格/宽松实体 + 关系三元组 P/R/F1、宏/微平均、`BaselineExtractor`→`ImprovedExtractor` 可复现对比（实体 F1 0.69→1.0、关系 0→0.72，导出 eval_report.json）、GitHub Actions CI、Dockerfile/.dockerignore、`docs/DEPLOYMENT.md`（91 测试）✅ 收官
 
 ## 四、目录约定
 

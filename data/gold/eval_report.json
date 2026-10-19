@@ -1,0 +1,111 @@
+{
+  "baseline规则": {
+    "macro": {
+      "documents": 6,
+      "entity_strict": {
+        "precision": 0.9444,
+        "recall": 0.5556,
+        "f1": 0.6833
+      },
+      "entity_relaxed": {
+        "precision": 0.9444,
+        "recall": 0.5556,
+        "f1": 0.6833
+      },
+      "relation": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      }
+    },
+    "micro": {
+      "entity_strict": {
+        "tp": 9,
+        "fp": 1,
+        "fn": 7,
+        "precision": 0.9,
+        "recall": 0.5625,
+        "f1": 0.6923
+      },
+      "entity_relaxed": {
+        "tp": 9,
+        "fp": 1,
+        "fn": 7,
+        "precision": 0.9,
+        "recall": 0.5625,
+        "f1": 0.6923
+      },
+      "relation": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 9,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      }
+    }
+  },
+  "improved规则+词典": {
+    "macro": {
+      "documents": 6,
+      "entity_strict": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "entity_relaxed": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "relation": {
+        "precision": 0.8333,
+        "recall": 0.6667,
+        "f1": 0.7222
+      }
+    },
+    "micro": {
+      "entity_strict": {
+        "tp": 16,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "entity_relaxed": {
+        "tp": 16,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "relation": {
+        "tp": 6,
+        "fp": 0,
+        "fn": 3,
+        "precision": 1.0,
+        "recall": 0.6667,
+        "f1": 0.8
+      }
+    }
+  },
+  "_comparison_macro_f1": {
+    "entity_strict": {
+      "baseline_f1": 0.6833,
+      "improved_f1": 1.0,
+      "delta": 0.3167
+    },
+    "entity_relaxed": {
+      "baseline_f1": 0.6833,
+      "improved_f1": 1.0,
+      "delta": 0.3167
+    },
+    "relation": {
+      "baseline_f1": 0.0,
+      "improved_f1": 0.7222,
+      "delta": 0.7222
+    }
+  }
+}

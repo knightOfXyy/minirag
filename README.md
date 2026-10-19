@@ -73,8 +73,18 @@ ARK_CHAT_MODEL=deepseek-v4-flash-ga
 ## 目录
 
 ```
-docs/ROADMAP.md   课程总纲与 AgentScope 2.0 知识地图
-lessons/          学习区：每节课一个可独立运行脚本（注释即讲义）
-src/moray/        生产区：由 lessons 沉淀的企业级代码（随课程推进创建）
-tests/            测试
+docs/ROADMAP.md      课程总纲与 AgentScope 2.0 知识地图（L00–L15 已完结）
+docs/ARCHITECTURE.md 系统架构、数据流与模块地图
+docs/DEPLOYMENT.md   部署/运维（DB、API、Docker、worker、CI、评测回归）
+lessons/             学习区：每节课一个可独立运行脚本（注释即讲义）
+src/moray/           生产区：由 lessons 沉淀的企业级代码（随课程推进创建）
+tests/               测试（离线单测 + DB/MCP/API 集成，开关 RUN_DB_TESTS）
+data/gold/           L15 黄金评测集（tagged 语料 + 关系 sidecar）
+```
+
+## 质量评测（L15）
+
+```bash
+python lessons/l15_evaluation.py   # 离线黄金集 P/R/F1：规则基线 vs 改进版
+python -m pytest tests/ -q         # 58 离线单测；RUN_DB_TESTS=1 再加 33 集成测试
 ```

@@ -1,0 +1,39 @@
+name: tests
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip
+          pip install -e ".[dev]"
+          pip install asyncpg fastembed "mcp>=1.2" \
+            "opentelemetry-api>=1.45" "opentelemetry-sdk>=1.45" \
+            "opentelemetry-exporter-otlp>=1.45" \
+            fastapi uvicorn httpx
+
+      # 不设置 RUN_DB_TESTS：DB/向量/MCP 集成测试会自动 skip，
+      # 只跑确定性离线单测（含 L15 评测），CI 无需 PostgreSQL / 模型凭证。
+      - name: Run offline unit tests
+        run: python -m pytest tests/ -q
+
+      - name: Verify lessons import/compile
+        run: python -m py_compile lessons/*.py $(find src/moray -name '*.py')

@@ -1,0 +1,5 @@
+{
+  "relations": [
+    {"head": "马化腾", "predicate": "创立", "tail": "腾讯控股有限公司"}
+  ]
+}

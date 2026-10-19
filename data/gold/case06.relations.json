@@ -1,0 +1,6 @@
+{
+  "relations": [
+    {"head": "比亚迪股份有限公司", "predicate": "总部位于", "tail": "深圳"},
+    {"head": "王传福", "predicate": "创立", "tail": "比亚迪股份有限公司"}
+  ]
+}

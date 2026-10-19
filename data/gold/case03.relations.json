@@ -1,0 +1,6 @@
+{
+  "relations": [
+    {"head": "阿里巴巴集团控股有限公司", "predicate": "总部位于", "tail": "杭州"},
+    {"head": "马云", "predicate": "创立", "tail": "阿里巴巴集团控股有限公司"}
+  ]
+}
