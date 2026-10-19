@@ -4,8 +4,11 @@ from .domains import (
     DOMAIN_REGISTRY,
     FINANCE_DOMAIN,
     GENERAL_DOMAIN,
+    AttrSpec,
     DomainSpec,
     TypeSpec,
+    domain_from_dict,
+    domain_to_dict,
     get_domain,
 )
 from .entities import (

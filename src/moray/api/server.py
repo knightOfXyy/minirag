@@ -38,29 +38,23 @@ async def build_deps(*, enable_llm: bool = False,
     if dashboard is not None:
         await dashboard.init_schema()
 
+    # DB 配置中心：领域包可热更；开 LLM 时同时提供动态抽取器
+    from ..config_center import DbDomainResolver
+    resolver = DbDomainResolver(pool)
+    await resolver.init_schema()
+    await resolver.store.seed_builtin()  # 首次启动把内置 general/finance 种入表
+
+    extractor_provider = None
     extractor_fn = None
     if enable_llm:
-        from ..extraction import Extractor
-
-        service = Extractor("general", max_retries=1)
-
-        async def _extract(text: str, feedback: str | None):
-            # 无状态抽取；返工轮的反馈通过首条 prompt 携带
-            doc_text = text
-            if feedback:
-                doc_text = text + "\n\n【上次问题，请务必修正】\n" + feedback
-            from ..extraction.document import Document as _Doc
-
-            out = await service.extract(
-                _Doc(id="api-live", text=doc_text, source="api"))
-            return out.result
-
-        extractor_fn = _extract
+        from ..extraction.provider import DynamicExtractorProvider
+        # 按请求 domain_code 现取最新领域包构建抽取器；改表即热更，无需重启
+        extractor_provider = DynamicExtractorProvider(resolver, max_retries=1)
 
     return AppDeps(
         pool=pool, store=store, kb=kb, ingestor=ingestor,
         job_store=job_store, dashboard=dashboard,
-        extractor_fn=extractor_fn)
+        extractor_fn=extractor_fn, extractor_provider=extractor_provider)
 
 
 def main(argv: list[str] | None = None) -> None:

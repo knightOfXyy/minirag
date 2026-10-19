@@ -56,26 +56,25 @@ async def _build_runner(
         dashboard = Dashboard(pool)
         await dashboard.init_schema()
 
+    extractor_provider = None
     if extractor_fn is None:
         if offline:
             from .offline import fake_extractor
             extractor_fn = fake_extractor
         else:
-            from ..extraction import Extractor
-            from ..extraction.document import Document as _Doc
+            # 真实模式：领域包走 DB 配置中心，按作业 domain_code 动态取，
+            # 运营改 domain_configs 表后 worker 下一个作业即生效（无需重启）。
+            from ..config_center import DbDomainResolver
+            from ..extraction.provider import DynamicExtractorProvider
 
-            service = Extractor("general", max_retries=1)
-
-            async def extractor_fn(text: str, feedback: str | None):
-                body = text
-                if feedback:
-                    body = text + "\n\n【上次问题，请务必修正】\n" + feedback
-                out = await service.extract(
-                    _Doc(id="worker-live", text=body, source="worker"))
-                return out.result
+            resolver = DbDomainResolver(pool)
+            await resolver.init_schema()
+            await resolver.store.seed_builtin()
+            extractor_provider = DynamicExtractorProvider(resolver, max_retries=1)
 
     handler = await build_document_handler(
-        store=store, ingestor=ingestor, extractor_fn=extractor_fn,
+        store=store, ingestor=ingestor,
+        extractor_fn=extractor_fn, extractor_provider=extractor_provider,
         source="worker", dashboard=dashboard,
         model_name="offline-fake" if offline else "ark-llm")
 

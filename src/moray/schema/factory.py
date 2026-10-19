@@ -136,8 +136,48 @@ def to_core_result(dynamic_result: BaseModel) -> ExtractionResult:
     return ExtractionResult(entities=entities, relations=relations)
 
 
+_ATTR_TYPE_CHECKS = {
+    "string": lambda v: isinstance(v, str),
+    "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "boolean": lambda v: isinstance(v, bool),
+}
+
+
+def validate_attributes(result: ExtractionResult, domain: DomainSpec) -> list[str]:
+    """按领域配置校验每个实体的 attributes：必填 / 类型 / 枚举取值。
+
+    返回错误信息列表；空列表表示通过。配置里没声明的属性键一律放行
+    （保留开放发现能力），只对【已声明】的键做约束。
+    """
+    attr_map = domain.type_attribute_map()
+    errors: list[str] = []
+    for i, e in enumerate(result.entities):
+        specs = attr_map.get(e.type)
+        if not specs:
+            continue
+        for key, spec in specs.items():
+            if key not in e.attributes or e.attributes[key] in (None, ""):
+                if spec.required:
+                    errors.append(
+                        f"entities[{i}]({e.name}/{e.type}) 缺少必填属性 "
+                        f"attributes.{key}")
+                continue
+            value = e.attributes[key]
+            check = _ATTR_TYPE_CHECKS.get(spec.value_type)
+            if check and not check(value):
+                errors.append(
+                    f"entities[{i}]({e.name}/{e.type}) 属性 {key} 应为 "
+                    f"{spec.value_type}，实际 {type(value).__name__}={value!r}")
+            if spec.enum and value not in spec.enum:
+                errors.append(
+                    f"entities[{i}]({e.name}/{e.type}) 属性 {key}={value!r} "
+                    f"不在允许取值 {list(spec.enum)} 内")
+    return errors
+
+
 def validate_against_domain(result: ExtractionResult, domain: DomainSpec) -> list[str]:
-    """领域级二次校验（核心 Schema 不管枚举，由这里补上）。
+    """领域级二次校验：实体类型枚举 + 专有属性约束。
 
     返回错误信息列表；空列表表示通过。真实流水线会据此决定放行/打回重抽。
     """
@@ -149,4 +189,5 @@ def validate_against_domain(result: ExtractionResult, domain: DomainSpec) -> lis
                 f"entities[{i}] 类型 {e.type!r} 不在领域 {domain.code} "
                 f"允许的 {sorted(allowed)} 内"
             )
+    errors.extend(validate_attributes(result, domain))
     return errors

@@ -26,3 +26,4 @@
 | L14 | `l14_api.py` | FastAPI 服务化：`/extract`、作业、实体定位/卡片/相似、关系、HITL 审核、看板、健康检查；依赖注入 + lifespan（默认进程内 httpx，`--http` 真实服务） |
 | L15 | `l15_evaluation.py` | 评测收官：黄金集（tagged 语料 + 关系 sidecar）、严格/宽松实体匹配与关系三元组 P/R/F1、宏/微平均、baseline→improved 可复现对比（`--live` 评 LLM），CI/Dockerfile/部署文档 |
 | 进阶 | `multiworker_demo.py` | 多 worker 机制：租约（locked_by/locked_at/expires_at）、心跳续租、过期接管、优雅停机、进程内并发；生产入口 `python -m moray.jobs.worker` |
+| 进阶 | `dynamic_domain_config.py` | 动态领域配置（PostgreSQL 配置中心）：`domain_configs` 表热更实体类型/属性规格、按版本缓存解析、动态结构化模型、必填/类型/枚举属性校验；CLI `moray.config_center.cli` |

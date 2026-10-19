@@ -32,16 +32,19 @@ async def build_document_handler(
     *,
     store: EntityStore,
     ingestor: Ingestor,
-    extractor_fn,
+    extractor_fn=None,
+    extractor_provider=None,
     source: str = "batch",
     dashboard=None,
     model_name: str = "batch-pipeline",
 ):
     """构造一个符合 BatchRunner 要求的 async (JobRecord)->dict handler。
 
-    extractor_fn: async (text, feedback) -> ExtractionResult（可注入离线实现）。
-    dashboard: 可选的 observability.Dashboard；传入则每处理一篇写一行
-               pipeline_runs 质量指标（L13）。
+    extractor_fn: 固定的 async (text, feedback)->ExtractionResult（离线/兼容）。
+    extractor_provider: DynamicExtractorProvider；给定时每个作业按其
+        domain_code 从 DB 配置中心取最新领域包（支持热更属性），优先于
+        extractor_fn。
+    dashboard: 可选 observability.Dashboard；每处理一篇写一行 pipeline_runs。
     """
     import time
 
@@ -49,17 +52,24 @@ async def build_document_handler(
         t0 = time.perf_counter()
         path = Path(job["document_ref"])
         text = path.read_text(encoding="utf-8").strip()
+        domain_code = job["domain_code"]
 
         doc = Document(
             id=job["document_id"],
             text=text,
             source=source,
-            domain_code=job["domain_code"],
+            domain_code=domain_code,
         )
+
+        # 该作业用哪个抽取器：优先按领域动态取（配置中心热更）
+        if extractor_provider is not None:
+            active_extractor = await extractor_provider.extract(domain_code)
+        else:
+            active_extractor = extractor_fn
 
         # ① L10 抽取-审校闭环
         reviewed = await run_extraction_team(
-            text, extractor=extractor_fn, max_iters=3)
+            text, extractor=active_extractor, max_iters=3)
 
         # ② 包成 ExtractionOutput 交给 L08/L09 入库（幂等）
         output = ExtractionOutput(

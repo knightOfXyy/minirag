@@ -112,6 +112,41 @@ python -m moray.jobs.worker --offline --once
 > 租约时长要大于单任务最坏耗时：推理模型 + 长文档建议 `--lease-seconds 600`
 > 以上；心跳自动按租约 1/3 续租，正常情况下活多久都不会被判死。
 
+## 4b. 动态领域配置（domain_configs 配置中心，热更）
+
+要"不改代码、不重启"地定义抽取哪些实体类型、每类抽哪些属性（必填/类型/枚举），
+把领域包写进 `domain_configs` 表即可。API 与 worker 按 `domain_code` 经
+`DbDomainResolver` 取最新配置（按 `updated_at` 版本缓存，改表即生效）。
+
+```bash
+# 首次把内置 general/finance 种入表（已存在则跳过）
+PYTHONPATH=src python -m moray.config_center.cli seed
+PYTHONPATH=src python -m moray.config_center.cli list
+PYTHONPATH=src python -m moray.config_center.cli show finance
+PYTHONPATH=src python -m moray.config_center.cli import my_domain.json
+PYTHONPATH=src python -m moray.config_center.cli disable finance
+```
+
+导入 JSON 形态（与 `DomainSpec` 对应）：
+
+```json
+{
+  "code": "recruit", "name": "招聘",
+  "relation_predicates": ["要求掌握"],
+  "types": [{"code": "JOB", "label": "职位", "guide": "招聘岗位",
+    "attributes": [
+      {"key": "title", "required": true, "type": "string"},
+      {"key": "salary_min", "type": "integer"},
+      {"key": "seniority", "type": "string", "enum": ["初级", "中级", "高级"]}
+    ]}]
+}
+```
+
+- 规格既进系统提示词/动态 JSON Schema（引导模型），也在 `validate_against_domain`
+  里做强校验（必填/类型/枚举），不合规会触发 Extractor 的纠错重试。
+- `--llm` 的 API 与真实模式 worker 自动启用该机制；未声明的属性键放行（保留开放发现）。
+- 离线演示：`python lessons/dynamic_domain_config.py`。
+
 ## 5. 可观测性（L13）
 
 - 质量看板：`GET /metrics/dashboard`（通过率 / span 一致率 / 返工轮次 /

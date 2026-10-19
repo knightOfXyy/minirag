@@ -54,7 +54,10 @@ class AppDeps:
     ingestor: Ingestor
     job_store: object | None = None
     dashboard: object | None = None
-    extractor_fn: ExtractorFn | None = None  # None 时 /extract 返回 501
+    extractor_fn: ExtractorFn | None = None  # 固定抽取器（测试/离线）
+    # 动态抽取器提供方：按请求 domain_code 从 DB 配置中心取最新领域包；
+    # 存在时优先于 extractor_fn（运营改 domain_configs 表即热更，无需重启）。
+    extractor_provider: object | None = None
 
 
 def create_app(
@@ -111,17 +114,36 @@ def create_app(
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(503, f"知识库不可用: {exc}") from exc
 
+    # ------------------------------------------------- 领域配置（配置中心）
+    @app.get("/domains")
+    async def list_domains(d: AppDeps = Depends(get_deps)):
+        """列出可热更的领域包（DB 配置中心 + 内置）。"""
+        if d.extractor_provider is not None:
+            resolver = d.extractor_provider.resolver
+            db_codes = await resolver.list_codes()
+            return {"domains": db_codes, "source": "postgres"}
+        raise HTTPException(501, "未配置领域配置中心（extractor_provider 为 None）")
+
     # ------------------------------------------------------------------ 抽取
     @app.post("/extract", response_model=ExtractResponse)
     async def extract(req: ExtractRequest, d: AppDeps = Depends(get_deps)):
-        if d.extractor_fn is None:
-            raise HTTPException(501, "未配置抽取器（extractor_fn 为 None）")
+        # 优先动态提供方：按请求 domain_code 从 DB 配置中心取最新领域包
+        if d.extractor_provider is not None:
+            try:
+                extractor_fn = await d.extractor_provider.extract(req.domain_code)
+            except KeyError as exc:
+                raise HTTPException(400, str(exc)) from exc
+        elif d.extractor_fn is not None:
+            extractor_fn = d.extractor_fn  # 固定抽取器（离线/测试）
+        else:
+            raise HTTPException(501, "未配置抽取器（extractor_fn/provider 为 None）")
+
         doc_id = req.document_id or (
             "doc-" + hashlib.sha1(req.text.encode()).hexdigest()[:10])
 
-        # L10 抽取-审校闭环
+        # L10 抽取-审校闭环（抽取器内部已按领域 schema 约束实体类型与属性）
         reviewed = await run_extraction_team(
-            req.text, extractor=d.extractor_fn, max_iters=3)
+            req.text, extractor=extractor_fn, max_iters=3)
 
         ingest_info = None
         if req.ingest:
