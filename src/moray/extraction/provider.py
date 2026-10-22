@@ -12,7 +12,7 @@ DynamicExtractorProvider 每次接到一个 domain_code：
 from __future__ import annotations
 
 from ..config_center.resolver import DbDomainResolver
-from .document import Document
+from .document import Document, Usage
 from .extractor import Extractor
 
 
@@ -45,17 +45,26 @@ class DynamicExtractorProvider:
                 self._cache.pop(old_key, None)
         return extractor, domain
 
-    async def extract(self, domain_code: str):
-        """返回一个绑定该领域的 async (text, feedback)->ExtractionResult。"""
+    async def extract(self, domain_code: str, usage_sink: Usage | None = None):
+        """返回一个绑定该领域的 async (text, feedback)->ExtractionResult。
+
+        usage_sink: 可选的 Usage 累加器。抽取函数契约只返回 ExtractionResult，
+        token 用量（含提示缓存命中）会在这一层被丢掉；给上层一个"顺手收集"的
+        出口，/extract 与 worker 才能把成本和缓存命中率写进看板。
+        """
         extractor, _domain = await self.get_extractor(domain_code)
 
         async def _fn(text: str, feedback: str | None = None):
             body = text
             if feedback:
+                # 反馈追加在正文之后：前缀（system + 引导语 + 正文）保持不变，
+                # 返工轮因此能继续命中上一轮的提示缓存。
                 body = text + "\n\n【上次问题，请务必修正】\n" + feedback
             out = await extractor.extract(
                 Document(id=f"{domain_code}-dyn", text=body,
                          source="dynamic", domain_code=domain_code))
+            if usage_sink is not None:
+                usage_sink.add(out.usage)
             return out.result
 
         return _fn

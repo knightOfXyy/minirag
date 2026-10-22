@@ -28,8 +28,22 @@ from .entities import (
 )
 
 
+# 与领域、与具体文档都【无关】的任务协议：放进 system prompt 尾部，
+# 让"同一领域的所有请求"共享一段逐字节稳定的长前缀（提示缓存可整段复用）。
+# 变化内容（正文/纠错反馈）永远只出现在最后的 user 消息里，绝不动前面的前缀。
+TASK_PROTOCOL = (
+    "输出协议：只输出结构化结果，不输出任何解释性文字。"
+    "字符偏移 start/end 一律相对于【本次给出的正文】，从 0 开始计数。"
+    "只抽取有明确文本证据的内容；没有任何实体时返回空列表，禁止臆测。"
+)
+
+
 def build_system_prompt(domain: DomainSpec) -> str:
-    """根据领域配置拼出抽取 Agent 的系统提示词。"""
+    """根据领域配置拼出抽取 Agent 的系统提示词。
+
+    前缀稳定性 = 提示缓存命中率：这里刻意【不含时间戳/随机 id/文档相关内容】，
+    同领域内每次请求逐字节一致；领域配置变更（DB updated_at 变化）才会换前缀。
+    """
     predicates = "、".join(f"「{p}」" for p in domain.relation_predicates) or "（按文本自行概括规范动词）"
     return (
         "你是严谨的实体与关系抽取专家。只抽取文本中明确出现、且属于下列类型的"
@@ -41,7 +55,8 @@ def build_system_prompt(domain: DomainSpec) -> str:
         "要求：标准名取最完整正式的叫法，其他叫法放进 aliases；"
         "mentions 记录每次原文出现及其字符偏移；专有字段放入 attributes。\n"
         f"{domain.extra_instruction}\n"
-        "没有任何实体时返回空列表，禁止臆测。"
+        "没有任何实体时返回空列表，禁止臆测。\n"
+        f"{TASK_PROTOCOL}"
     )
 
 

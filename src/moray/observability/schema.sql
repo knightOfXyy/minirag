@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     -- 成本
     input_tokens      INTEGER NOT NULL DEFAULT 0,
     output_tokens     INTEGER NOT NULL DEFAULT 0,
+    cached_input_tokens INTEGER NOT NULL DEFAULT 0,  -- 命中提示缓存的输入 token
     latency_ms        INTEGER NOT NULL DEFAULT 0,
     model_name        TEXT NOT NULL DEFAULT '',
 
@@ -32,3 +33,6 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_runs_doc ON pipeline_runs(document_id);
 CREATE INDEX IF NOT EXISTS idx_runs_created ON pipeline_runs(created_at);
+
+-- 对已有库平滑升级（必须先于任何引用新列的语句；可重复执行）
+ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS cached_input_tokens INTEGER NOT NULL DEFAULT 0;

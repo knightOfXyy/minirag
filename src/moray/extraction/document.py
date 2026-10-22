@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 from ..schema import ExtractionResult
 
@@ -24,16 +24,35 @@ class Document(BaseModel):
 
 
 class Usage(BaseModel):
-    """一次或多次模型调用累计的 token 用量（成本核算的原始数据）。"""
+    """一次或多次模型调用累计的 token 用量（成本核算的原始数据）。
+
+    cached_input_tokens：其中命中【提示缓存】(prompt cache) 的输入 token 数。
+    托管网关按 cached_tokens 上报（agentscope 已解析进 Msg.usage.cache_input_tokens）。
+    命中率 = cached_input_tokens / input_tokens；缓存 token 单价通常远低于普通输入，
+    不计这一段，成本看板会系统性高估。
+    """
 
     input_tokens: int = 0
     output_tokens: int = 0
+    cached_input_tokens: int = 0
+
+    @computed_field
+    @property
+    def cache_hit_rate(self) -> float:
+        """前缀缓存命中率（0~1）；无输入时记 0。
+
+        做成 computed_field：任何把 usage 序列化成 JSON 的地方
+        （作业结果、API 响应、评测报告）都自动带上这一列，不用各处手算。
+        """
+        return (self.cached_input_tokens / self.input_tokens
+                if self.input_tokens else 0.0)
 
     def add(self, other: "Usage | None") -> None:
         if other is None:
             return
         self.input_tokens += other.input_tokens
         self.output_tokens += other.output_tokens
+        self.cached_input_tokens += other.cached_input_tokens
 
 
 class ExtractionOutput(BaseModel):

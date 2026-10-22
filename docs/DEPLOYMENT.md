@@ -150,9 +150,39 @@ PYTHONPATH=src python -m moray.config_center.cli disable finance
 ## 5. 可观测性（L13）
 
 - 质量看板：`GET /metrics/dashboard`（通过率 / span 一致率 / 返工轮次 /
-  消歧自动化率 / token 成本）。
+  消歧自动化率 / token 成本 / **提示缓存命中率 `cache_hit_rate`**）。
 - 调用链：`setup_tracing(mode="otlp", endpoint=...)` 导出 OTLP 到
   Jaeger/Tempo；不传则 memory/console。
+
+## 5b. 成本与提示缓存（prompt cache）
+
+一次抽取请求的成本 = 稳定前缀（system + 结构化 JSON Schema + 引导语，按领域
+逐请求不变）+ 变化的正文 + 输出。前缀命中按折扣价计费，所以两条杠杆：
+
+1. **别让前缀变形**：与文档无关的规则一律进 system prompt（`schema.TASK_PROTOCOL`），
+   正文只出现在 user 消息末尾，返工反馈追加在对话尾部不重发正文。
+   排查用 `Extractor.prefix_version`（领域 code + 长度指纹）：指纹变了才该换缓存，
+   `domain_configs` 热更会让指纹翻页，属预期失效。
+2. **输出侧开关**（默认不设 = 沿用网关默认，行为与历史一致）：
+
+   ```bash
+   ARK_REASONING_EFFORT=minimal   # minimal/low/medium/high
+   ARK_THINKING=disabled          # auto/enabled/disabled
+   ```
+
+实测事实与未完成项（详见 `lessons/prompt_cache_probe.py` 文件头）：
+
+- 网关**会**回传 `prompt_tokens_details.cached_tokens`，缓存真实存在、粒度 128
+  token；但裸探测里"同前缀重发"未命中、"同 system 换正文"命中 2304/2405
+  ——多副本、无会话亲和，命中是概率性的。
+- 单次抽块输出 2141~4284 token **高于**输入 1832~1850（其中多为 reasoning），
+  输出单价也更贵，所以当前最大的成本项是思考链，不是没吃到的输入缓存。
+- 因此 `ChunkedExtractionPipeline(warm_prefix=...)` **默认关闭**：收益未确立前
+  不静默多烧一次探测请求。
+- ⚠️ 待办：套餐额度 2026-10-28 重置后跑
+  `python lessons/prompt_cache_probe.py --live [--warm]` 统计命中率，据此决定
+  预热是否常开；再用 L15 黄金集比较 `ARK_REASONING_EFFORT` 各档的
+  成本/F1 曲线（抽取不需要思考链，但要用数字定档，别拍脑袋）。
 
 ## 6. 评测回归（L15）
 

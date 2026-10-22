@@ -32,7 +32,7 @@ from typing import Awaitable, Callable
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 
-from ..extraction.document import Document, ExtractionOutput
+from ..extraction.document import Document, ExtractionOutput, Usage
 from ..kb import EntityStore, Ingestor, KnowledgeBase
 from ..orchestration import run_extraction_team
 from .schemas import (
@@ -128,13 +128,16 @@ def create_app(
     @app.post("/extract", response_model=ExtractResponse)
     async def extract(req: ExtractRequest, d: AppDeps = Depends(get_deps)):
         # 优先动态提供方：按请求 domain_code 从 DB 配置中心取最新领域包
+        usage = Usage()          # token/缓存命中累加器（见 provider.usage_sink）
         if d.extractor_provider is not None:
             try:
-                extractor_fn = await d.extractor_provider.extract(req.domain_code)
+                extractor_fn = await d.extractor_provider.extract(
+                    req.domain_code, usage_sink=usage)
             except KeyError as exc:
                 raise HTTPException(400, str(exc)) from exc
         elif d.extractor_fn is not None:
             extractor_fn = d.extractor_fn  # 固定抽取器（离线/测试）
+            usage = None                   # 契约不回传用量，如实标 None
         else:
             raise HTTPException(501, "未配置抽取器（extractor_fn/provider 为 None）")
 
@@ -150,6 +153,7 @@ def create_app(
             output = ExtractionOutput(
                 document_id=doc_id, domain_code=req.domain_code,
                 result=reviewed.result, model_name="api",
+                usage=(usage or Usage()),
                 attempts=reviewed.review.iterations)
             rep = await d.ingestor.ingest(output)
             ingest_info = {
@@ -166,6 +170,7 @@ def create_app(
             entities=[e.model_dump() for e in reviewed.result.entities],
             relations=[r.model_dump() for r in reviewed.result.relations],
             ingest=ingest_info,
+            usage=(usage.model_dump() if usage is not None else None),
         )
 
     # ------------------------------------------------------------------ 作业

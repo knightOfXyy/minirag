@@ -127,10 +127,13 @@ async def test_extraction_metrics_counts_and_scores():
 def test_collector_totals():
     c = MetricsCollector()
     r = c.start("a")
-    r.model_calls.append(SimpleNamespace(input_tokens=10, output_tokens=5))
+    r.model_calls.append(
+        SimpleNamespace(input_tokens=10, output_tokens=5, cached_input_tokens=4)
+    )
     r.n_entities = 3
     r.n_relations = 1
     c.finish()
     totals = c.totals()
     assert totals == {"runs": 1, "input_tokens": 10, "output_tokens": 5,
+                      "cached_input_tokens": 4, "cache_hit_rate": 0.4,
                       "entities": 3, "relations": 1}

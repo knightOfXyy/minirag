@@ -46,10 +46,12 @@ async def test_record_and_recent(dash):
 async def test_summary_aggregates(dash):
     d, _ = dash
     await _rec(d, document_id="a", review_passed=True, span_ratio=1.0,
-               n_auto_merged=2, n_queued=0, input_tokens=100, output_tokens=100)
+               n_auto_merged=2, n_queued=0, input_tokens=100, output_tokens=100,
+               cached_input_tokens=80)
     await _rec(d, document_id="b", review_passed=False, span_ratio=0.5,
                review_iters=3, open_issues=4,
-               n_auto_merged=1, n_queued=3, input_tokens=300, output_tokens=200)
+               n_auto_merged=1, n_queued=3, input_tokens=300, output_tokens=200,
+               cached_input_tokens=60)
 
     s = await d.summary()
     assert s["runs"] == 2
@@ -61,6 +63,9 @@ async def test_summary_aggregates(dash):
     assert s["auto_merged"] == 3 and s["queued"] == 3
     assert s["auto_merge_rate"] == 0.5
     assert s["input_tokens"] == 400 and s["output_tokens"] == 300
+    # 提示缓存：(80+60)/400 = 0.35
+    assert s["cached_input_tokens"] == 140
+    assert s["cache_hit_rate"] == 0.35
 
 
 @pytest.mark.asyncio
@@ -70,6 +75,7 @@ async def test_summary_empty_is_safe(dash):
     assert s["runs"] == 0
     assert s["pass_rate"] == 0.0
     assert s["auto_merge_rate"] is None  # 没有消歧决策时分母为 0
+    assert s["cache_hit_rate"] == 0.0   # 没有 token 时不能除零
 
 
 @pytest.mark.asyncio

@@ -20,6 +20,7 @@ class ModelCallRecord:
     tools_offered: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    cached_input_tokens: int = 0   # 命中提示缓存的输入 token（前缀缓存可观测性）
     latency_s: float = 0.0
     ok: bool = True
     error: str = ""
@@ -62,6 +63,15 @@ class ExtractionMetrics:
         return sum(c.output_tokens for c in self.model_calls)
 
     @property
+    def cached_input_tokens(self) -> int:
+        return sum(c.cached_input_tokens for c in self.model_calls)
+
+    @property
+    def cache_hit_rate(self) -> float:
+        """提示缓存命中率：cached / input（0~1）。"""
+        return self.cached_input_tokens / self.input_tokens if self.input_tokens else 0.0
+
+    @property
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
 
@@ -70,7 +80,9 @@ class ExtractionMetrics:
         return (
             f"[{self.agent_name}] 耗时{self.duration_s:.1f}s "
             f"模型调用{len(self.model_calls)}次 "
-            f"token={self.total_tokens}(in{self.input_tokens}/out{self.output_tokens}) "
+            f"token={self.total_tokens}(in{self.input_tokens}/out{self.output_tokens}"
+            f"/cached{self.cached_input_tokens}"
+            f"|命中{self.cache_hit_rate:.0%}) "
             f"实体{self.n_entities} 关系{self.n_relations} "
             f"低置信{self.low_confidence_entities} 质量分={q}"
         )
@@ -107,10 +119,14 @@ class MetricsCollector:
         return self.start(agent_name)
 
     def totals(self) -> dict:
+        inp = sum(r.input_tokens for r in self.records)
+        cached = sum(r.cached_input_tokens for r in self.records)
         return {
             "runs": len(self.records),
-            "input_tokens": sum(r.input_tokens for r in self.records),
+            "input_tokens": inp,
             "output_tokens": sum(r.output_tokens for r in self.records),
+            "cached_input_tokens": cached,
+            "cache_hit_rate": round(cached / inp, 3) if inp else 0.0,
             "entities": sum(r.n_entities for r in self.records),
             "relations": sum(r.n_relations for r in self.records),
         }

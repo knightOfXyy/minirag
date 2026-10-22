@@ -121,9 +121,17 @@ class ChunkedExtractionPipeline:
         extractor: Extractor,
         *,
         concurrency: int = 4,
+        warm_prefix: bool = False,
     ) -> None:
         self.extractor = extractor
         self.sem = asyncio.Semaphore(concurrency)
+        # 提示缓存预热：多块并发前先串行发一发探测请求，免得 N 个请求同时
+        # miss、各自付全价 prefill（Extractor 按领域版本去重，只探一次）。
+        # 默认关：实测（2026-10-22）真实抽块路径 cached 仍为 0，裸探测只在部分
+        # 请求命中（多副本、无会话亲和），收益未确立；而探测本身要付一次完整
+        # prefill + 思考输出。先跑 lessons/prompt_cache_probe.py --live 统计出
+        # 命中率，再决定是否常开。
+        self.warm_prefix = warm_prefix
 
     async def _extract_one_chunk(self, chunk: Chunk) -> tuple[ExtractionResult, Usage, str]:
         """抽单个块（带限流）。返回换算后的结果、用量、块 id。"""
@@ -147,17 +155,22 @@ class ChunkedExtractionPipeline:
     ) -> ExtractionOutput:
         """并发抽取所有块，换算偏移后归并。on_chunk(done,total,chunk_id) 可做进度回调。"""
         total = len(chunks)
+        usage = Usage()
+
+        # 只有多块才值得预热（单块文档预热等于白烧一次前缀）。
+        # 探测请求本身的开销记在触发它这篇文档上：宁可多记，不要漏记成本。
+        if self.warm_prefix and total >= 2:
+            usage.add(await self.extractor.warm_prefix())
 
         async def worker(chunk: Chunk) -> tuple[ExtractionResult, Usage, str]:
-            res, usage, cid = await self._extract_one_chunk(chunk)
+            res, u, cid = await self._extract_one_chunk(chunk)
             if on_chunk:
                 on_chunk(res, cid, total)
-            return res, usage, cid
+            return res, u, cid
 
         settled = await asyncio.gather(*(worker(c) for c in chunks))
 
         partials = [item[0] for item in settled]
-        usage = Usage()
         for _, u, _ in settled:
             usage.add(u)
 

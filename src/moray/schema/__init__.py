@@ -19,6 +19,7 @@ from .entities import (
     Span,
 )
 from .factory import (
+    TASK_PROTOCOL,
     build_extraction_model,
     build_system_prompt,
     to_core_result,

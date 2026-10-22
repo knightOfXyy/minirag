@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..extraction.document import Document, ExtractionOutput
+from ..extraction.document import Document, ExtractionOutput, Usage
 from ..kb import EntityStore, Ingestor
 from ..orchestration import run_extraction_team
 from .jobstore import JobRecord
@@ -62,8 +62,12 @@ async def build_document_handler(
         )
 
         # 该作业用哪个抽取器：优先按领域动态取（配置中心热更）
+        # usage 收集器：抽取函数契约不返回用量，这里挂个累加器把 token
+        # （含提示缓存命中量）捞回来，写进看板与作业结果。
+        usage = Usage()
         if extractor_provider is not None:
-            active_extractor = await extractor_provider.extract(domain_code)
+            active_extractor = await extractor_provider.extract(
+                domain_code, usage_sink=usage)
         else:
             active_extractor = extractor_fn
 
@@ -77,6 +81,7 @@ async def build_document_handler(
             domain_code=doc.domain_code,
             result=reviewed.result,
             model_name=model_name,
+            usage=usage,
             attempts=reviewed.review.iterations,
         )
         report = await ingestor.ingest(output)
@@ -89,6 +94,9 @@ async def build_document_handler(
             await dashboard.record(RunRecorder.from_pipeline(
                 document_id=doc.id, reviewed=reviewed, ingest_report=report,
                 domain_code=doc.domain_code, model_name=model_name,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cached_input_tokens=usage.cached_input_tokens,
                 latency_ms=latency_ms))
 
         return {
@@ -101,6 +109,8 @@ async def build_document_handler(
             "relations_written": report.relations_written,
             "open_issues": reviewed.review.issues if not reviewed.accepted else [],
             "latency_ms": latency_ms,
+            # 成本/缓存可观测：cached_input_tokens 与 cache_hit_rate 直接进作业结果
+            "usage": usage.model_dump(),
         }
 
     return handle

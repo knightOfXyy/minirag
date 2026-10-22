@@ -76,6 +76,8 @@ class AuditMiddleware(_RecorderMiddleware):
             if usage is not None:
                 record.input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
                 record.output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+                record.cached_input_tokens = int(
+                    getattr(usage, "cache_input_tokens", 0) or 0)
             return resp
         except Exception as exc:  # noqa: BLE001 审计要吞不下异常，先记再抛
             record.ok = False

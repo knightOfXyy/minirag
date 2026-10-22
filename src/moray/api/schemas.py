@@ -23,6 +23,9 @@ class ExtractResponse(BaseModel):
     entities: list[dict]
     relations: list[dict]
     ingest: dict | None = None
+    # token 用量（含提示缓存命中量 cached_input_tokens 与命中率 cache_hit_rate）。
+    # 走固定抽取器（测试/离线）时为 None——契约只回 ExtractionResult，用量捞不回来。
+    usage: dict | None = None
 
 
 class EnqueueJobRequest(BaseModel):
