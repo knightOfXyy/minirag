@@ -1,7 +1,16 @@
-"""集中配置：从环境变量读取 ARK 连接信息，构造模型客户端。
+"""集中配置：多供应商 LLM 接入 + 构造聊天模型客户端。
 
-全项目只在这里直接读环境变量，其他模块通过函数拿模型，
-便于以后切换供应商、注入测试用的假模型。
+全项目只在这里读环境变量、只在这里决定"用哪家模型"，其他模块通过
+build_chat_model() 拿模型，因此换供应商不改业务代码：
+
+    LLM_PROVIDER=volcengine   # 默认，火山方舟 ARK（行为与历史完全一致）
+    LLM_PROVIDER=deepseek     # DeepSeek 官方 API
+    LLM_PROVIDER=openai       # 任意 OpenAI 兼容网关（自建/第三方代理）
+
+三家在 agentscope 里构造签名一致（credential, model, parameters, stream），
+差异都收敛在本文件的"参数翻译层"：不同厂商支持的 reasoning_effort 取值不同、
+思考模式的开关形态不同，这里统一成 LLM_REASONING_EFFORT / LLM_THINKING 两个
+中性变量，非法取值在启动时就报错，而不是等到第一次调用炸在请求体里。
 """
 
 from __future__ import annotations
@@ -11,73 +20,211 @@ from functools import lru_cache
 
 from dotenv import load_dotenv
 
-from agentscope.credential import VolcengineCredential
-from agentscope.model import VolcengineChatModel
-
 # 包根目录的上两级 = 项目根（src/moray/config.py -> 项目根）
 _PROJECT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", ".."),
 )
 load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
 
+PROVIDERS = ("volcengine", "deepseek", "openai")
 
-# reasoning_effort 的合法档位（与 agentscope VolcengineChatModel.Parameters 一致）
-REASONING_EFFORTS = ("minimal", "low", "medium", "high")
+# 各 provider 允许的 reasoning_effort（agentscope 的 Literal 约束为准）。
+# deepseek 只有 high/max：agentscope 的 Parameters 是 Literal["high","max"]，
+# 传 low 会在构造期抛 ValidationError，所以这里先做兼容映射。
+_EFFORT_ALLOWED = {
+    "volcengine": ("minimal", "low", "medium", "high"),
+    "deepseek": ("high", "max"),
+    "openai": ("minimal", "low", "medium", "high"),
+}
+# 把用户习惯的档位翻译成该厂商真实存在的档位
+_EFFORT_ALIAS = {
+    "deepseek": {
+        "low": "high",       # DeepSeek 只有 high/max，low 语义上靠 high
+        "medium": "high",
+        "xhigh": "max",
+        # minimal 不是"少想一点"而是"别想"，翻成关闭思考模式，见下面处理
+        "minimal": None,
+    },
+}
+
+_THINKING_VALUES = ("auto", "enabled", "disabled")
+
+
+class ConfigError(RuntimeError):
+    """配置不合法：启动即失败，错误信息里直接给出该怎么改。"""
+
+
+def _first_env(*names: str) -> str:
+    """取第一个非空的环境变量（用于 LLM_* 优先、ARK_* 兼容）。"""
+    for n in names:
+        v = os.environ.get(n)
+        if v is not None and v.strip():
+            return v.strip()
+    return ""
+
+
+def _mask(secret: str) -> str:
+    """打码展示密钥：只露头尾，中间用长度提示。"""
+    if len(secret) <= 8:
+        return "*（过短，已隐藏）"
+    return f"{secret[:3]}…{secret[-4:]}（{len(secret)} 位）"
+
+
+def _resolve_switches(provider: str, effort: str, thinking: str) -> dict:
+    """把中性的 LLM_REASONING_EFFORT / LLM_THINKING 翻译成厂商参数。
+
+    返回 {"reasoning_effort": str|None, "thinking": bool|None}，
+    None 一律表示"不往请求体里塞，沿用厂商默认"。
+    """
+    thinking = thinking.lower()
+    if thinking and thinking not in _THINKING_VALUES:
+        raise ConfigError(
+            f"LLM_THINKING={thinking!r} 不合法，只能是："
+            f"{'/'.join(_THINKING_VALUES)}（留空或 auto=沿用默认）"
+        )
+    thinking_bool = None if thinking in ("", "auto") else thinking == "enabled"
+
+    effort = effort.lower()
+    if not effort:
+        return {"reasoning_effort": None, "thinking": thinking_bool}
+
+    allowed = _EFFORT_ALLOWED[provider]
+    alias = _EFFORT_ALIAS.get(provider, {})
+    if effort in alias:                      # 兼容映射（含 minimal→关闭思考）
+        mapped = alias[effort]
+        if mapped is None:                   # minimal：对 DeepSeek = 别思考
+            if thinking_bool is True:
+                raise ConfigError(
+                    "LLM_REASONING_EFFORT=minimal 表示不思考，和 "
+                    "LLM_THINKING=enabled 冲突；请把 LLM_THINKING 设为 "
+                    "disabled 或删掉 EFFORT。"
+                )
+            return {"reasoning_effort": None, "thinking": False}
+        effort = mapped
+
+    if effort not in allowed:
+        raise ConfigError(
+            f"provider={provider} 不支持 LLM_REASONING_EFFORT={effort!r}，"
+            f"可选：{'/'.join(allowed)}（留空=不传该参数）"
+        )
+    return {"reasoning_effort": effort, "thinking": thinking_bool}
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> dict:
-    """读取一次配置并缓存（API Key 缺失时给出可操作的报错）。"""
-    api_key = os.environ.get("ARK_API_KEY")
+    """读取一次配置并缓存。密钥缺失/取值非法都在这里立刻失败。"""
+    provider = (_first_env("LLM_PROVIDER") or "volcengine").lower()
+    if provider not in PROVIDERS:
+        raise ConfigError(
+            f"LLM_PROVIDER={provider!r} 未知，可选：{'/'.join(PROVIDERS)}"
+        )
+
+    if provider == "deepseek":
+        api_key = _first_env("DEEPSEEK_API_KEY")
+        base_url = _first_env("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
+        chat_model = _first_env("DEEPSEEK_CHAT_MODEL") or "deepseek-flash"
+        key_var = "DEEPSEEK_API_KEY"
+    elif provider == "openai":
+        api_key = _first_env("OPENAI_API_KEY")
+        # OpenAI 兼容网关的 base_url 必须显式给（自建/vLLM/第三方代理各不同），
+        # 故意不给默认值：静默打到 api.openai.com 更容易烧错钱。
+        base_url = _first_env("OPENAI_BASE_URL")
+        chat_model = _first_env("OPENAI_CHAT_MODEL")
+        key_var = "OPENAI_API_KEY"
+        if not base_url or not chat_model:
+            raise ConfigError(
+                "LLM_PROVIDER=openai 需要同时设置 OPENAI_BASE_URL 与 "
+                "OPENAI_CHAT_MODEL（本文件不提供默认值，避免误连官方计费）"
+            )
+    else:  # volcengine：与历史行为逐字一致
+        api_key = _first_env("ARK_API_KEY")
+        base_url = (
+            _first_env("ARK_BASE_URL")
+            or "https://ark.cn-beijing.volces.com/api/coding/v3"
+        )
+        chat_model = _first_env("ARK_CHAT_MODEL") or "deepseek-v4-flash-ga"
+        key_var = "ARK_API_KEY"
+
     if not api_key:
-        raise RuntimeError(
-            "未找到 ARK_API_KEY。请复制 .env.example 为 .env 并填入密钥。"
+        raise ConfigError(
+            f"未找到 {key_var}（当前 LLM_PROVIDER={provider}）。"
+            f"请在项目根 .env 里设置 {key_var}=你的密钥，"
+            "或把 LLM_PROVIDER 改成你有密钥的那家。"
         )
-    effort = os.environ.get("ARK_REASONING_EFFORT", "").strip().lower()
-    if effort and effort not in REASONING_EFFORTS:
-        raise RuntimeError(
-            f"ARK_REASONING_EFFORT={effort!r} 不合法，可选："
-            f"{'/'.join(REASONING_EFFORTS)}（留空=沿用网关默认）"
-        )
-    thinking = os.environ.get("ARK_THINKING", "").strip().lower()
-    if thinking and thinking not in ("auto", "enabled", "disabled"):
-        raise RuntimeError(
-            "ARK_THINKING 只能是 auto/enabled/disabled（留空或 auto=网关默认）"
-        )
+
+    switches = _resolve_switches(
+        provider,
+        _first_env("LLM_REASONING_EFFORT", "ARK_REASONING_EFFORT"),
+        _first_env("LLM_THINKING", "ARK_THINKING"),
+    )
     return {
+        "provider": provider,
         "api_key": api_key,
-        "base_url": os.environ.get(
-            "ARK_BASE_URL",
-            "https://ark.cn-beijing.volces.com/api/coding/v3",
-        ),
-        "chat_model": os.environ.get("ARK_CHAT_MODEL", "deepseek-v4-flash-ga"),
-        # 抽取任务不需要思考链。deepseek-v4-flash 默认 auto 会想很多（实测一次
-        # 简单问答也烧 458~796 reasoning token），而输出单价远高于输入。
-        # 留空 = 完全不传该参数，沿用网关默认，行为与改动前一致。
-        "reasoning_effort": effort or None,
-        "thinking": None if thinking in ("", "auto") else thinking == "enabled",
+        "base_url": base_url,
+        "chat_model": chat_model,
+        **switches,
     }
 
 
-def build_chat_model(*, stream: bool = False) -> VolcengineChatModel:
-    """构造一个火山方舟聊天模型客户端（默认非流式，便于结构化抽取）。"""
+def describe() -> dict:
+    """当前接的是谁（密钥打码），给 /healthz 和自检 CLI 用。"""
     s = get_settings()
-    credential = VolcengineCredential(
-        api_key=s["api_key"],
-        base_url=s["base_url"],
-    )
-    # 只在显式配置时才构造 Parameters：None 让 agentscope 不往请求体里塞任何
-    # 新字段，保证默认路径与历史完全一致。
-    param_kwargs = {}
+    return {
+        "provider": s["provider"],
+        "base_url": s["base_url"],
+        "chat_model": s["chat_model"],
+        "api_key_masked": _mask(s["api_key"]),
+        "reasoning_effort": s["reasoning_effort"],
+        "thinking": s["thinking"],
+    }
+
+
+# provider -> (延迟导入路径, 取类的方式)
+def _provider_classes(provider: str):
+    """按 provider 取 agentscope 的 Credential / ChatModel 类。
+
+    延迟导入：只用一家时不必把三家的依赖都拉起来，也让离线单测更快。
+    """
+    if provider == "deepseek":
+        from agentscope.credential import DeepSeekCredential
+        from agentscope.model import DeepSeekChatModel
+        return DeepSeekCredential, DeepSeekChatModel
+    if provider == "openai":
+        from agentscope.credential import OpenAICredential
+        from agentscope.model import OpenAIChatModel
+        return OpenAICredential, OpenAIChatModel
+    from agentscope.credential import VolcengineCredential
+    from agentscope.model import VolcengineChatModel
+    return VolcengineCredential, VolcengineChatModel
+
+
+def provider_classes():
+    """返回当前 provider 的 (Credential 类, ChatModel 类)，给教学与自检用。
+
+    L01 想让学生看清"接入一家 API 就是这两样东西"，所以手工展开一次；
+    生产代码请直接用它下面的 build_chat_model()。
+    """
+    return _provider_classes(get_settings()["provider"])
+
+
+def build_chat_model(*, stream: bool = False):
+    """按 LLM_PROVIDER 构造聊天模型客户端（默认非流式，便于结构化抽取）。"""
+    s = get_settings()
+    cred_cls, model_cls = _provider_classes(s["provider"])
+
+    # 只在显式配置时才构造 Parameters：各模型层的每个参数都是 None 才不写进
+    # 请求体，保证默认路径与"没这些开关时"逐字节一致。
+    param_kwargs: dict = {}
     if s["reasoning_effort"]:
         param_kwargs["reasoning_effort"] = s["reasoning_effort"]
     if s["thinking"] is not None:
         param_kwargs["thinking_enable"] = s["thinking"]
     parameters = (
-        VolcengineChatModel.Parameters(**param_kwargs) if param_kwargs else None
+        model_cls.Parameters(**param_kwargs) if param_kwargs else None
     )
-    return VolcengineChatModel(
-        credential=credential,
+
+    return model_cls(
+        credential=cred_cls(api_key=s["api_key"], base_url=s["base_url"]),
         model=s["chat_model"],
         parameters=parameters,
         stream=stream,

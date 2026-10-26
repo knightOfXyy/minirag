@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from pathlib import Path
 from typing import Literal
 
@@ -24,11 +23,11 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 from agentscope.agent import Agent
-from agentscope.credential import VolcengineCredential
 from agentscope.event import EventType
 from agentscope.message import UserMsg
-from agentscope.model import VolcengineChatModel
 from agentscope.tool import Toolkit, FunctionTool
+
+from moray.config import build_chat_model
 
 
 # ★ 改动点 1：新增 source 参数（Literal -> 模型只能二选一）
@@ -61,12 +60,7 @@ def lookup_entity(
 
 
 def build_agent() -> Agent:
-    cred = VolcengineCredential(
-        api_key=os.environ["ARK_API_KEY"], base_url=os.environ["ARK_BASE_URL"]
-    )
-    model = VolcengineChatModel(
-        credential=cred, model=os.environ["ARK_CHAT_MODEL"], stream=False
-    )
+    model = build_chat_model(stream=False)
     return Agent(
         name="Moray",
         system_prompt="你是实体知识库助手，需要查询时调用 lookup_entity。信息不足时可以反问",

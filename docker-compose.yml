@@ -73,7 +73,7 @@ services:
               "--lease-seconds", "${WORKER_LEASE_SECONDS:-600}"]
     env_file:
       - path: .env
-        required: false                 # worker 真实抽取需要 .env 里的 ARK_API_KEY
+        required: false                 # worker 真实抽取需要 .env 里的 LLM 密钥（按 LLM_PROVIDER 那家）
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
@@ -96,7 +96,7 @@ services:
     stop_grace_period: 30s
     networks: [moraynet]
 
-  # 离线演示副本：确定性假抽取，不调 LLM、不需要 ARK_API_KEY
+  # 离线演示副本：确定性假抽取，不调 LLM、不需要任何 LLM 密钥
   worker-offline:
     image: moray:latest
     profiles: ["offline"]

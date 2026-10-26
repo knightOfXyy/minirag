@@ -30,7 +30,6 @@ L04（上）· 动态 Schema：领域类型热插拔 + 稳定内核转换
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 from pathlib import Path
 
@@ -41,10 +40,9 @@ load_dotenv(ROOT / ".env")
 sys.path.insert(0, str(ROOT / "src"))
 
 from agentscope.agent import Agent
-from agentscope.credential import VolcengineCredential
 from agentscope.message import UserMsg
-from agentscope.model import VolcengineChatModel
 
+from moray.config import build_chat_model
 from moray.schema import (
     DOMAIN_REGISTRY,
     GENERAL_DOMAIN,
@@ -73,15 +71,12 @@ MEDICAL_TEXT = (
 
 
 def build_agent(system_prompt: str) -> Agent:
-    cred = VolcengineCredential(
-        api_key=os.environ["ARK_API_KEY"], base_url=os.environ["ARK_BASE_URL"]
-    )
+    # 接线交给工厂：本课的重点是"领域配置决定 schema 与提示词"，
+    # 换供应商（LLM_PROVIDER=deepseek 等）不需要改这里。
     return Agent(
         name="Extractor",
         system_prompt=system_prompt,
-        model=VolcengineChatModel(
-            credential=cred, model=os.environ["ARK_CHAT_MODEL"], stream=False
-        ),
+        model=build_chat_model(stream=False),
     )
 
 

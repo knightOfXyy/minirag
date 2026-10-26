@@ -39,20 +39,19 @@ L02 · 让 Agent 长出"手"：Tool / Toolkit 与 ReAct 循环
 from __future__ import annotations
 
 import asyncio
-import os
 
 from dotenv import load_dotenv
 
 from agentscope.agent import Agent
-from agentscope.credential import VolcengineCredential
 from agentscope.event import (
     EventType,
     UserConfirmResultEvent,
     ConfirmResult,
 )
 from agentscope.message import UserMsg
-from agentscope.model import VolcengineChatModel
 from agentscope.tool import Toolkit, FunctionTool
+
+from moray.config import build_chat_model
 
 # 注意：脚本方式运行时 load_dotenv() 通常能自动找到 .env；
 # 但用 stdin/某些 IDE 运行时找不到调用栈文件，稳妥起见显式指定路径。
@@ -104,15 +103,9 @@ def write_entity(name: str, entity_type: str) -> dict:
 
 
 def build_agent(*, tools: list) -> Agent:
-    credential = VolcengineCredential(
-        api_key=os.environ["ARK_API_KEY"],
-        base_url=os.environ.get("ARK_BASE_URL"),
-    )
-    model = VolcengineChatModel(
-        credential=credential,
-        model=os.environ.get("ARK_CHAT_MODEL", "deepseek-v4-flash-ga"),
-        stream=False,
-    )
+    # 模型客户端统一走 moray.config.build_chat_model：换供应商只改 .env 的
+    # LLM_PROVIDER（volcengine / deepseek / openai），本课的工具与 Toolkit 不用动。
+    model = build_chat_model(stream=False)
     return Agent(
         name="Moray",
         system_prompt=(

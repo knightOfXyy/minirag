@@ -25,7 +25,7 @@ docker run -d --name moray-pgvector \
 `worker`（可多副本，跑 LLM）。多副本靠 DB 租约不重不漏（见第 4 节）。
 
 ```bash
-cp .env.example .env          # 填好 ARK_API_KEY；可调 WORKER_REPLICAS 等
+cp .env.example .env          # 填好 LLM 密钥（LLM_PROVIDER 决定哪一家）；可调 WORKER_REPLICAS 等
 docker compose up -d --build  # 默认起 1 api + WORKER_REPLICAS(默认2) 个 worker
 docker compose up -d --scale worker=4   # 临时扩到 4 个 worker
 docker compose logs -f worker           # 看各副本分发情况
@@ -61,6 +61,49 @@ python -m moray.api.server --port 8000 --llm    # 额外开启 POST /extract
 # 文档：http://127.0.0.1:8000/docs
 ```
 
+## 2b. 切换 LLM 供应商（火山方舟 / DeepSeek / OpenAI 兼容网关）
+
+接线只在一处：`src/moray/config.py` 按 `.env` 的 `LLM_PROVIDER` 选 agentscope 的
+Credential/ChatModel 对，业务代码（抽取器、消歧判官、worker、API）一律通过
+`build_chat_model()` 拿模型，换供应商不改代码、不改数据。
+
+```bash
+# A) 火山方舟 ARK（默认，留空即此）
+LLM_PROVIDER=volcengine
+ARK_API_KEY=...            # ARK_BASE_URL / ARK_CHAT_MODEL 沿用原默认
+# B) DeepSeek 官方（base_url/model 有默认值：https://api.deepseek.com / deepseek-flash）
+LLM_PROVIDER=deepseek
+DEEPSEEK_API_KEY=sk-...
+# C) 任意 OpenAI 兼容网关（vLLM / 自建 / 第三方代理）——三项都必填，
+#    故意不给默认值，避免静默打到 api.openai.com 烧错钱
+LLM_PROVIDER=openai
+OPENAI_API_KEY=...  OPENAI_BASE_URL=http://localhost:8000/v1  OPENAI_CHAT_MODEL=...
+```
+
+接入或排障先跑自检（默认零成本，只打印打码后的生效配置）：
+
+```bash
+PYTHONPATH=src python -m moray.llm_check                 # 看配置
+PYTHONPATH=src python -m moray.llm_check --call --twice  # 验鉴权 + 缓存统计是否回传
+PYTHONPATH=src python -m moray.llm_check --extract       # 验 function calling（抽取靠它）
+```
+
+`--extract` 必须单独验：三家都讲 OpenAI 兼容协议，**"能对话"不等于"能用工具"**，
+而 moray 的结构化输出是 function calling 实现的。`GET /healthz` 会带上当前
+`llm`（provider / base_url / chat_model / 打码 Key），容器里连的是哪家一眼可见。
+
+DeepSeek 三个要注意的点（2026 现状）：
+
+- **模型名**：`deepseek-chat` / `deepseek-reasoner` 已于 2026-07-24 下线，改用
+  `deepseek-flash`（V4.1-Flash）或 `deepseek-v4-pro`；要不要思考由
+  `LLM_THINKING` 控制，不再靠模型名区分。
+- **前缀缓存**：默认开启、磁盘缓存、按前缀命中，回传 `prompt_cache_hit_tokens`
+  （agentscope 归一成 `cache_input_tokens`，moray 看板直接算命中率）。命中价约
+  为未命中的 1/50（flash），比 ARK coding 网关那种"命中看副本运气"更可预期。
+- **参数翻译**：`LLM_REASONING_EFFORT` 各家取值不同，config 按厂商翻译并在启动时
+  校验——DeepSeek 只有 `high/max`（`low/medium→high`、`xhigh→max`、
+  `minimal→关闭思考`），翻译不了的值直接报错，不留到请求体里才炸。
+
 ## 3. Docker 镜像
 
 ```bash
@@ -72,7 +115,9 @@ docker run -d --name moray-api -p 8000:8000 \
 ```
 
 镜像默认不含 LLM 实时抽取（查询路径），避免慢模型拖垮 Web。
-实时抽取请：批量走 worker，或显式覆盖 command 加 `--llm` 并注入 `ARK_API_KEY`。
+实时抽取请：批量走 worker，或显式覆盖 command 加 `--llm` 并注入对应供应商的
+密钥（`LLM_PROVIDER` + 那家的 KEY，见 2b 节；compose 用 `env_file: .env`
+整体透传，所以只要 `.env` 里配好就不用改 compose）。
 
 > 嵌入模型 `BAAI/bge-small-zh-v1.5` 首次运行需从 HuggingFace 拉取（ONNX）。
 > 镜像已默认 `HF_ENDPOINT=https://hf-mirror.com`、`HF_HUB_DISABLE_XET=1`；

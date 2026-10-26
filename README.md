@@ -32,7 +32,8 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # 3. 配置密钥
-cp .env.example .env                           # 填入 ARK_API_KEY
+cp .env.example .env                           # 选一家：LLM_PROVIDER=volcengine|deepseek|openai
+                                               # 再填对应的 Key（默认 volcengine → ARK_API_KEY）
 
 # 4. 运行第一课
 python lessons/l01_hello_agent.py

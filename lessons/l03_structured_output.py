@@ -44,7 +44,6 @@ L03 · 结构化输出：让 Agent 吐出能直接入库的实体对象（项目
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 from pathlib import Path
 
@@ -56,10 +55,9 @@ load_dotenv(ROOT / ".env")
 sys.path.insert(0, str(ROOT / "src"))
 
 from agentscope.agent import Agent
-from agentscope.credential import VolcengineCredential
 from agentscope.message import Msg, UserMsg
-from agentscope.model import VolcengineChatModel
 
+from moray.config import build_chat_model
 from moray.schema import ExtractionResult  # 生产 Schema
 
 
@@ -71,13 +69,11 @@ SAMPLE_TEXT = (
 
 
 def build_agent(system_prompt: str) -> Agent:
-    cred = VolcengineCredential(
-        api_key=os.environ["ARK_API_KEY"], base_url=os.environ["ARK_BASE_URL"]
+    # 模型接线走生产同款工厂（LLM_PROVIDER 可切 volcengine/deepseek/openai）
+    return Agent(
+        name="Extractor", system_prompt=system_prompt,
+        model=build_chat_model(stream=False),
     )
-    model = VolcengineChatModel(
-        credential=cred, model=os.environ["ARK_CHAT_MODEL"], stream=False
-    )
-    return Agent(name="Extractor", system_prompt=system_prompt, model=model)
 
 
 # -----------------------------------------------------------------------------

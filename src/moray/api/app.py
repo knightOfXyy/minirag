@@ -110,9 +110,17 @@ def create_app(
     async def healthz(d: AppDeps = Depends(get_deps)) -> dict:
         try:
             n = await d.store.count()
-            return {"ok": True, "entities": n}
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(503, f"知识库不可用: {exc}") from exc
+
+        # 当前连的是哪家模型（打码）。查询型 api 容器按设计可以不配 LLM 密钥，
+        # 所以这里读不到也只报告 llm=null，不能让 /healthz 因此挂掉。
+        try:
+            from ..config import describe
+            llm = describe()
+        except Exception as exc:  # noqa: BLE001
+            llm = {"provider": None, "error": str(exc)}
+        return {"ok": True, "entities": n, "llm": llm}
 
     # ------------------------------------------------- 领域配置（配置中心）
     @app.get("/domains")

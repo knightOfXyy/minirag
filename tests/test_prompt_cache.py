@@ -238,5 +238,5 @@ def test_thinking_switch_is_plumbed_through(clean_settings):
 def test_invalid_switch_fails_fast(clean_settings):
     clean_settings.os.environ["ARK_REASONING_EFFORT"] = "ultra"
     clean_settings.get_settings.cache_clear()
-    with pytest.raises(RuntimeError, match="不合法"):
+    with pytest.raises(RuntimeError, match="不支持"):
         clean_settings.build_chat_model()

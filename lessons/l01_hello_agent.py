@@ -22,7 +22,8 @@ L01 · 你的第一个 AgentScope 2.0 Agent
 
   认知 4：模型与密钥是独立积木（Credential + Model 分离）
            Credential 管"你是谁/连哪"，Model 管"怎么调"。
-           我们用火山方舟内置的 VolcengineChatModel，网关走 OpenAI 兼容协议。
+           本课手工搭这对积木；换供应商（火山方舟 / DeepSeek / 任意 OpenAI
+           兼容网关）只是换这两个类，由 .env 的 LLM_PROVIDER 决定。
 
 运行： .venv/bin/python lessons/l01_hello_agent.py
 ================================================================================
@@ -31,39 +32,39 @@ L01 · 你的第一个 AgentScope 2.0 Agent
 from __future__ import annotations
 
 import asyncio
-import os
 
 from dotenv import load_dotenv
 
 # ---- AgentScope 2.0 的积木（注意导入路径，和 1.x 已大不相同）----------------
 from agentscope.agent import Agent
-from agentscope.credential import VolcengineCredential
 from agentscope.event import EventType
 from agentscope.message import UserMsg  # 等价于 Msg(role="user", ...)
-from agentscope.model import VolcengineChatModel
+
+# 项目自己的配置工厂：读 .env 决定连哪一家（见 src/moray/config.py）
+from moray.config import get_settings, provider_classes
 
 
-# 把项目根目录 .env 载入环境变量（ARK_API_KEY / ARK_BASE_URL / ARK_CHAT_MODEL）
+# 把项目根目录 .env 载入环境变量（LLM_PROVIDER + 对应那家的 KEY/BASE_URL/MODEL）
 load_dotenv()
 
 
 def build_agent() -> Agent:
     """组装一个最小可用的 Agent：身份(system prompt) + 大脑(model)。"""
 
-    # ① 凭证：Key + 网关地址。Coding Plan 网关是 OpenAI 兼容的。
-    credential = VolcengineCredential(
-        api_key=os.environ["ARK_API_KEY"],
-        base_url=os.environ.get(
-            "ARK_BASE_URL",
-            "https://ark.cn-beijing.volces.com/api/coding/v3",
-        ),
-    )
+    # 本课故意把"接线"手工展开，让你看清接入一家 API 到底需要哪两样东西；
+    # 生产代码里这两步收在 moray.config.build_chat_model()，
+    # 换供应商只改 .env 的 LLM_PROVIDER（volcengine / deepseek / openai）。
+    s = get_settings()
+    cred_cls, model_cls = provider_classes()
 
-    # ② 模型：deepseek-v4 在方舟网关上同时支持普通对话与 function calling。
+    # ① 凭证：Key + 网关地址。三家都是 OpenAI 兼容协议，区别只在 base_url 与模型名。
+    credential = cred_cls(api_key=s["api_key"], base_url=s["base_url"])
+
+    # ② 模型：网关上的 deepseek 同时支持普通对话与 function calling（结构化输出靠它）。
     #    stream=False 时 reply_stream 依然会产出"块"事件，只是来源是非流式接口。
-    model = VolcengineChatModel(
+    model = model_cls(
         credential=credential,
-        model=os.environ.get("ARK_CHAT_MODEL", "deepseek-v4-flash-ga"),
+        model=s["chat_model"],
         stream=True,  # 先关掉底层流式，方便你看清"完整块"事件；L02 再开
     )
 
@@ -159,7 +160,9 @@ async def main() -> None:
     print("# 1. 把 system_prompt 改成「你是一名金融行业的实体抽取专家」，再问问题，")
     print("#    体会 system prompt 如何决定 Agent 的行为边界。")
     print("# 2. 把 model 的 stream 改成 True，观察事件数量/粒度有什么变化。")
-    print("# 3. 故意把 ARK_API_KEY 改错，观察异常长什么样——这是以后做重试的入口。")
+    print("# 3. 故意把当前 provider 的 KEY 改错（默认 ARK_API_KEY，"
+          "LLM_PROVIDER=deepseek 时是 DEEPSEEK_API_KEY），观察异常长什么样——"
+          "这是以后做重试的入口。")
     print("#" * 70)
 
 
