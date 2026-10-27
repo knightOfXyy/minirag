@@ -1,0 +1,98 @@
+{
+  "code": "case_domain",
+  "name": "案件域（波次4 双路对比）",
+  "types": [
+    {
+      "code": "person",
+      "label": "人物",
+      "guide": "真实人物的专名（中文姓名、外文名、常用称谓）；职务、机构名、案件名不是人物。",
+      "attributes": [
+        {"key": "chinese_name", "label": "中文名", "required": true},
+        {"key": "foreign_name", "label": "外文名"},
+        {"key": "other_alias", "label": "其他称谓"},
+        {"key": "gender", "label": "性别", "enum": ["男", "女"]},
+        {"key": "nationality", "label": "国籍"},
+        {"key": "native_place", "label": "籍贯"},
+        {"key": "birth_date", "label": "出生年月"},
+        {"key": "occupation_type", "label": "职业性质"},
+        {"key": "person_type", "label": "人员类型"},
+        {"key": "remarks", "label": "备注"}
+      ]
+    },
+    {
+      "code": "organization",
+      "label": "组织机构",
+      "guide": "公司、政府机关、企事业单位、社会团体等组织专名；内设部门若原文有独立称谓也可抽取。",
+      "attributes": [
+        {"key": "org_name", "label": "组织名称", "required": true},
+        {"key": "type", "label": "类型"},
+        {"key": "industry", "label": "行业"},
+        {"key": "country", "label": "国家"},
+        {"key": "location", "label": "所在地"},
+        {"key": "legal_representative", "label": "法定代表人"},
+        {"key": "level", "label": "级别"},
+        {"key": "remarks", "label": "备注"}
+      ]
+    },
+    {
+      "code": "clue",
+      "label": "线索",
+      "guide": "有专名或明确指代的案件线索/举报事项（如「XX 举报线索」「XX 问题线索」）。",
+      "attributes": [
+        {"key": "clue_name", "label": "线索名称", "required": true},
+        {"key": "type", "label": "类型"},
+        {"key": "description", "label": "描述"},
+        {"key": "occur_time", "label": "发生时间"},
+        {"key": "remarks", "label": "备注"}
+      ]
+    },
+    {
+      "code": "case",
+      "label": "案件",
+      "guide": "有专名或编号的案件/事件（如「7·15 专案」「XX 合同诈骗案」）。",
+      "attributes": [
+        {"key": "case_name", "label": "案件名称", "required": true},
+        {"key": "type", "label": "类型"},
+        {"key": "case_type", "label": "案件类别"},
+        {"key": "description", "label": "描述"},
+        {"key": "court", "label": "管辖法院"},
+        {"key": "location", "label": "地点"},
+        {"key": "result", "label": "结果"},
+        {"key": "remarks", "label": "备注"}
+      ]
+    },
+    {
+      "code": "special_case",
+      "label": "专项",
+      "guide": "专项行动/专项工作/专项治理等有专名的专项实体。",
+      "attributes": [
+        {"key": "special_case_name", "label": "专项名称", "required": true},
+        {"key": "type", "label": "类型"},
+        {"key": "description", "label": "描述"},
+        {"key": "location", "label": "地点"},
+        {"key": "remarks", "label": "备注"}
+      ]
+    },
+    {
+      "code": "archive_case",
+      "label": "档案资料",
+      "guide": "有标题或编号的档案、卷宗、资料、台账等文档实体。",
+      "attributes": [
+        {"key": "archive_case_name", "label": "资料名称", "required": true},
+        {"key": "type", "label": "类型"},
+        {"key": "description", "label": "描述"},
+        {"key": "remarks", "label": "备注"}
+      ]
+    }
+  ],
+  "relation_predicates": [
+    "kinship", "work_in", "member_of", "contact_of", "accomplice", "colleague",
+    "invests", "control", "found", "suspect_of", "victim_of", "reporter_of",
+    "witness_of", "informant_of", "related_to_case", "lead_special", "special_member",
+    "clue_person", "clue_target_person", "case_related", "case_merge",
+    "case_belong_special", "clue_to_case", "case_archive", "same_org",
+    "org_involved_case", "org_handle_case", "parent_sub", "org_subordinate",
+    "archive_subject_person", "archive_subject_org", "clue_source_case"
+  ],
+  "extra_instruction": "只抽取有专名或明确指代的命名实体；纯日期、年份、数字、普通名词不要抽取。关系必须有原文证据，禁止臆测；谓词只能从给定清单中选择，找不到合适的就不建关系。"
+}
