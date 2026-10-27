@@ -207,6 +207,26 @@ def provider_classes():
     return _provider_classes(get_settings()["provider"])
 
 
+def _int_env(name: str, default: int) -> int:
+    raw = _first_env(name)
+    return int(raw) if raw.isdigit() and int(raw) > 0 else default
+
+
+def chunk_settings() -> dict:
+    """长文分块阈值与并发（波次 4 双路接线用）。env 可覆盖，缺省走保守值。
+
+    MORAY_CHUNK_THRESHOLD_UNITS：文本估算单位超过它才分块（≤ 则整篇走旧闭环）。
+    MORAY_CHUNK_MAX_UNITS / _OVERLAP：分块预算（与 Chunker 默认一致）。
+    MORAY_CHUNK_CONCURRENCY：块级并发上限（对单条 /extract 也生效）。
+    """
+    return {
+        "threshold_units": _int_env("MORAY_CHUNK_THRESHOLD_UNITS", 4000),
+        "max_units": _int_env("MORAY_CHUNK_MAX_UNITS", 1500),
+        "overlap_units": _int_env("MORAY_CHUNK_OVERLAP_UNITS", 200),
+        "concurrency": _int_env("MORAY_CHUNK_CONCURRENCY", 4),
+    }
+
+
 def build_chat_model(*, stream: bool = False):
     """按 LLM_PROVIDER 构造聊天模型客户端（默认非流式，便于结构化抽取）。"""
     s = get_settings()

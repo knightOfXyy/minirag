@@ -145,3 +145,64 @@ async def run_extraction_team(
     return ReviewedExtraction(
         result=last_result, accepted=False,
         review=last_review, history=history)
+
+
+# ---------------------------------------------------------------------------
+# 长文分块编排入口（波次 4 双路接线）
+# ---------------------------------------------------------------------------
+async def run_chunked_team(
+    text: str,
+    *,
+    extractor: ExtractorFn,
+    provider=None,
+    domain_code: str = "general",
+    max_iters: int = 3,
+    chunk_threshold_units: int = 4000,
+    chunk_max_units: int = 1500,
+    chunk_overlap_units: int = 200,
+    chunk_concurrency: int = 4,
+    usage=None,
+) -> ReviewedExtraction:
+    """超过分块阈值且有真 Extractor 可取时，走「分块 map → 全局坐标归并 →
+    单轮规则审校」；否则逐字节保持 :func:`run_extraction_team` 旧行为。
+
+    为什么两条路径的审校形态不同：
+      · 整篇路径的返工循环 = 带反馈**全文重抽**，代价可接受；
+      · 分块路径若返工 = 全文重抽，代价不可接受——所以合并结果只做一轮
+        客观审校，PASS/FAIL 如实记录（accepted 语义不变，FAIL 转人工）。
+    离线/测试注入的是闭包 extractor_fn（``provider=None``）：它给不出
+    Extractor 对象（pipeline 要 .domain/.extract(Document)），不分块——
+    这是刻意保守：宁可不拆，也不在假抽取上验证真语义。
+
+    ``usage`` 传入 Usage 累加器时，分块路径把 pipeline 聚合的 token 用量
+    累加进去（闭包路径的用量由调用方挂 provider.extract 的 usage_sink，两不冲突）。
+    返回的 review.iterations 在分块路径恒为 1（单轮），整篇路径为实际轮数。
+    """
+    if provider is None:
+        return await run_extraction_team(text, extractor=extractor, max_iters=max_iters)
+
+    from ..extraction.chunking import Chunker
+    from ..extraction.document import Document as _Doc
+
+    chunker = Chunker(max_units=chunk_max_units, overlap_units=chunk_overlap_units)
+    if chunker.count(text) <= chunk_threshold_units:
+        return await run_extraction_team(text, extractor=extractor, max_iters=max_iters)
+
+    real, _domain = await provider.get_extractor(domain_code)
+    from ..extraction.pipeline import ChunkedExtractionPipeline
+
+    pipeline = ChunkedExtractionPipeline(real, concurrency=chunk_concurrency)
+    chunks = chunker.chunk_text(text)
+    output = await pipeline.run(
+        _Doc(id="chunked", text=text, source="chunked", domain_code=domain_code), chunks)
+    if usage is not None:
+        usage.add(output.usage)
+
+    review = rule_review(text, output.result)
+    review.iterations = 1
+    return ReviewedExtraction(
+        result=output.result,
+        accepted=(review.verdict == ReviewVerdict.PASS),
+        review=review,
+        history=[review],
+    )

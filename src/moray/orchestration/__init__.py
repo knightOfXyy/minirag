@@ -4,6 +4,7 @@ from .specialists import (
     ExtractionReview,
     ReviewedExtraction,
     ReviewVerdict,
+    run_chunked_team,
     run_extraction_team,
 )
 
@@ -11,5 +12,6 @@ __all__ = [
     "ExtractionReview",
     "ReviewedExtraction",
     "ReviewVerdict",
+    "run_chunked_team",
     "run_extraction_team",
 ]

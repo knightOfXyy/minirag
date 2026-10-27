@@ -34,7 +34,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 
 from ..extraction.document import Document, ExtractionOutput, Usage
 from ..kb import EntityStore, Ingestor, KnowledgeBase
-from ..orchestration import run_extraction_team
+from ..orchestration import run_chunked_team
 from .schemas import (
     EnqueueJobRequest,
     ExtractRequest,
@@ -152,9 +152,20 @@ def create_app(
         doc_id = req.document_id or (
             "doc-" + hashlib.sha1(req.text.encode()).hexdigest()[:10])
 
-        # L10 抽取-审校闭环（抽取器内部已按领域 schema 约束实体类型与属性）
-        reviewed = await run_extraction_team(
-            req.text, extractor=extractor_fn, max_iters=3)
+        # L10 抽取-审校闭环（抽取器内部已按领域 schema 约束实体类型与属性）。
+        # 波次 4：长文（>阈值单位）且有真 provider 时分块 map→全局坐标归并→
+        # 单轮规则审校；否则委托旧闭环，行为逐字节不变。
+        from ..config import chunk_settings
+
+        cs = chunk_settings()
+        reviewed = await run_chunked_team(
+            req.text, extractor=extractor_fn,
+            provider=d.extractor_provider, domain_code=req.domain_code,
+            max_iters=3, usage=usage,
+            chunk_threshold_units=cs["threshold_units"],
+            chunk_max_units=cs["max_units"],
+            chunk_overlap_units=cs["overlap_units"],
+            chunk_concurrency=cs["concurrency"])
 
         ingest_info = None
         if req.ingest:

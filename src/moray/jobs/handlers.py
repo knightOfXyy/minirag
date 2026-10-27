@@ -24,7 +24,7 @@ from pathlib import Path
 
 from ..extraction.document import Document, ExtractionOutput, Usage
 from ..kb import EntityStore, Ingestor
-from ..orchestration import run_extraction_team
+from ..orchestration import run_chunked_team
 from .jobstore import JobRecord
 
 
@@ -71,9 +71,19 @@ async def build_document_handler(
         else:
             active_extractor = extractor_fn
 
-        # ① L10 抽取-审校闭环
-        reviewed = await run_extraction_team(
-            text, extractor=active_extractor, max_iters=3)
+        # ① 抽取-审校闭环。波次 4：批处理长文同样分块 map→归并→单轮审校；
+        # 无 provider（离线固定假抽取）或短文本时委托旧闭环，逐字节兼容。
+        from ..config import chunk_settings as _chunk_settings
+
+        _cs = _chunk_settings()
+        reviewed = await run_chunked_team(
+            text, extractor=active_extractor,
+            provider=extractor_provider, domain_code=domain_code,
+            max_iters=3, usage=usage,
+            chunk_threshold_units=_cs["threshold_units"],
+            chunk_max_units=_cs["max_units"],
+            chunk_overlap_units=_cs["overlap_units"],
+            chunk_concurrency=_cs["concurrency"])
 
         # ② 包成 ExtractionOutput 交给 L08/L09 入库（幂等）
         output = ExtractionOutput(
