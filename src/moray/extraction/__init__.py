@@ -3,6 +3,11 @@
 from .chunking import Chunk, Chunker, estimate_tokens, split_sentences
 from .document import Document, ExtractionOutput
 from .extractor import ExtractionError, Extractor
+from .local_backfill import (
+    AmbiguousMention,
+    BackfillReport,
+    backfill_provenance,
+)
 from .pipeline import ChunkedExtractionPipeline, naive_merge, remap_spans
 from .quality import verify_spans
 from .rule_extractor import (
@@ -25,6 +30,9 @@ __all__ = [
     "naive_merge",
     "remap_spans",
     "verify_spans",
+    "backfill_provenance",
+    "BackfillReport",
+    "AmbiguousMention",
     "RuleBasedExtractor",
     "extract_from_tagged_text",
     "clean_tagged_text",

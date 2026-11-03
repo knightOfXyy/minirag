@@ -33,7 +33,7 @@ from pydantic import BaseModel, ValidationError
 from agentscope.agent import Agent
 from agentscope.message import UserMsg
 
-from ..config import build_chat_model, get_settings
+from ..config import build_chat_model, get_settings, local_backfill_enabled
 from ..schema import (
     TASK_PROTOCOL,
     DomainSpec,
@@ -45,6 +45,7 @@ from ..schema import (
     validate_against_domain,
 )
 from .document import Document, ExtractionOutput, Usage
+from .local_backfill import BackfillReport, backfill_provenance
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,7 @@ class Extractor:
         *,
         max_retries: int = 2,
         middlewares: list | None = None,
+        local_backfill: bool | None = None,
     ) -> None:
         self.domain: DomainSpec = (
             get_domain(domain) if isinstance(domain, str) else domain
@@ -91,9 +93,18 @@ class Extractor:
         self.max_retries = max_retries
         # 可选的可观测中间件（审计/成本/质量），由调用方传入
         self._middlewares = list(middlewares or [])
+        # 结构化输出瘦身开关：None 时读全局配置（默认关）。打开后模型只出逻辑
+        # 实体/关系，mention/span/关系证据由本地确定性回填，模型自报置信度移除。
+        self.local_backfill: bool = (
+            local_backfill_enabled() if local_backfill is None else local_backfill
+        )
         # 该领域对应的动态结构化模型与系统提示词（构造一次即可复用）
-        self._schema_model: Type[BaseModel] = build_extraction_model(self.domain)
-        self._system_prompt: str = build_system_prompt(self.domain)
+        self._schema_model: Type[BaseModel] = build_extraction_model(
+            self.domain, slim=self.local_backfill
+        )
+        self._system_prompt: str = build_system_prompt(
+            self.domain, slim=self.local_backfill
+        )
         self.model_name: str = get_settings()["chat_model"]
         # 前缀预热去重：一个实例（= 一个领域版本）只探一次，别每次都烧钱
         self._prefix_warmed = False
@@ -199,6 +210,13 @@ class Extractor:
                 content = self._retry_prompt(last_error)
                 continue
 
+            # ④ 瘦身模式：模型只给逻辑实体/关系，出现位置由本地确定性回填。
+            #    在「块/文档文本」上回填得到相对该文本的偏移；分块流水线随后
+            #    用既有的 remap_spans 平移成文档全局偏移，行为不变。
+            backfill: BackfillReport | None = None
+            if self.local_backfill:
+                core, backfill = backfill_provenance(core, document.text)
+
             # 全部通过
             return ExtractionOutput(
                 document_id=document.id,
@@ -207,6 +225,7 @@ class Extractor:
                 model_name=self.model_name,
                 usage=usage,
                 attempts=attempt,
+                backfill=backfill.to_dict() if backfill is not None else None,
             )
 
         raise ExtractionError(

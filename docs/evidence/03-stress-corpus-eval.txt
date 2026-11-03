@@ -1,0 +1,14 @@
+
+===== max_units=1500 (MACRO, n=3) =====
+实体 relaxed F1 before=0.9530 after=0.9530 delta=+0.0000
+实体 strict  F1 before=0.8771 after=0.8816 delta=+0.0045
+关系 F1         before=0.8287 after=0.8287 delta=+0.0000
+回填后 span 核对 min=1.0000 mean=1.0000（每篇 ok）
+块数=45 实体命中=998/998 歧义=0 幻觉别名=0
+
+===== max_units=3500 (MACRO, n=3) =====
+实体 relaxed F1 before=0.9584 after=0.9584 delta=+0.0000
+实体 strict  F1 before=0.8787 after=0.8839 delta=+0.0052
+关系 F1         before=0.8287 after=0.8287 delta=+0.0000
+回填后 span 核对 min=1.0000 mean=1.0000（每篇 ok）
+块数=18 实体命中=595/595 歧义=0 幻觉别名=0
