@@ -27,6 +27,11 @@ from ..schema import (
 from .chunking import Chunk
 from .document import Document, ExtractionOutput, Usage
 from .extractor import Extractor
+from .local_backfill import (
+    BackfillReport,
+    merge_backfill_reports,
+    merge_entity_metadata,
+)
 
 
 def remap_spans(result: ExtractionResult, chunk: Chunk) -> ExtractionResult:
@@ -91,23 +96,24 @@ def naive_merge(partials: list[ExtractionResult]) -> ExtractionResult:
                     confidence=e.confidence, attributes=dict(e.attributes),
                 )
             ent = bucket[key]
-            for a in e.aliases:
-                if a not in ent.aliases and a != e.name:
-                    ent.aliases.append(a)
+            # 与 local_backfill 共用同一套元数据合并规则（别名并集/属性首见/
+            # 置信度取大），避免两处逻辑漂移；mention 在归并层必须全量保留。
+            merge_entity_metadata(ent, e)
             ent.mentions.extend(e.mentions)
-            ent.confidence = max(ent.confidence, e.confidence)
-            # 动态属性做一次浅合并（后者补前者缺的键）
-            for k, v in e.attributes.items():
-                ent.attributes.setdefault(k, v)
 
-    rel_seen: set[tuple[str, str, str]] = set()
+    rel_index: dict[tuple[str, str, str], Relation] = {}
     relations: list[Relation] = []
     for part in partials:
         for r in part.relations:
             key = (r.head, r.predicate, r.tail)
-            if key in rel_seen:
+            existing = rel_index.get(key)
+            if existing is not None:
+                # 同一三元组在别的块可能才拿到证据/更高置信度：首见不能赢家通吃。
+                if existing.evidence_span is None and r.evidence_span is not None:
+                    existing.evidence_span = r.evidence_span
+                existing.confidence = max(existing.confidence, r.confidence)
                 continue
-            rel_seen.add(key)
+            rel_index[key] = r
             relations.append(r)
 
     return ExtractionResult(entities=list(bucket.values()), relations=relations)
@@ -133,8 +139,10 @@ class ChunkedExtractionPipeline:
         # 命中率，再决定是否常开。
         self.warm_prefix = warm_prefix
 
-    async def _extract_one_chunk(self, chunk: Chunk) -> tuple[ExtractionResult, Usage, str]:
-        """抽单个块（带限流）。返回换算后的结果、用量、块 id。"""
+    async def _extract_one_chunk(
+        self, chunk: Chunk
+    ) -> tuple[ExtractionResult, Usage, str, dict | None]:
+        """抽单个块（带限流）。返回换算后的结果、用量、块 id、回填信号。"""
         async with self.sem:
             # 复用 Extractor：把一个 chunk 当成一篇微型文档
             mini_doc = Document(
@@ -144,7 +152,8 @@ class ChunkedExtractionPipeline:
                 domain_code=self.extractor.domain.code,
             )
             output = await self.extractor.extract(mini_doc)
-            return remap_spans(output.result, chunk), output.usage, chunk.id
+            return (remap_spans(output.result, chunk), output.usage, chunk.id,
+                    output.backfill)
 
     async def run(
         self,
@@ -162,19 +171,26 @@ class ChunkedExtractionPipeline:
         if self.warm_prefix and total >= 2:
             usage.add(await self.extractor.warm_prefix())
 
-        async def worker(chunk: Chunk) -> tuple[ExtractionResult, Usage, str]:
-            res, u, cid = await self._extract_one_chunk(chunk)
+        async def worker(chunk: Chunk) -> tuple[ExtractionResult, Usage, str, dict | None]:
+            res, u, cid, backfill = await self._extract_one_chunk(chunk)
             if on_chunk:
                 on_chunk(res, cid, total)
-            return res, u, cid
+            return res, u, cid, backfill
 
         settled = await asyncio.gather(*(worker(c) for c in chunks))
 
         partials = [item[0] for item in settled]
-        for _, u, _ in settled:
+        for _, u, _, _ in settled:
             usage.add(u)
 
         merged = naive_merge(partials)
+        # 分块回填信号必须汇总后继续往上层传，不能在 pipeline 这里丢掉。
+        # 关开关时所有块都是 None -> 保持 None（与改造前一致）。
+        reports = []
+        for _, _, _, raw in settled:
+            if raw is not None:
+                reports.append(BackfillReport.from_dict(raw))
+        backfill = merge_backfill_reports(reports).to_dict() if reports else None
         return ExtractionOutput(
             document_id=document.id,
             domain_code=self.extractor.domain.code,
@@ -182,4 +198,5 @@ class ChunkedExtractionPipeline:
             model_name=self.extractor.model_name,
             usage=usage,
             attempts=total,
+            backfill=backfill,
         )

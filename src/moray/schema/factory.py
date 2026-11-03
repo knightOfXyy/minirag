@@ -101,6 +101,9 @@ def build_extraction_model(domain: DomainSpec, *, slim: bool = False) -> Type[Ba
 
     # ② 动态实体模型：公共字段对齐内核，type 用动态枚举约束
     attr_guide = domain.attribute_guide_text()
+    # 字段顺序必须与改造前（262319b）逐字节一致：full 是
+    # name/type/aliases/mentions/confidence/attributes；slim 只是删掉
+    # mentions/confidence，保留其余相对顺序。
     entity_fields = dict(
         name=(str, Field(description="实体标准名称，取最正式完整的叫法")),
         type=(
@@ -108,15 +111,6 @@ def build_extraction_model(domain: DomainSpec, *, slim: bool = False) -> Type[Ba
             Field(description="实体类型，只能取本领域枚举值之一"),
         ),
         aliases=(list[str], Field(default_factory=list, description="其他叫法/简称")),
-        attributes=(
-            dict,
-            Field(
-                default_factory=dict,
-                description=(
-                    "该类型专有的属性键值对；没有则空对象。\n" + attr_guide
-                ).strip(),
-            ),
-        ),
     )
     if not slim:
         entity_fields["mentions"] = (
@@ -127,6 +121,15 @@ def build_extraction_model(domain: DomainSpec, *, slim: bool = False) -> Type[Ba
             float,
             Field(default=0.0, ge=0.0, le=1.0, description="置信度0~1"),
         )
+    entity_fields["attributes"] = (
+        dict,
+        Field(
+            default_factory=dict,
+            description=(
+                "该类型专有的属性键值对；没有则空对象。\n" + attr_guide
+            ).strip(),
+        ),
+    )
     dyn_entity = create_model(
         f"{domain.code.title()}Entity", __base__=BaseModel, **entity_fields
     )

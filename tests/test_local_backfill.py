@@ -201,8 +201,8 @@ def test_relation_evidence_same_sentence_backfilled():
     assert r.evidence_span.text == first_sentence
     assert text[r.evidence_span.start:r.evidence_span.end] == first_sentence
     assert report.relations_with_evidence == 1
-    key = "张三-创立->腾飞公司"
-    assert key in report.relation_evidence_candidates
+    # key 是结构化 JSON（无拼接碰撞），从报告里取实际 key 校验候选
+    key = next(iter(report.relation_evidence_candidates))
     assert len(report.relation_evidence_candidates[key]) >= 1
     # 证据 span 通过质量探针
     assert verify_spans(result, text).ok
@@ -247,7 +247,8 @@ def test_relation_evidence_nearest_pair_wins_and_all_kept():
     r = result.relations[0]
     assert r.evidence_span is not None
     assert r.evidence_span.text == text
-    cands = report.relation_evidence_candidates["马云-位于->杭州"]
+    cands = report.relation_evidence_candidates[
+        next(iter(report.relation_evidence_candidates))]
     assert len(cands) == 4
     distances = [c["distance"] for c in cands]
     assert distances == sorted(distances)  # 已按距离排序
@@ -364,3 +365,176 @@ def test_backfill_then_remap_to_global_offsets():
     local_ali = local.entities[0].mentions[0].span.start
     global_ali = global_res.entities[0].mentions[0].span.start
     assert global_ali == local_ali + chunk.start
+
+
+# ---------------------------------------------------------------------------
+# 评审修复（第 1 轮）回归用例
+# ---------------------------------------------------------------------------
+def test_backfill_keeps_kernel_confidence_untouched():
+    """回填只产出旁路信号，绝不把 grounding 写进内核 confidence。"""
+    result, report = backfill_provenance(
+        ExtractionResult(
+            entities=[
+                Entity(name="华为", type="ORG", confidence=0.62),
+                Entity(name="幽灵公司", type="ORG", confidence=0.41),
+            ],
+            relations=[
+                Relation(head="华为", predicate="位于", tail="深圳", confidence=0.73),
+            ],
+        ),
+        "华为在深圳。",
+    )
+    by_name = {e.name: e for e in result.entities}
+    # 命中正文的实体与未命中的实体都保留模型原值，不被 1.0/0.0 覆盖
+    assert by_name["华为"].confidence == 0.62
+    assert by_name["幽灵公司"].confidence == 0.41
+    # 关系同理：即使没有回填到证据，也不能改内核置信度
+    assert result.relations[0].confidence == 0.73
+    # 确定性信号仍然可用
+    assert report.entities_grounded == 1
+    assert report.block_confidence == 0.5
+
+
+def test_ambiguous_hit_occupies_interval_so_substring_does_not_leak():
+    """歧义字面即使不归属，也必须占住区间，短名不能落进歧义串里。"""
+    text = "北京大学成立。"
+    result, report = backfill_provenance(
+        ExtractionResult(entities=[
+            Entity(name="北大", type="ORG", aliases=["北京大学"]),
+            Entity(name="京大", type="ORG", aliases=["北京大学"]),
+            Entity(name="大学", type="ORG"),
+        ]),
+        text,
+    )
+    assert [am.surface for am in report.ambiguous_mentions] == ["北京大学"]
+    by_name = {e.name: e for e in result.entities}
+    # 歧义串内部的「京大」「大学」都不得被单独回填给任何实体
+    assert by_name["京大"].mentions == []
+    assert by_name["大学"].mentions == []
+    for e in result.entities:
+        assert e.mentions == []
+
+
+def test_non_prefix_substring_inside_longer_name_is_not_matched():
+    """非前缀子串（「京大」在「北京大学」中间）也不能错误覆盖。"""
+    text = "北京大学与京大合作。"
+    result, report = backfill_provenance(
+        ExtractionResult(entities=[
+            Entity(name="北京大学", type="ORG"),
+            Entity(name="京大", type="ORG"),
+        ]),
+        text,
+    )
+    by_name = {e.name: e for e in result.entities}
+    assert [m.surface for m in by_name["北京大学"].mentions] == ["北京大学"]
+    assert [m.surface for m in by_name["京大"].mentions] == ["京大"]
+    assert by_name["京大"].mentions[0].span.start == text.rindex("京大")
+    assert report.ambiguous_mentions == []
+    assert verify_spans(result, text).ok
+
+
+def test_unmatched_aliases_never_counts_canonical_name_as_hallucination():
+    """正文没出现的标准名是「未命中实体」，不是「幻觉别名」。"""
+    result, report = backfill_provenance(
+        ExtractionResult(entities=[
+            Entity(name="幽灵公司", type="ORG", aliases=["幽灵", "幻影"]),
+        ]),
+        "华为在深圳。",
+    )
+    literals = {u["literal"] for u in report.unmatched_aliases}
+    assert "幽灵" in literals and "幻影" in literals
+    assert "幽灵公司" not in literals
+    assert report.entities_grounded == 0
+    assert result.entities[0].mentions == []
+
+
+def test_relation_evidence_candidate_key_does_not_collide():
+    """不同三元组绝不能因为字符串拼接而共用同一个候选 key。"""
+    text = "甲-乙与甲以及丁。"
+    result, report = backfill_provenance(
+        ExtractionResult(
+            entities=[
+                Entity(name="甲-乙", type="ORG"),
+                Entity(name="甲", type="ORG"),
+                Entity(name="丁", type="ORG"),
+            ],
+            relations=[
+                Relation(head="甲-乙", predicate="丙", tail="丁"),
+                Relation(head="甲", predicate="乙-丙", tail="丁"),
+            ],
+        ),
+        text,
+    )
+    assert len(report.relation_evidence_candidates) == 2
+    # 每条关系的证据都能被独立取到（而不是被覆盖成一条）
+    assert len(result.relations) == 2
+    assert all(r.evidence_span is not None for r in result.relations)
+
+
+def test_relation_evidence_marks_the_selected_nearest_pair():
+    """「最近的一对」必须可观测：候选里被选中的那条要有标记。"""
+    text = "马云在杭州见马云，阿里巴巴在杭州。"
+    result, report = backfill_provenance(
+        ExtractionResult(
+            entities=[Entity(name="马云", type="PER"), Entity(name="杭州", type="LOC")],
+            relations=[Relation(head="马云", predicate="位于", tail="杭州")],
+        ),
+        text,
+    )
+    key = next(iter(report.relation_evidence_candidates))
+    cands = report.relation_evidence_candidates[key]
+    selected = [c for c in cands if c.get("selected")]
+    assert len(selected) == 1
+    assert selected[0]["distance"] == min(c["distance"] for c in cands)
+    span = result.relations[0].evidence_span
+    assert (selected[0]["sent_start"], selected[0]["sent_end"]) == (span.start, span.end)
+
+
+def test_overlap_resolution_is_linearish_on_20k_text():
+    """20k 字、大量互相嵌套的模式：重叠裁决不得退化成 O(H²)。
+
+    评审实测旧实现 4.5s；这里用宽松 1.5s 上限守护（本机新实现应为毫秒级）。
+    """
+    import time
+
+    # 构造 20k 字：每个位置都能命中若干前缀模式，制造大量重叠候选。
+    unit = "阿里巴巴集团"
+    text = (unit * 2000)[:20000]
+    entities = [
+        Entity(name="阿里巴巴集团", type="ORG"),
+        Entity(name="阿里巴巴", type="ORG"),
+        Entity(name="阿里", type="ORG"),
+        Entity(name="巴巴", type="ORG"),  # 非前缀子串
+        Entity(name="集团", type="ORG"),
+    ]
+    t0 = time.perf_counter()
+    result, report = backfill_provenance(
+        ExtractionResult(entities=entities), text
+    )
+    elapsed = time.perf_counter() - t0
+    assert elapsed < 1.5, elapsed
+    # 结果仍正确：长名优先占住所有完整出现，短名不重复覆盖
+    by_name = {e.name: e for e in result.entities}
+    assert len(by_name["阿里巴巴集团"].mentions) == 2000
+    assert by_name["阿里巴巴"].mentions == []
+    assert verify_spans(result, text).ok
+    assert report.ambiguous_mentions == []
+
+
+def test_relation_evidence_not_fabricated_across_chunks():
+    """头、尾分处两个块：每块各自回填都拿不到同句证据，归并后仍为空。"""
+    from moray.extraction import naive_merge
+
+    c0 = Chunk(id="d#c0", text="张三到了会场。", start=0, end=7, index=0)
+    c1 = Chunk(id="d#c1", text="腾飞公司发布了财报。", start=7, end=18, index=1)
+    logical = ExtractionResult(
+        entities=[Entity(name="张三", type="PER"), Entity(name="腾飞公司", type="ORG")],
+        relations=[Relation(head="张三", predicate="创立", tail="腾飞公司")],
+    )
+    p0, _ = backfill_provenance(logical, c0.text)
+    p1, _ = backfill_provenance(logical, c1.text)
+    assert p0.relations[0].evidence_span is None
+    assert p1.relations[0].evidence_span is None
+    merged = naive_merge([remap_spans(p0, c0), remap_spans(p1, c1)])
+    assert len(merged.relations) == 1
+    assert merged.relations[0].evidence_span is None

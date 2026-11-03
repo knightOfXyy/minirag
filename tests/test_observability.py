@@ -137,3 +137,32 @@ def test_collector_totals():
     assert totals == {"runs": 1, "input_tokens": 10, "output_tokens": 5,
                       "cached_input_tokens": 4, "cache_hit_rate": 0.4,
                       "entities": 3, "relations": 1}
+
+
+@pytest.mark.asyncio
+async def test_slim_output_without_confidence_is_not_counted_as_low_confidence():
+    """瘦身输出没有 confidence 字段 = 未知，不等于「低置信」；块级信号另走 backfill。"""
+    collector = MetricsCollector()
+    collector.start("Extractor")
+    mw = ExtractionMetricsMiddleware(collector)
+
+    text = "华为在深圳。"
+    final = Msg(name="Extractor", role="assistant", content=[])
+    final.structured_output = {
+        "entities": [
+            {"name": "华为", "type": "ORG", "aliases": [], "attributes": {}},
+            {"name": "深圳", "type": "LOC", "aliases": [], "attributes": {}},
+        ],
+        "relations": [],
+    }
+
+    async def fake_next():
+        yield final
+
+    agent = _FakeAgent(source_text=text)
+    [ev async for ev in mw.on_reply(agent, {}, fake_next)]
+    rec = collector.current()
+    assert rec.n_entities == 2
+    assert rec.low_confidence_entities == 0
+    # span 检查没有 mention -> ratio=1；未知置信度不扣分；非空得分
+    assert rec.quality_score == pytest.approx(1.0, abs=1e-6)

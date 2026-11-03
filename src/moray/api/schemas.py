@@ -26,6 +26,9 @@ class ExtractResponse(BaseModel):
     # token 用量（含提示缓存命中量 cached_input_tokens 与命中率 cache_hit_rate）。
     # 走固定抽取器（测试/离线）时为 None——契约只回 ExtractionResult，用量捞不回来。
     usage: dict | None = None
+    # 瘦身回填的确定性质量信号（块级置信度/命中/歧义/幻觉别名/关系证据）。
+    # 开关关闭或走固定抽取器时为 None。
+    backfill: dict | None = None
 
 
 class EnqueueJobRequest(BaseModel):

@@ -1,0 +1,69 @@
+{
+  "mode": "llm",
+  "corpus": "data/gold",
+  "full": {
+    "name": "full-schema-llm",
+    "macro": {
+      "entity_strict": {
+        "precision": 0.8333,
+        "recall": 0.8333,
+        "f1": 0.8333
+      },
+      "entity_relaxed": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "relation": {
+        "precision": 0.9167,
+        "recall": 1.0,
+        "f1": 0.9444
+      },
+      "documents": 6
+    },
+    "input_tokens": 10324,
+    "output_tokens": 2011,
+    "cached_input_tokens": 9216,
+    "attempts": 6,
+    "mean_output_tokens_per_case": 335.17,
+    "span_ratio_min": 0.2,
+    "span_ratio_mean": 0.6778,
+    "backfill_entities_grounded": 0,
+    "backfill_entities_total": 0
+  },
+  "slim": {
+    "name": "slim+local-backfill-llm",
+    "macro": {
+      "entity_strict": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "entity_relaxed": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "relation": {
+        "precision": 0.9167,
+        "recall": 1.0,
+        "f1": 0.9444
+      },
+      "documents": 6
+    },
+    "input_tokens": 7330,
+    "output_tokens": 953,
+    "cached_input_tokens": 6144,
+    "attempts": 6,
+    "mean_output_tokens_per_case": 158.83,
+    "span_ratio_min": 1.0,
+    "span_ratio_mean": 1.0,
+    "backfill_entities_grounded": 16,
+    "backfill_entities_total": 16
+  },
+  "delta": {
+    "entity_relaxed": 0.0,
+    "entity_strict": 0.1667,
+    "relation": 0.0
+  }
+}

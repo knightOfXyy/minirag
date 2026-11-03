@@ -65,9 +65,10 @@ async def build_document_handler(
         # usage 收集器：抽取函数契约不返回用量，这里挂个累加器把 token
         # （含提示缓存命中量）捞回来，写进看板与作业结果。
         usage = Usage()
+        backfill_sink: dict = {}
         if extractor_provider is not None:
             active_extractor = await extractor_provider.extract(
-                domain_code, usage_sink=usage)
+                domain_code, usage_sink=usage, backfill_sink=backfill_sink)
         else:
             active_extractor = extractor_fn
 
@@ -86,6 +87,10 @@ async def build_document_handler(
             chunk_concurrency=_cs["concurrency"])
 
         # ② 包成 ExtractionOutput 交给 L08/L09 入库（幂等）
+        # 分块路径的回填信号在 reviewed.backfill；整篇路径（provider 闭包）
+        # 通过 backfill_sink 回收。两条路都不能在作业主链丢掉。
+        backfill = (reviewed.backfill if reviewed.backfill is not None
+                    else backfill_sink.get("backfill"))
         output = ExtractionOutput(
             document_id=doc.id,
             domain_code=doc.domain_code,
@@ -93,6 +98,7 @@ async def build_document_handler(
             model_name=model_name,
             usage=usage,
             attempts=reviewed.review.iterations,
+            backfill=backfill,
         )
         report = await ingestor.ingest(output)
         latency_ms = int((time.perf_counter() - t0) * 1000)
@@ -121,6 +127,8 @@ async def build_document_handler(
             "latency_ms": latency_ms,
             # 成本/缓存可观测：cached_input_tokens 与 cache_hit_rate 直接进作业结果
             "usage": usage.model_dump(),
+            # 瘦身回填确定性信号（开关关闭时为 None）
+            "backfill": output.backfill,
         }
 
     return handle

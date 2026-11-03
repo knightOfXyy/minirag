@@ -225,3 +225,37 @@ async def test_chunked_team_long_text_maps_and_remaps():
     assert usage.output_tokens == 2 * len(real.seen_chunks)
     # 分块路径单轮审校，iterations 恒 1
     assert out.review.iterations == 1
+
+
+@pytest.mark.asyncio
+async def test_chunked_team_exposes_backfill_signal():
+    """编排层也不能吞掉回填信号：ReviewedExtraction.backfill 要能透出。"""
+    from moray.extraction.document import ExtractionOutput
+    from moray.extraction.local_backfill import backfill_provenance
+    from moray.schema import ExtractionResult as ER
+
+    class _BackfillReal:
+        def __init__(self):
+            self.domain = type("D", (), {"code": "case_domain"})()
+            self.model_name = "fake"
+
+        async def extract(self, document):
+            local, report = backfill_provenance(
+                ER(entities=[Entity(name=document.text[:2], type="ORG")]),
+                document.text)
+            return ExtractionOutput(
+                document_id=document.id, domain_code="case_domain",
+                result=local, model_name=self.model_name, attempts=1,
+                backfill=report.to_dict())
+
+    text = "华为在深圳。" * 200
+    provider = _FakeProvider(_BackfillReal())
+    async def closure(text, feedback):
+        raise AssertionError("chunk path should not invoke fulltext closure")
+
+    out = await run_chunked_team(
+        text, extractor=closure, provider=provider, domain_code="case_domain",
+        chunk_threshold_units=10, chunk_max_units=20, chunk_overlap_units=0)
+    assert isinstance(out.backfill, dict)
+    assert out.backfill["entities_total"] >= 1
+    assert out.backfill["entities_grounded"] >= 1

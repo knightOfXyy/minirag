@@ -143,10 +143,17 @@ class ExtractionMetricsMiddleware(_RecorderMiddleware):
                 relations = data.get("relations", [])
                 rec.n_entities = len(entities)
                 rec.n_relations = len(relations)
+                # 瘦身后模型不再输出 confidence：缺失 = 未知，不是「低置信」。
+                # 未知不应把整批实体误判为需人工复核；确定性块级信号另行透传
+                # （ExtractionOutput.backfill），不在这里伪造 0/1。
+                confidences = [
+                    float(e["confidence"]) for e in entities
+                    if e.get("confidence") is not None
+                ]
                 rec.low_confidence_entities = sum(
-                    1 for e in entities
-                    if float(e.get("confidence", 0) or 0) < LOW_CONF_THRESHOLD
+                    1 for c in confidences if c < LOW_CONF_THRESHOLD
                 )
+                rec.known_confidence_entities = len(confidences)
 
                 source = getattr(agent, "_audit_source_text", None)
                 if source:
@@ -171,8 +178,11 @@ class ExtractionMetricsMiddleware(_RecorderMiddleware):
         构成：span 一致率 50% + 高置信实体占比 30% + 产出非空 20%。
         """
         span_part = report.ratio if report is not None else 1.0
-        if rec.n_entities:
-            conf_part = 1.0 - rec.low_confidence_entities / rec.n_entities
+        known = rec.known_confidence_entities
+        if known:
+            conf_part = 1.0 - rec.low_confidence_entities / known
+        elif rec.n_entities:
+            conf_part = 1.0   # 全部未知：不奖不罚，按中性满分处理
         else:
             conf_part = 0.0
         nonempty_part = 1.0 if rec.n_entities > 0 else 0.0

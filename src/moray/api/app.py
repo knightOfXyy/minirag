@@ -137,10 +137,12 @@ def create_app(
     async def extract(req: ExtractRequest, d: AppDeps = Depends(get_deps)):
         # 优先动态提供方：按请求 domain_code 从 DB 配置中心取最新领域包
         usage = Usage()          # token/缓存命中累加器（见 provider.usage_sink）
+        backfill_sink: dict = {}
         if d.extractor_provider is not None:
             try:
                 extractor_fn = await d.extractor_provider.extract(
-                    req.domain_code, usage_sink=usage)
+                    req.domain_code, usage_sink=usage,
+                    backfill_sink=backfill_sink)
             except KeyError as exc:
                 raise HTTPException(400, str(exc)) from exc
         elif d.extractor_fn is not None:
@@ -167,13 +169,18 @@ def create_app(
             chunk_overlap_units=cs["overlap_units"],
             chunk_concurrency=cs["concurrency"])
 
+        # 分块路径的信号在 reviewed.backfill；整篇路径（provider 闭包）走 sink。
+        backfill = (reviewed.backfill if reviewed.backfill is not None
+                    else backfill_sink.get("backfill"))
+
         ingest_info = None
         if req.ingest:
             output = ExtractionOutput(
                 document_id=doc_id, domain_code=req.domain_code,
                 result=reviewed.result, model_name="api",
                 usage=(usage or Usage()),
-                attempts=reviewed.review.iterations)
+                attempts=reviewed.review.iterations,
+                backfill=backfill)
             rep = await d.ingestor.ingest(output)
             ingest_info = {
                 "entities_written": rep.entities_written,
@@ -190,6 +197,7 @@ def create_app(
             relations=[r.model_dump() for r in reviewed.result.relations],
             ingest=ingest_info,
             usage=(usage.model_dump() if usage is not None else None),
+            backfill=backfill,
         )
 
     # ------------------------------------------------------------------ 作业

@@ -45,12 +45,21 @@ class DynamicExtractorProvider:
                 self._cache.pop(old_key, None)
         return extractor, domain
 
-    async def extract(self, domain_code: str, usage_sink: Usage | None = None):
+    async def extract(
+        self,
+        domain_code: str,
+        usage_sink: Usage | None = None,
+        backfill_sink: dict | None = None,
+    ):
         """返回一个绑定该领域的 async (text, feedback)->ExtractionResult。
 
         usage_sink: 可选的 Usage 累加器。抽取函数契约只返回 ExtractionResult，
         token 用量（含提示缓存命中）会在这一层被丢掉；给上层一个"顺手收集"的
         出口，/extract 与 worker 才能把成本和缓存命中率写进看板。
+
+        backfill_sink: 可选字典。瘦身回填的确定性信号同样不在
+        ExtractionResult 里；调用方传一个空 dict，本层把最后一次抽取的
+        ``out.backfill`` 写进 ``backfill_sink["backfill"]``，避免主链丢信号。
         """
         extractor, _domain = await self.get_extractor(domain_code)
 
@@ -65,6 +74,8 @@ class DynamicExtractorProvider:
                          source="dynamic", domain_code=domain_code))
             if usage_sink is not None:
                 usage_sink.add(out.usage)
+            if backfill_sink is not None:
+                backfill_sink["backfill"] = out.backfill
             return out.result
 
         return _fn

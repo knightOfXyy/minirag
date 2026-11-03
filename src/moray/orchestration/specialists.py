@@ -57,6 +57,9 @@ class ReviewedExtraction:
     accepted: bool                     # 是否在预算内通过审校
     review: ExtractionReview
     history: list[ExtractionReview] = field(default_factory=list)
+    # 瘦身回填的确定性质量信号（仅分块且开关打开时有值；其余为 None）。
+    # 它是旁路可观测信息，不属于稳定内核 Entity/Relation。
+    backfill: dict | None = None
 
 
 ReviewerFn = Callable[[str, ExtractionResult], Awaitable[ExtractionReview]]
@@ -205,4 +208,5 @@ async def run_chunked_team(
         accepted=(review.verdict == ReviewVerdict.PASS),
         review=review,
         history=[review],
+        backfill=output.backfill,
     )
