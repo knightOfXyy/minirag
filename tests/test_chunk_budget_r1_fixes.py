@@ -21,7 +21,11 @@ from pathlib import Path
 import pytest
 
 from moray.evaluation.metrics import evaluate
-from moray.evaluation.stress import evaluate_case, relation_chunk_profile
+from moray.evaluation.stress import (
+    evaluate_case,
+    normalize_entity_name_aliases,
+    relation_chunk_profile,
+)
 from moray.evaluation.stress.budget import evaluate_budget_gate
 from moray.schema import Entity, EntityMention, ExtractionResult, Relation, Span
 
@@ -53,7 +57,8 @@ def _event_results():
 
 def test_type_label_prefix_is_normalized_for_relaxed_entity_match():
     pred, gold = _event_results()
-    ev = evaluate_case("event", 1, pred, gold, text=_TEXT_EVENT)
+    ev = evaluate_case("event", 1, pred, gold, text=_TEXT_EVENT,
+                       normalize_type_labels=True)
     assert ev.report.entity_relaxed.tp == 1
     assert ev.report.entity_relaxed.fp == 0
     assert ev.report.entity_relaxed.fn == 0
@@ -66,7 +71,8 @@ def test_type_label_prefix_is_normalized_for_relaxed_entity_match():
 
 def test_type_label_prefix_does_not_change_strict_surface_match():
     pred, gold = _event_results()
-    ev = evaluate_case("event", 1, pred, gold, text=_TEXT_EVENT)
+    ev = evaluate_case("event", 1, pred, gold, text=_TEXT_EVENT,
+                       normalize_type_labels=True)
     # strict 比的是 mention.surface，前缀仍是模型原文，不能被别名“救活”
     assert ev.report.entity_strict.tp == 0
     assert ev.report.entity_strict.fp == 1
@@ -79,12 +85,19 @@ def test_type_label_prefix_only_strips_labels_of_matching_type():
         mentions=[EntityMention(surface="案件编号中心")],
     )])
     gold = ExtractionResult(entities=[Entity(
-        name="案件编号中心", type="ORG",
-        mentions=[EntityMention(surface="案件编号中心")],
+        name="中心", type="ORG",
+        mentions=[EntityMention(surface="中心")],
     )])
-    ev = evaluate_case("org", 1, pred, gold, text="案件编号中心。")
-    assert ev.report.entity_relaxed.tp == 1
-    assert ev.report.entity_relaxed.fp == 0
+    ev = evaluate_case(
+        "org", 1, pred, gold, text="案件编号中心。",
+        normalize_type_labels=True)
+    # ORG 的类型前缀表为空：`案件编号中心` 不能被剥成 `中心`。
+    assert ev.report.entity_relaxed.tp == 0
+    assert ev.report.entity_relaxed.fp == 1
+    assert ev.report.entity_relaxed.fn == 1
+    # 直测同一规则，避免再次出现 pred/gold 完全相同而不可能失败的用例。
+    assert normalize_entity_name_aliases("案件编号中心", "ORG") == "案件编号中心"
+    assert normalize_entity_name_aliases("案件编号中心", "EVENT") == "中心"
 
 
 # ---------------------------------------------------------------------------
@@ -170,8 +183,8 @@ def _passing_candidate(**overrides):
         relation_covered_recall_worst=0.7500,
         relation_covered_precision_mean=0.8950,   # -0.50pt 边界
         relation_covered_precision_worst=0.8450,  # -0.50pt 边界
-        relation_f1_mean=0.4300,            # 全量口径下降，但不参与放行
-        relation_f1_worst=0.4000,
+        relation_f1_mean=0.5000,            # 全量口径也必须不下降
+        relation_f1_worst=0.4500,
     )
     base.update(overrides)
     return base
@@ -181,8 +194,9 @@ def test_gate_passes_with_normalized_entity_and_covered_relation_caliber():
     gate = evaluate_budget_gate(_metrics(), _passing_candidate())
     assert gate["passed"] is True
     assert all(gate["checks"].values())
-    # 全量口径仍出现在结果里，供报告“双口径并列”
-    assert gate["relation_full_mean_delta_pt"] == pytest.approx(-7.0)
+    # 全量口径仍出现在结果里，且全量 F1 也参与放行（F2）
+    assert gate["relation_full_mean_delta_pt"] == pytest.approx(0.0)
+    assert gate["checks"]["relation_full_f1_mean_not_lower"] is True
     assert gate["relation_covered_recall_mean_delta_pt"] == pytest.approx(0.0)
 
 
@@ -199,6 +213,8 @@ def test_gate_passes_with_normalized_entity_and_covered_relation_caliber():
          "relation_covered_precision_mean_within_0_5pt"),
         ({"relation_covered_precision_worst": 0.8449},
          "relation_covered_precision_worst_within_0_5pt"),
+        ({"relation_f1_mean": 0.4999}, "relation_full_f1_mean_not_lower"),
+        ({"relation_f1_worst": 0.4499}, "relation_full_f1_worst_not_lower"),
         ({"truncated_chunks": 1}, "truncated_chunks_zero"),
         ({"overlap_units": 0}, "overlap_unchanged"),
         ({"overlap_pairs_min": 0}, "overlap_observed"),

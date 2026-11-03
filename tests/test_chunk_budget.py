@@ -5,9 +5,9 @@
 1. 配置层：默认预算/重叠不变；3500 可经现有配置项设置，且只改预算、不动 overlap；
 2. 几何层：跨块关系（头尾无法落进同一块）与「文档级远距首现」被显式统计，
    残余项不静默丢弃；
-3. 判据层：A/B 门槛（实体 macro-F1 跌 ≤0.5pt、关系 F1 不降、截断 0、
-   overlap 不变、调用数下降）任一不满足都必须判失败——防止后续为了让
-   结果过关而放宽门槛。
+3. 判据层：A/B 门槛（实体 macro-F1 跌 ≤0.5pt、全量关系 F1 不降、
+   金标覆盖子集 recall 不降且 precision 跌 ≤0.5pt、截断 0、overlap 不变、
+   调用数下降）任一不满足都必须判失败——防止后续为了让结果过关而放宽门槛。
 """
 
 from __future__ import annotations
@@ -207,8 +207,8 @@ def _passing_candidate(**overrides):
         relation_covered_recall_worst=0.7500,
         relation_covered_precision_mean=0.8950,   # -0.50pt 边界
         relation_covered_precision_worst=0.8450,
-        relation_f1_mean=0.4300,       # 全量口径下降，不参与放行
-        relation_f1_worst=0.4000,
+        relation_f1_mean=0.5000,       # 全量口径也不下降
+        relation_f1_worst=0.4500,
     )
     candidate.update(overrides)
     return candidate
@@ -220,8 +220,9 @@ def test_budget_gate_passes_only_when_all_thresholds_met():
     assert all(gate["checks"].values())
     assert gate["entity_macro_f1_mean_delta_pt"] == pytest.approx(-0.4)
     assert gate["overlap_unchanged"] is True
-    # 全量口径仍列报，供报告双口径并列
-    assert gate["relation_full_mean_delta_pt"] == pytest.approx(-7.0)
+    # 全量口径与覆盖子集并列列报；全量 F1 也参与放行（F2）
+    assert gate["relation_full_mean_delta_pt"] == pytest.approx(0.0)
+    assert gate["checks"]["relation_full_f1_mean_not_lower"] is True
 
 
 @pytest.mark.parametrize(
@@ -237,6 +238,8 @@ def test_budget_gate_passes_only_when_all_thresholds_met():
          "relation_covered_precision_mean_within_0_5pt"),
         ({"relation_covered_precision_worst": 0.8449},
          "relation_covered_precision_worst_within_0_5pt"),
+        ({"relation_f1_mean": 0.4999}, "relation_full_f1_mean_not_lower"),
+        ({"relation_f1_worst": 0.4499}, "relation_full_f1_worst_not_lower"),
         ({"truncated_chunks": 1}, "truncated_chunks_zero"),
         ({"overlap_units": 0}, "overlap_unchanged"),
         ({"overlap_pairs_min": 0}, "overlap_observed"),
@@ -274,7 +277,19 @@ def test_budget_gate_prefers_explicit_worst_round_delta():
 
 def test_token_estimation_is_not_mistaken_for_real_tokenizer():
     """报告口径自检：估算器只用于切块，不能当作「真实 tokenizer」数字。"""
+    from tools.chunk_budget_ab import _safety_margin
+
     text = "临江宏远实业集团有限公司注册地位于临江区。"
     # 估算器把每个汉字/标点各算 1 unit；真实 tokenizer 由 provider usage 提供，
     # 二者不同，报告必须分开标注。
     assert estimate_tokens(text) == len(text)
+    # 余量必须真的读 provider usage 口径，并用固定输入验证减法，而不是同义反复。
+    out = _safety_margin(
+        {"max_chunk_input_tokens": 100, "max_chunk_output_tokens": 20},
+        {"max_chunk_input_tokens": 150, "max_chunk_output_tokens": 30},
+        {"context_window": 1000, "max_output_tokens": 500},
+    )
+    assert "provider usage" in out["source"]
+    assert out["max_chunk_input_tokens"] == 150
+    assert out["input_margin_tokens"] == 850
+    assert out["input_plus_output_margin_tokens"] == 820

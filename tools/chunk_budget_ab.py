@@ -46,13 +46,14 @@ from moray.evaluation.gold import load_gold_dir
 from moray.evaluation.metrics import evaluate, macro_average
 from moray.evaluation.stress import (
     aggregate_cases,
+    apply_type_label_aliases,
     evaluate_budget_gate,
     evaluate_case,
     load_stress_dir,
     normalize_entity_name_aliases,
     relation_chunk_profile,
 )
-from moray.extraction import Chunker, Document, Extractor
+from moray.extraction import Chunker, Document, Extractor, estimate_tokens
 from moray.extraction.pipeline import ChunkedExtractionPipeline
 
 # 默认 200：工单 04 明确不动 overlap；A/B 两档必须使用同一个值，报告里
@@ -170,23 +171,36 @@ def _delta_summary_pt(values: list[float]) -> dict:
 
 
 def _real_doc_coverage(real_docs: dict, *, candidate_budget: int) -> dict:
-    """真实文档批次是否真的把候选预算压到了（评审 r1 S2）。"""
+    """真实文档批次是否真的把候选预算压到了（评审 r1 S2 / r2 F3）。
+
+    判据用**文档总规模**（保守 units）而不是单块上限：一篇 5,360 units 的长文
+    在 3500 档会被切成 3,483 + 剩余块，单块不必然刚好达到 3500，但它确实
+    经历了 3500 档分块；反过来，≤341 units 的短桩不管切几档都只有 1 块。
+    """
     rows = real_docs.get("rows", [])
-    max_units = max(
+    max_chunk_units = max(
         (int(r.get("max_chunk_units", 0) or 0) for r in rows),
         default=int(real_docs.get("max_chunk_units", 0) or 0),
     )
-    exercises = max_units >= candidate_budget
+    max_document_units = max(
+        (int(r.get("document_units", 0) or 0) for r in rows),
+        default=0,
+    )
+    exercises = max_document_units > candidate_budget
     note = (
-        f"真实文档批次已压到候选预算 {candidate_budget}（最大块 {max_units} units）"
+        f"真实文档批次包含超过候选预算 {candidate_budget} 的长文"
+        f"（最大文档 {max_document_units} units，最大块 {max_chunk_units} units），"
+        f"候选档分块已被真实压到。"
         if exercises else
         f"真实文档批次未包含超过候选预算 {candidate_budget} 的文档："
-        f"最大块仅 {max_units} units，本批次只验证 <=1500-unit 文档的截断"
-        f"与最大真实 token，{candidate_budget} 档在真实文档上的分块未被压到。"
+        f"最大文档仅 {max_document_units} units / 最大块 {max_chunk_units} units，"
+        f"本批次只验证短文档的截断与最大真实 token，"
+        f"{candidate_budget} 档在真实文档上的分块未被压到。"
     )
     return {
         "documents": len(rows),
-        "max_chunk_units": max_units,
+        "max_document_units": max_document_units,
+        "max_chunk_units": max_chunk_units,
         "candidate_budget": candidate_budget,
         "exercises_candidate_budget": exercises,
         "note": note,
@@ -218,9 +232,18 @@ def _doc_row(doc, chunks, out, wall_s: float) -> dict:
             (c.output_tokens for c in records), default=0),
         "max_chunk_units": max((c.n_units for c in chunks), default=0),
         "max_chunk_chars": max((len(c.text) for c in chunks), default=0),
+        # 文档总规模（保守 units）：判断这批是否真有 >候选预算的长文。
+        "document_units": estimate_tokens(doc.text),
         "overlap_pairs": _chunk_pair_overlaps(chunks),
         "wall_s": round(wall_s, 3),
     }
+
+
+def _chunk_cases(cases, *, budget: int, overlap: int) -> list[list]:
+    """逐篇切块，按序号返回（评审 r2 F6：重名文档不能当 dict key 互相覆盖）。"""
+    return [
+        Chunker(budget, overlap).chunk_text(case.text) for case in cases
+    ]
 
 
 async def _run_corpus(
@@ -233,9 +256,7 @@ async def _run_corpus(
     domain,
 ) -> dict:
     """在压力语料上按一档预算跑 ``repeat`` 轮，返回逐轮明细与聚合。"""
-    chunks_by_case = {
-        c.name: Chunker(budget, overlap).chunk_text(c.text) for c in cases
-    }
+    chunks_by_index = _chunk_cases(cases, budget=budget, overlap=overlap)
     rounds: list[dict] = []
     all_evals = []
     all_raw_reports = []
@@ -247,18 +268,21 @@ async def _run_corpus(
         rows = []
         evals = []
         raw_reports = []
-        for case in cases:
+        for index, case in enumerate(cases):
             doc = Document(id=case.name, text=case.text,
                            source="stress-gold", domain_code=domain.code)
-            chunks = chunks_by_case[case.name]
+            chunks = chunks_by_index[index]
             started = time.perf_counter()
             out = await pipeline.run(
                 doc, chunks, raise_on_chunk_error=False)
             wall_s = time.perf_counter() - started
 
+            # 工单 04 的 A/B 显式 opt-in 归一化；02/03 调用方保持默认口径（F4）。
             ev = evaluate_case(
-                case.name, case.seed, out.result, case.gold, text=case.text)
+                case.name, case.seed, out.result, case.gold, text=case.text,
+                normalize_type_labels=True)
             raw_report = evaluate(out.result, case.gold)
+            normalized_result = apply_type_label_aliases(out.result)
             evals.append(ev)
             all_evals.append(ev)
             raw_reports.append(raw_report)
@@ -280,6 +304,8 @@ async def _run_corpus(
                     ev.relation_covered.as_dict()
                     if ev.relation_covered is not None else None),
                 "gold_covered_sentences": ev.gold_covered_sentences,
+                # F13：跨句 gold 关系不进 covered 子集，但必须显式计数。
+                "uncovered_gold_relations": ev.uncovered_gold_relations,
                 # S1：逐篇预测面落盘，FP 归因可审计（不只给聚合 PRF）
                 "predicted_entities": [
                     {"type": e.type, "name": e.name,
@@ -287,10 +313,14 @@ async def _run_corpus(
                          e.name, e.type)}
                     for e in out.result.entities
                 ],
+                # F1：同时保留原始端点与归一化端点，关系错配可逐条审计。
                 "predicted_relations": [
-                    {"head": rel.head, "predicate": rel.predicate,
-                     "tail": rel.tail}
-                    for rel in out.result.relations
+                    {"head": raw.head, "predicate": raw.predicate,
+                     "tail": raw.tail,
+                     "normalized_head": norm.head,
+                     "normalized_tail": norm.tail}
+                    for raw, norm in zip(
+                        out.result.relations, normalized_result.relations)
                 ],
             }
             rows.append(row)
@@ -360,6 +390,8 @@ async def _run_corpus(
             if row["relation_covered_prf"] is not None),
         "gold_covered_sentences_total": sum(
             row["gold_covered_sentences"] for row in all_rows),
+        "uncovered_gold_relations_total": sum(
+            row["uncovered_gold_relations"] for row in all_rows),
         "relation_tp_total": sum(
             row["relation_prf"]["tp"] for row in all_rows),
         "relation_fp_total": sum(
@@ -425,8 +457,17 @@ async def _run_corpus(
     }
 
 
-def _load_real_docs(gold_dir: str, samples_dir: str) -> list[Document]:
-    """真实文档批次：基线黄金集干净正文 + samples 原始文本。"""
+def _load_real_docs(
+    gold_dir: str,
+    samples_dir: str,
+    *,
+    extra_docs: list[str] | tuple[str, ...] = (),
+) -> list[Document]:
+    """真实文档批次：基线黄金集正文 + samples 原始文本 + 显式追加的长文。
+
+    评审 r2 F3：仓库内置真实文档都 ≤341 units，3500 档从未被压到；``--real-doc``
+    允许传入至少一篇超过候选预算的真实/脱敏长文，避免“真实文档截断证据”空转。
+    """
     docs: list[Document] = []
     gold_path = Path(gold_dir)
     if gold_path.exists():
@@ -443,6 +484,16 @@ def _load_real_docs(gold_dir: str, samples_dir: str) -> list[Document]:
             docs.append(Document(
                 id=f"sample:{path.relative_to(samples_path)}", text=text,
                 source="sample", domain_code="general"))
+    for raw_path in extra_docs:
+        path = Path(raw_path)
+        if not path.exists():
+            raise FileNotFoundError(f"--real-doc 不存在: {path}")
+        text = path.read_text(encoding="utf-8")
+        if not text.strip():
+            continue
+        docs.append(Document(
+            id=f"real-doc:{path}", text=text,
+            source="real-doc", domain_code="general"))
     return docs
 
 
@@ -553,6 +604,9 @@ async def main() -> int:
     ap.add_argument("--gold", default="data/gold/stress")
     ap.add_argument("--real-gold", default="data/gold")
     ap.add_argument("--samples", default="data/samples")
+    ap.add_argument(
+        "--real-doc", action="append", default=[],
+        help="追加真实/脱敏长文路径；可重复，用于把 3500 档真正压到")
     ap.add_argument("--env-file", default="")
     ap.add_argument("--budgets", default="1500,3500")
     ap.add_argument("--overlap-units", type=int, default=DEFAULT_OVERLAP_UNITS)
@@ -592,7 +646,8 @@ async def main() -> int:
 
     domain = _stress_domain()
     capabilities = _model_capabilities()
-    real_docs = _load_real_docs(args.real_gold, args.samples)
+    real_docs = _load_real_docs(
+        args.real_gold, args.samples, extra_docs=args.real_doc)
 
     results: dict[str, dict] = {}
     real_results: dict[str, dict] = {}
