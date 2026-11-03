@@ -4,16 +4,17 @@ docs/evidence/03-r3-stress-ab.json 的 delta 不一致的数字（0.8698→0.879
 关系 0.0→0.0133、token 2074.69→520.40、截断 2→0）；该结论已删除，避免
 放量评审时被当成绿灯。
 
-验收 8 当前结论：**未达成**（权威判定见 docs/evidence/03-local-backfill-summary.md
-的验收表与 docs/evidence/03-r13-fix-evidence.md）。权威快照 9f95ed4
-（docs/evidence/03-r3-stress-ab.json）的 delta 是：
-  实体 macro relaxed F1 0.8977→0.8984（mean-of-3 +0.0733pt）；
-  3 轮分别 +1.00 / −1.30 / +0.52pt，worst-of-N = −1.30pt，超过 ≤0.5pt 门槛；
-  关系 F1 0.3245→0.7195；单块 output token 2365.98→582.13（−75.32%）；
-  截断块 6→0。
-HEAD（0065885 + r13 修复）的真实 LLM 重放结果见
-docs/evidence/03-r13-stress-ab.json（同一脚本/语料/块预算，3 轮，同时报
-mean-of-N 与 worst-of-N）。默认开关保持关闭；翻默认前必须同时满足两者。
+验收 8 当前结论（r13 更新）：**达成**。HEAD `0df406c` 用同一脚本/语料/块预算
+重放 02 压力语料 full vs slim 3 轮（docs/evidence/03-r13-stress-ab.json，
+git_dirty=false）：
+  实体 macro relaxed F1 0.8947→0.9050，mean-of-N +1.0333pt，
+  worst-of-N −0.28pt（单轮 +2.04 / −0.28 / +1.34pt，均在 ≤0.5pt 门槛内）；
+  关系 F1 0.4255→0.6782（不下降）；span 一致率 min/mean 0.0087/0.0148→1.0/1.0；
+  单块 output token 2783.56→610.20（−77.73%）；截断块 6→0。
+历史快照 9f95ed4（03-r3-stress-ab.json）的 delta 是 0.8977→0.8984
+（mean +0.0733pt，但 worst-of-N −1.30pt 超门槛）、关系 0.3245→0.7195、
+token 2365.98→582.13、截断 6→0；它只说明当时 HEAD 未达成，不再作为当前
+结论。默认开关保持关闭。
 
 下面保留 r2 时的基线旁证，不再作为验收 8 证据。
 
