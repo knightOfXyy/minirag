@@ -151,10 +151,12 @@ def create_app(
         extract_started_at = time.perf_counter()
         # 优先动态提供方：按请求 domain_code 从 DB 配置中心取最新领域包
         usage = Usage()          # token/缓存命中累加器（见 provider.usage_sink）
+        backfill_sink: dict = {}
         if d.extractor_provider is not None:
             try:
                 extractor_fn = await d.extractor_provider.extract(
-                    req.domain_code, usage_sink=usage)
+                    req.domain_code, usage_sink=usage,
+                    backfill_sink=backfill_sink)
             except KeyError as exc:
                 raise HTTPException(400, str(exc)) from exc
         elif d.extractor_fn is not None:
@@ -182,6 +184,10 @@ def create_app(
             chunk_concurrency=cs["concurrency"],
             result_cache=d.result_cache)
 
+        # 分块路径的信号在 reviewed.backfill；整篇路径（provider 闭包）走 sink。
+        backfill = (reviewed.backfill if reviewed.backfill is not None
+                    else backfill_sink.get("backfill"))
+
         ingest_info = None
         ingest_report = None
         if req.ingest:
@@ -190,7 +196,8 @@ def create_app(
                 result=reviewed.result, model_name="api",
                 usage=(usage or Usage()),
                 attempts=reviewed.review.iterations,
-                document_metrics=getattr(reviewed, "document_metrics", None))
+                document_metrics=getattr(reviewed, "document_metrics", None),
+                backfill=backfill)
             ingest_report = await d.ingestor.ingest(output)
             ingest_info = {
                 "entities_written": ingest_report.entities_written,
@@ -229,6 +236,8 @@ def create_app(
             ingest=ingest_info,
             usage=(usage.model_dump() if usage is not None else None),
             chunk_metrics=(dm.to_dict() if dm is not None else None),
+            # 03 新增：瘦身回填确定性信号（默认 None，老客户端忽略即可）
+            backfill=backfill,
         )
 
     # ------------------------------------------------------------------ 作业

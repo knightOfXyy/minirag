@@ -52,6 +52,8 @@ class ExtractionMetrics:
     # 质量分（由 ExtractionMetricsMiddleware 依据结果填充）
     span_ratio: float | None = None
     low_confidence_entities: int = 0
+    # 本次结果中真正带 confidence 的实体数（瘦身输出该值为 0 = 未知，不是低置信）
+    known_confidence_entities: int = 0
     quality_score: float | None = None
 
     @property

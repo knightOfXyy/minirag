@@ -59,3 +59,26 @@ def test_naive_merge_relation_dedup():
     b = ExtractionResult(entities=[], relations=r1)  # 完全重复
     merged = naive_merge([a, b])
     assert len(merged.relations) == 1
+
+
+def test_naive_merge_does_not_drop_later_relation_evidence():
+    """同一三元组重复出现时，先见的空证据不能覆盖后见的真实证据。"""
+    a = ExtractionResult(
+        entities=[Entity(name="甲", type="ORG"), Entity(name="乙", type="ORG")],
+        relations=[Relation(head="甲", predicate="投", tail="乙")],
+    )
+    ev = Span(start=0, end=4, text="甲投乙。")
+    b = ExtractionResult(
+        entities=[],
+        relations=[Relation(head="甲", predicate="投", tail="乙",
+                            evidence_span=ev, confidence=0.8)],
+    )
+    merged = naive_merge([a, b])
+    assert len(merged.relations) == 1
+    r = merged.relations[0]
+    assert r.evidence_span is not None
+    assert (r.evidence_span.start, r.evidence_span.end) == (0, 4)
+    assert r.confidence == 0.8
+    # 反向顺序（先有证据）也不能丢
+    merged2 = naive_merge([b, a])
+    assert merged2.relations[0].evidence_span is not None

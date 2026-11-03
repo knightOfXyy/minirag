@@ -26,6 +26,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -84,6 +85,33 @@ class BackfillReport:
             self.relations_with_evidence / self.relations_total
             if self.relations_total else 1.0
         )
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "BackfillReport":
+        """从落盘/跨进程传递的纯字典还原（pipeline 汇总分块信号用）。"""
+        report = cls()
+        report.matched_literals = dict(data.get("matched_literals") or {})
+        report.unmatched_aliases = list(data.get("unmatched_aliases") or [])
+        report.ambiguous_mentions = [
+            AmbiguousMention(
+                surface=x["surface"], start=x["start"], end=x["end"],
+                candidates=list(x.get("candidates") or []),
+                reason=x.get("reason", ""),
+            )
+            for x in (data.get("ambiguous_mentions") or [])
+        ]
+        report.entities_total = int(data.get("entities_total", 0))
+        report.entities_grounded = int(data.get("entities_grounded", 0))
+        report.relations_total = int(data.get("relations_total", 0))
+        report.relations_with_evidence = int(
+            data.get("relations_with_evidence", 0))
+        report.relations_without_evidence = list(
+            data.get("relations_without_evidence") or [])
+        report.relation_evidence_candidates = {
+            key: list(cands)
+            for key, cands in (data.get("relation_evidence_candidates") or {}).items()
+        }
+        return report
 
     def to_dict(self) -> dict:
         """可落盘/进看板的纯字典（确定性信号，供下游替代模型自报置信度）。"""
@@ -188,40 +216,44 @@ class AhoCorasick:
 # ---------------------------------------------------------------------------
 # 纯函数回填
 # ---------------------------------------------------------------------------
+def merge_entity_metadata(base: Entity, incoming: Entity) -> Entity:
+    """把 ``incoming`` 的别名/属性/置信度并入 ``base``（确定性、首见优先）。
+
+    只合并「逻辑身份相同」的重复输出：身份键由调用方决定（回填/归并都用
+    ``(type, name)``）。mentions 不在这里合并——回填要重建、naive_merge 要
+    把跨块 mention 全量保留，语义不同，由调用方自己处理。
+    """
+    for alias in incoming.aliases:
+        if alias not in base.aliases and alias != incoming.name:
+            base.aliases.append(alias)
+    for key, value in incoming.attributes.items():
+        base.attributes.setdefault(key, value)
+    base.confidence = max(base.confidence, incoming.confidence)
+    if not base.description:
+        base.description = incoming.description
+    return base
+
+
 def _coalesce_entities(entities: list[Entity]) -> list[Entity]:
     """把同一逻辑实体的重复输出合并为一个（逻辑身份 = (type, 标准名)）。
 
-    与 ``pipeline.naive_merge`` 的聚合键一致：模型若没去重、把同一 (类型,标准名)
-    输出了多遍（常带互补的别名/属性），这里按首次出现顺序确定性地并成一个逻辑
-    实体，别名取并集、属性首见优先。这样「重复」不会被误判成「同名歧义」。
+    与 ``pipeline.naive_merge`` 使用同一套元数据合并规则，避免两处逻辑漂移：
+    模型若没去重、把同一 (类型,标准名) 输出了多遍（常带互补的别名/属性），
+    这里按首次出现顺序确定性地并成一个逻辑实体，别名取并集、属性首见优先。
+    这样「重复」不会被误判成「同名歧义」。
     """
     merged: list[Entity] = []
     index: dict[tuple[str, str], int] = {}
     for e in entities:
         key = (e.type, e.name)
         if key in index:
-            j = index[key]
-            base = merged[j]
-            aliases = list(base.aliases)
-            for a in e.aliases:
-                if a not in aliases and a != e.name:
-                    aliases.append(a)
-            attrs = dict(base.attributes)
-            for k, v in e.attributes.items():
-                attrs.setdefault(k, v)
-            merged[j] = Entity(
-                name=base.name,
-                type=base.type,
-                aliases=aliases,
-                mentions=[],
-                attributes=attrs,
-                description=base.description or e.description,
-            )
+            merged[index[key]] = merge_entity_metadata(merged[index[key]], e)
         else:
             index[key] = len(merged)
             merged.append(Entity(
                 name=e.name, type=e.type, aliases=list(e.aliases),
-                mentions=[], attributes=dict(e.attributes),
+                mentions=[], confidence=e.confidence,
+                attributes=dict(e.attributes),
                 description=e.description))
     return merged
 
@@ -276,18 +308,23 @@ def backfill_provenance(
         # 最长匹配优先：长模式先占区间；同长按起点；起点相同同长 = 歧义
         # （同一起点、同一长度必然是同一字面，归属在下面按候选数判定）。
         raw_hits.sort(key=lambda h: (-(h[1] - h[0]), h[0]))
-        occupied: list[tuple[int, int]] = []
+        # 区间占用用按字符的 bytearray（0=空，1=已占）：
+        # 旧实现每次遍历 occupied 列表判重叠，命中多时是 O(H²)；这里
+        # `find`/切片赋值都在 C 层完成，20k 字上从秒级降到毫秒级。
+        occupied = bytearray(len(text))
 
-        def _overlaps(s: int, e: int) -> bool:
-            return any(not (e <= a or s >= b) for a, b in occupied)
+        def _is_free(s: int, e: int) -> bool:
+            return occupied.find(b"\x00", s, e) != -1
 
         for start, end, literal in raw_hits:
             # 先做最长匹配的区间裁决：若该区间已被更长的命中占用，直接跳过
             # （例如「苹果公司」已归属，其前缀「苹果」不再单独计为一次出现）。
-            if _overlaps(start, end):
+            if not _is_free(start, end):
                 continue
             candidates = literal_to_entities.get(literal, [])
-            # 歧义：同一字面归属多个逻辑实体 -> 不猜，标记且不写入任何实体
+            # 歧义：同一字面归属多个逻辑实体 -> 不猜，标记且不写入任何实体。
+            # 但区间仍要占住：否则短名/子串会从歧义串内部「漏」出来，被错误归属。
+            occupied[start:end] = b"\x01" * (end - start)
             if len(candidates) > 1:
                 if not any(
                     am.start == start and am.surface == literal
@@ -303,7 +340,6 @@ def backfill_provenance(
                         )
                     )
                 continue
-            occupied.append((start, end))
             (ei,) = candidates
             surface = text[start:end]
             mentions_by_entity[ei].append(
@@ -319,9 +355,11 @@ def backfill_provenance(
         if ms:
             report.entities_grounded += 1
         report.matched_literals[e.name] = len(hit)
-        for literal in [e.name, *e.aliases]:
+        # 标准名没出现是「实体未命中正文」，不是「别名幻觉」；只有模型给的
+        # 别名（!= 标准名）未出现才计入 unmatched_aliases。
+        for literal in e.aliases:
             literal = literal.strip()
-            if literal and literal not in hit:
+            if literal and literal != e.name and literal not in hit:
                 report.unmatched_aliases.append(
                     {"entity": e.name, "literal": literal}
                 )
@@ -331,8 +369,9 @@ def backfill_provenance(
                 type=e.type,
                 aliases=list(e.aliases),
                 mentions=ms,
-                # 模型自报置信度已移除：用「是否被正文命中」这一确定性信号替代。
-                confidence=1.0 if ms else 0.0,
+                # 稳定内核 confidence 的语义是「模型自报抽取置信度」，回填不得
+                # 用 grounding(0/1) 覆盖它；确定性信号只走 BackfillReport。
+                confidence=e.confidence,
                 attributes=dict(e.attributes),
                 description=e.description,
             )
@@ -343,6 +382,11 @@ def backfill_provenance(
     )
 
     return ExtractionResult(entities=new_entities, relations=new_relations), report
+
+
+def _relation_key(r: Relation) -> str:
+    """三元组的无碰撞 key（JSON 编码，避免 "-" / "->" 拼接碰撞）。"""
+    return json.dumps([r.head, r.predicate, r.tail], ensure_ascii=False)
 
 
 def _backfill_relations(
@@ -382,23 +426,28 @@ def _backfill_relations(
                         ss, se = sentences[sh]
                         pairs.append((hs, ts, ss, se, abs(hs - ts)))
 
-        key = f"{r.head}-{r.predicate}->{r.tail}"
+        key = _relation_key(r)
         evidence: Span | None = None
         if pairs:
             # 最近的一对；取该句整句作为证据 span
-            hs, ts, ss, se, _dist = min(pairs, key=lambda p: p[4])
+            ordered = sorted(pairs, key=lambda p: p[4])
+            hs, ts, ss, se, _dist = ordered[0]
             evidence = Span(start=ss, end=se, text=text[ss:se])
             report.relations_with_evidence += 1
-            report.relation_evidence_candidates[key] = [
+            # 候选按距离排序，并显式标出「被选中的最近一对」，让证据 span
+            # 可观测、可复核（而不只是存一个不可解释的 evidence_span）。
+            cands = [
                 {
                     "head_start": p[0],
                     "tail_start": p[1],
                     "sent_start": p[2],
                     "sent_end": p[3],
                     "distance": p[4],
+                    "selected": p is ordered[0],
                 }
-                for p in sorted(pairs, key=lambda p: p[4])
+                for p in ordered
             ]
+            report.relation_evidence_candidates[key] = cands
         else:
             report.relations_without_evidence.append(
                 {"head": r.head, "predicate": r.predicate, "tail": r.tail}
@@ -410,7 +459,30 @@ def _backfill_relations(
                 predicate=r.predicate,
                 tail=r.tail,
                 evidence_span=evidence,
-                confidence=1.0 if pairs else 0.0,
+                # 同实体：不把 grounding 写回内核 confidence。
+                confidence=r.confidence,
             )
         )
     return out
+
+
+def merge_backfill_reports(reports: list[BackfillReport]) -> BackfillReport:
+    """把分块回填信号聚合成整篇信号（计数相加、明细拼接、候选合并）。
+
+    不做「对块 ratio 再平均」——那会让小块的噪声等权放大；这里直接用
+    grounded/total 的整数计数，块级置信度仍然是「命中实体 / 实体总数」。
+    """
+    merged = BackfillReport()
+    for report in reports:
+        merged.entities_total += report.entities_total
+        merged.entities_grounded += report.entities_grounded
+        merged.relations_total += report.relations_total
+        merged.relations_with_evidence += report.relations_with_evidence
+        for name, n in report.matched_literals.items():
+            merged.matched_literals[name] = merged.matched_literals.get(name, 0) + n
+        merged.unmatched_aliases.extend(report.unmatched_aliases)
+        merged.ambiguous_mentions.extend(report.ambiguous_mentions)
+        merged.relations_without_evidence.extend(report.relations_without_evidence)
+        for key, cands in report.relation_evidence_candidates.items():
+            merged.relation_evidence_candidates.setdefault(key, []).extend(cands)
+    return merged

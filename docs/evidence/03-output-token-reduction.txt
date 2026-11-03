@@ -1,7 +1,11 @@
-单块模型输出 JSON 字节数（输出 token 的确定性代理；真实 token 与字节强相关）
-  每实体出现 1 次: full= 1421B  slim= 568B  降幅=60.0%  目标>=30%: 达标
-  每实体出现 3 次: full= 2187B  slim= 568B  降幅=74.0%  目标>=30%: 达标
-  每实体出现 6 次: full= 3336B  slim= 568B  降幅=83.0%  目标>=30%: 达标
-  结构化 schema 定义: full=2904B slim=1429B 降幅=50.8%
-说明：真实单块输出 token 与截断计数由工单 01 的 chunk_metrics 在放量 A/B 时实测；
-     截断不会增加——slim 输出严格是 full 输出的子集（仅删除字段），无新增生成内容。
+真实 LLM 输出 token（同模型、同 6 篇黄金语料，A/B）：
+  full schema（模型自报 mentions/偏移/置信度）: output=2011 tokens（每篇均值 335.17）
+  slim + 本地回填                              : output=953  tokens（每篇均值 158.83）
+  降幅 = 52.6%  目标 >=30%: 达标
+  模型尝试次数 full=6 slim=6（无新增重试/截断迹象）
+
+结构化 schema 定义（真实 build_extraction_model 生成，非手写 payload）：
+  full=2904B slim=1429B 降幅=50.8%
+
+数据源：docs/evidence/03-ab-llm.json
+复跑：PYTHONPATH=src python tools/backfill_ab_eval.py --mode llm

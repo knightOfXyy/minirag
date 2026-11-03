@@ -36,6 +36,11 @@ from .chunk_metrics import (
 from .chunking import Chunk
 from .document import Document, ExtractionOutput, Usage
 from .extractor import ExtractionError, Extractor
+from .local_backfill import (
+    BackfillReport,
+    merge_backfill_reports,
+    merge_entity_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -102,23 +107,24 @@ def naive_merge(partials: list[ExtractionResult]) -> ExtractionResult:
                     confidence=e.confidence, attributes=dict(e.attributes),
                 )
             ent = bucket[key]
-            for a in e.aliases:
-                if a not in ent.aliases and a != e.name:
-                    ent.aliases.append(a)
+            # 与 local_backfill 共用同一套元数据合并规则（别名并集/属性首见/
+            # 置信度取大），避免两处逻辑漂移；mention 在归并层必须全量保留。
+            merge_entity_metadata(ent, e)
             ent.mentions.extend(e.mentions)
-            ent.confidence = max(ent.confidence, e.confidence)
-            # 动态属性做一次浅合并（后者补前者缺的键）
-            for k, v in e.attributes.items():
-                ent.attributes.setdefault(k, v)
 
-    rel_seen: set[tuple[str, str, str]] = set()
+    rel_index: dict[tuple[str, str, str], Relation] = {}
     relations: list[Relation] = []
     for part in partials:
         for r in part.relations:
             key = (r.head, r.predicate, r.tail)
-            if key in rel_seen:
+            existing = rel_index.get(key)
+            if existing is not None:
+                # 同一三元组在别的块可能才拿到证据/更高置信度：首见不能赢家通吃。
+                if existing.evidence_span is None and r.evidence_span is not None:
+                    existing.evidence_span = r.evidence_span
+                existing.confidence = max(existing.confidence, r.confidence)
                 continue
-            rel_seen.add(key)
+            rel_index[key] = r
             relations.append(r)
 
     return ExtractionResult(entities=list(bucket.values()), relations=relations)
@@ -183,16 +189,22 @@ class ChunkedExtractionPipeline:
 
     async def _extract_one_chunk(
         self, chunk: Chunk, metrics: DocumentMetrics,
-    ) -> tuple[ExtractionResult | None, Usage, str, ChunkCallMetrics | None]:
+    ) -> tuple[
+        ExtractionResult | None, Usage, str, ChunkCallMetrics | None, dict | None,
+    ]:
         """抽单个块（带限流）。
 
-        返回 (换算后的结果|None, 用量, 块 id, 分块度量)。结果为 None 表示
-        该块多次尝试后仍失败（度量里带 error/截断信号），由调用方决定是否容忍。
+        返回 (换算后的结果|None, 用量, 块 id, 分块度量, 回填信号|None)。结果为
+        None 表示该块多次尝试后仍失败（度量里带 error/截断信号），由调用方决定
+        是否容忍。
 
-        缓存（05）× 度量（01）的交叉语义：命中缓存不发起模型调用、不计真实
-        token（用量只记一次 cache_hits），但仍为该块落一条 ChunkCallMetrics
-        （finish_reason=cache_hit、attempts=0、token 全 0）——文档级"每块一条"
-        的口径不能被缓存打破，否则 chunk_calls 会随缓存命中率漂移、看板失去可比性。
+        缓存（05）× 度量（01）× 回填（03）的交叉语义：命中缓存不发起模型调用、
+        不计真实 token（用量只记一次 cache_hits），但仍为该块落一条
+        ChunkCallMetrics（finish_reason=cache_hit、attempts=0、token 全 0）——
+        文档级"每块一条"的口径不能被缓存打破，否则 chunk_calls 会随缓存命中率
+        漂移、看板失去可比性。回填信号是 03 的旁路可观测信息，作为额外的第 5 个
+        返回值透出，不写回内核 Entity/Relation.confidence；命中缓存时随缓存产物
+        一并还原（同一块同一领域同一模型，回填结果确定）。
         """
         # 排队耗时：从 worker 被创建（事件循环开始调度它）到拿到信号量。
         # 这是"时间花在哪"的第一跳——并发配额/RPM 限流造成的等待都在这里显形。
@@ -233,7 +245,7 @@ class ChunkedExtractionPipeline:
                     output_tokens=record.output_tokens,
                     cached_input_tokens=record.cached_input_tokens,
                 ) if record is not None else Usage()
-                return None, failed_usage, chunk.id, record
+                return None, failed_usage, chunk.id, record, None
 
             if hit:
                 # 命中：还原结果但不计真实 token，只标记一次缓存来源；
@@ -251,7 +263,7 @@ class ChunkedExtractionPipeline:
                 )
                 metrics.add(m)
                 return (remap_spans(output.result, chunk),
-                        Usage(cache_hits=1), chunk.id, m)
+                        Usage(cache_hits=1), chunk.id, m, output.backfill)
 
             m = output.call_metrics
             if m is not None:
@@ -267,7 +279,8 @@ class ChunkedExtractionPipeline:
                     cached_input_tokens=output.usage.cached_input_tokens,
                     wait_s=wait_s, prefill_s=None, decode_s=None)
             metrics.add(m)
-            return remap_spans(output.result, chunk), output.usage, chunk.id, m
+            return (remap_spans(output.result, chunk), output.usage, chunk.id, m,
+                    output.backfill)
 
     async def run(
         self,
@@ -301,8 +314,13 @@ class ChunkedExtractionPipeline:
 
         partials: list[ExtractionResult] = []
         failed: list[str] = []
-        for res, u, cid, _m in settled:
+        backfill_reports: list[BackfillReport] = []
+        for res, u, cid, _m, raw_backfill in settled:
             usage.add(u)
+            # 分块回填信号在这里汇总（03）：先收集，等归并后再统一聚合，
+            # 失败块没有信号（None）直接跳过。
+            if raw_backfill is not None:
+                backfill_reports.append(BackfillReport.from_dict(raw_backfill))
             if res is None:
                 failed.append(cid)
                 continue
@@ -320,6 +338,10 @@ class ChunkedExtractionPipeline:
             raise err
 
         merged = naive_merge(partials)
+        # 分块回填信号必须汇总后继续往上层传，不能在 pipeline 这里丢掉。
+        # 关开关时所有块都是 None -> 保持 None（与改造前一致）。
+        backfill = (merge_backfill_reports(backfill_reports).to_dict()
+                    if backfill_reports else None)
         return ExtractionOutput(
             document_id=document.id,
             domain_code=self.extractor.domain.code,
@@ -328,4 +350,5 @@ class ChunkedExtractionPipeline:
             usage=usage,
             attempts=total,
             document_metrics=metrics,
+            backfill=backfill,
         )

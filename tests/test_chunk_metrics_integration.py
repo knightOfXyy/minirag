@@ -99,7 +99,7 @@ class _ScriptedProvider:
     async def get_extractor(self, domain_code):
         return self._new(), SimpleNamespace(code="general")
 
-    async def extract(self, domain_code, usage_sink=None):
+    async def extract(self, domain_code, usage_sink=None, backfill_sink=None):
         extractor = self._new()
 
         async def _fn(text, feedback=None):
@@ -108,6 +108,8 @@ class _ScriptedProvider:
                          source="test", domain_code=domain_code))
             if usage_sink is not None:
                 usage_sink.add(out.usage)
+            if backfill_sink is not None:
+                backfill_sink["backfill"] = out.backfill
             return out.result
 
         return _fn

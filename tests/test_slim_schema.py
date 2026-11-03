@@ -90,8 +90,13 @@ def test_slim_output_payload_is_at_least_30pct_smaller():
             ("阿里巴巴", "总部位于", "杭州"),
             ("菜鸟", "子公司", "阿里巴巴")]
 
+    # payload 由真实 schema 模型 dump 出来（不是手写 JSON），保证比较的正是
+    # 模型实际被要求生成/实际会返回的字段形状。
+    full_model = build_extraction_model(GENERAL_DOMAIN)
+    slim_model = build_extraction_model(GENERAL_DOMAIN, slim=True)
+
     def full_payload(n_occ):
-        return {
+        data = {
             "entities": [
                 {"name": n, "type": "ORG", "aliases": al,
                  "mentions": [
@@ -108,13 +113,15 @@ def test_slim_output_payload_is_at_least_30pct_smaller():
                  "confidence": 0.88}
                 for h, p, t in rels],
         }
+        return full_model.model_validate(data).model_dump()
 
     def slim_payload():
-        return {
+        data = {
             "entities": [{"name": n, "type": "ORG", "aliases": al, "attributes": {}}
                          for n, al in ents],
             "relations": [{"head": h, "predicate": p, "tail": t} for h, p, t in rels],
         }
+        return slim_model.model_validate(data).model_dump()
 
     slim = len(json.dumps(slim_payload(), ensure_ascii=False))
     for n_occ in (1, 3, 6):
@@ -128,3 +135,23 @@ def test_slim_output_payload_is_at_least_30pct_smaller():
         build_extraction_model(GENERAL_DOMAIN, slim=True).model_json_schema(),
         ensure_ascii=False))
     assert 1 - slim_schema / full_schema >= 0.30
+
+
+def test_full_schema_and_prompt_match_pre_change_golden():
+    """验收 7 的「逐字段一致」必须对着改造前的真实快照，而不是自己跟自己比。
+
+    golden 由 262319b（改造前基线）的 build_extraction_model /
+    build_system_prompt 直接导出：连字段顺序、JSON Schema 文案、提示词全文
+    都逐字节比对；字段顺序变了会在这里立刻红。
+    """
+    import json
+    from pathlib import Path
+
+    golden = json.loads(
+        (Path(__file__).parent / "golden" / "full_schema_262319b.json")
+        .read_text(encoding="utf-8"))
+    schema = build_extraction_model(GENERAL_DOMAIN).model_json_schema()
+    assert list(schema["$defs"]["GeneralEntity"]["properties"]) == golden["entity_fields"]
+    assert list(schema["$defs"]["Relation"]["properties"]) == golden["relation_fields"]
+    assert schema == golden["schema"]
+    assert build_system_prompt(GENERAL_DOMAIN) == golden["system_prompt"]

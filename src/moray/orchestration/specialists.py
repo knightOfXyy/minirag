@@ -60,6 +60,9 @@ class ReviewedExtraction:
     # 分块路径的文档级度量（工单 01）：每块一条调用记录 + 聚合摘要。
     # 整篇旧闭环（含离线闭包路径）为 None，不伪造分块数据。
     document_metrics: object | None = None
+    # 瘦身回填的确定性质量信号（仅分块且开关打开时有值；其余为 None）。
+    # 它是旁路可观测信息，不属于稳定内核 Entity/Relation。
+    backfill: dict | None = None
 
 
 ReviewerFn = Callable[[str, ExtractionResult], Awaitable[ExtractionReview]]
@@ -219,4 +222,5 @@ async def run_chunked_team(
         review=review,
         history=[review],
         document_metrics=output.document_metrics,
+        backfill=output.backfill,
     )

@@ -31,6 +31,9 @@ class ExtractResponse(BaseModel):
     # prefill_s/decode_s）与每块一条的 chunks 明细。API 与批量作业消费同一份
     # DocumentMetrics.to_dict()，两条路径字段逐字一致。
     chunk_metrics: dict | None = None
+    # 瘦身回填的确定性质量信号（块级置信度/命中/歧义/幻觉别名/关系证据）。
+    # 开关关闭或走固定抽取器时为 None。新增字段：老客户端忽略即可。
+    backfill: dict | None = None
 
 
 class EnqueueJobRequest(BaseModel):
