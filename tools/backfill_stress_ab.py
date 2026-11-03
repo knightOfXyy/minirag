@@ -100,7 +100,8 @@ def _git_identity() -> dict:
         except Exception:  # noqa: BLE001 取证脚本，拿不到就留空
             return ""
 
-    status = _run("status", "--porcelain")
+    # 只把【已跟踪】改动算脏：未跟踪的 IDE/临时目录不应让证据看起来不可复现。
+    status = _run("status", "--porcelain", "--untracked-files=no")
     return {
         "git_sha": _run("rev-parse", "HEAD"),
         "git_describe": _run("describe", "--always", "--dirty"),
