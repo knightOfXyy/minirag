@@ -90,7 +90,7 @@
 ## 测试
 
 ```bash
-python -m pytest tests/ -q                 # 307 个离线确定性单测（CI 同款）
+python -m pytest tests/ -q                 # 308 个离线确定性单测（CI 同款）
 RUN_DB_TESTS=1 python -m pytest tests/ -q  # 全量（+DB/pgvector/MCP/API/作业集成；本轮未复跑）
 ```
 

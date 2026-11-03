@@ -364,6 +364,38 @@ def test_rule_review_span_ratio_is_unknown_when_nothing_checked():
     assert review.span_ratio is None
 
 
+@pytest.mark.asyncio
+async def test_dashboard_summary_span_ratio_unknown_stays_none():
+    """零 span 运行落 NULL；全批次未测时聚合也返回 None，不伪装成 0/1。"""
+    from moray.observability.dashboard import Dashboard
+
+    captured = {}
+
+    class _Pool:
+        async def fetchrow(self, query, *params):
+            captured["query"] = query
+            return {
+                "runs": 1, "passed": 1, "avg_span_ratio": None,
+                "avg_block_confidence": None, "entities_grounded": 0,
+                "entities_total": 0, "avg_relation_evidence_ratio": None,
+                "ambiguous_mentions": 0, "avg_review_iters": 1.0,
+                "total_open_issues": 0, "total_entities": 1,
+                "total_relations": 0, "auto_merged": 0, "queued": 0,
+                "created": 0, "input_tokens": 0, "output_tokens": 0,
+                "cached_input_tokens": 0, "cache_hits": 0,
+                "avg_latency_ms": 0.0, "chunk_calls": 0,
+                "total_attempts": 0, "truncated_chunks": 0,
+                "truncation_signals": 0, "reworked_chunks": 0, "wait_ms": 0,
+                "chunk_latency_ms": 0, "prefill_ms": 0, "decode_ms": 0,
+                "chunk_latency_measured_runs": 0,
+                "prefill_measured_runs": 0, "decode_measured_runs": 0,
+            }
+
+    s = await Dashboard(_Pool()).summary()
+    assert "coalesce(avg(span_ratio),0)" not in captured["query"]
+    assert s["avg_span_ratio"] is None
+
+
 # ---------------------------------------------------------------------------
 # N10：naive_merge 默认值必须保持 262319b 旧语义
 # ---------------------------------------------------------------------------

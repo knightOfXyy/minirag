@@ -5,8 +5,8 @@
   `dev/yzd-feat-relation-202610`（`a4c10cd`，已含 01/02/05 与本工单 r2），
   再在其上补 r3 修复（合并方式经协调者确认，仅动临时分支）。
 - 测试：`ARK_API_KEY=dummy PYTHONPATH=src python -m pytest -q` →
-  **307 passed, 64 skipped**；其中 r3 回归文件
-  `tests/test_r3_review_fixes.py` 16 passed（修复前 13 failed）。
+  **308 passed, 65 skipped**；其中 r3 回归文件
+  `tests/test_r3_review_fixes.py` 17 passed（修复前 13 failed）。
 - golden：`tests/golden/r3_switch_off_262319b.json` 由 **262319b 源码**
   + 固定模型桩生成（脚本 `/tmp/opencode/gen_r3_golden.py`，非被测实现自证）。
 
@@ -22,7 +22,7 @@
 | S6 | 验收 8 未在 02 压力语料闭环 | 合入 dev 的 02 loader/语料后，真实 LLM full vs slim A/B（见下节） | `docs/evidence/03-r3-stress-ab.json`、`tools/backfill_stress_ab.py` |
 | S7 | 验收 9 未测单块 token 与截断 | 同一实验接 01 `DocumentMetrics`：逐块 output token / `truncated_chunks` | 同上 JSON 的 `chunk_summary` / `chunk_details` |
 | N8 | 验收 7 固定桩对比偏弱 | 用 262319b 源码生成完整 `ExtractionOutput` 与 chunked 输出 golden，当前关闭态逐字段对比（新加工单的 `backfill/call_metrics/usage.cache_hits` 单独断言） | `test_switch_off_extraction_output_matches_262319b_golden`、`test_switch_off_chunked_output_matches_262319b_golden` |
-| N9 | 零 span 时 `span_ratio` 仍记 1.0 | `rule_review` 在 `SpanReport.total==0` 时返回 `None`（未测），看板列写 NULL；回填信号继续走 `block_confidence` | `test_rule_review_span_ratio_is_unknown_when_nothing_checked` |
+| N9 | 零 span 时 `span_ratio` 仍记 1.0 | `rule_review` 在 `SpanReport.total==0` 时返回 `None`（未测），看板行写 NULL；`Dashboard.summary` 的 `avg(span_ratio)` 全 NULL 时返回 None（不再 `coalesce 0`）；回填信号继续走 `block_confidence` | `test_rule_review_span_ratio_is_unknown_when_nothing_checked`、`test_dashboard_summary_span_ratio_unknown_stays_none`（+ DB 用例 `test_summary_span_ratio_unmeasured_is_none`） |
 | N10 | `naive_merge` 默认值改变关闭态直接调用行为 | 默认改回 `merge_relation_duplicates=False`（262319b 旧语义）；pipeline 仅在 slim 打开时显式传 True | `test_naive_merge_default_keeps_pre_change_semantics` |
 | N11 | 内核 `confidence` 默认 0.0 → None | 保留 None（未知语义正确），标为**刻意破坏性变更**并写明迁移方式（见 `docs/ARCHITECTURE.md`）；full 动态 schema 契约仍为 0.0 | `test_core_confidence_default_is_none_and_full_contract_stays_zero` |
 | N12 | 关系端点只认标准名 | `_backfill_relations` 用「标准名+别名 → 实体」索引；仅唯一归属才解析，歧义不猜 | `test_relation_endpoint_resolves_unique_alias_literal`、`test_relation_endpoint_ambiguous_alias_is_not_guessed` |
