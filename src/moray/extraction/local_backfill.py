@@ -91,6 +91,11 @@ def entity_signal_key(entity: Entity) -> str:
 # 始终保留全部，调试/评测可直接读对象（r10 N4）。
 MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES = 20
 
+# 进程内软上限（r12 N2）：块间传递与 05 结果缓存都携带候选，R 条关系 ×
+# 每块 K 对 × C 块没有上限时会被笛卡尔积撑大。这个值明显高于对外窗口 20，
+# 不会影响正常文档，只兜住「无标点长文 / 单块大文本」的极端情况。
+MAX_INTERNAL_RELATION_EVIDENCE_CANDIDATES = 2000
+
 
 def entity_identity_key(
     entity: Entity, *, strip_name: bool = True
@@ -105,7 +110,11 @@ def entity_identity_key(
 
 
 def _cap_relation_candidates(cands: list[dict], limit: int | None) -> list[dict]:
-    """序列化裁剪：``None`` = 全量，``limit <= 0`` = 空，否则保留前 ``limit`` 条。
+    """序列化裁剪：``None`` = 全量，``0`` = 空，正数保留前 ``limit`` 条。
+
+    负数没有合理语义（r10 曾表示全量、r11 又改成空，这种静默反转会让旧
+    工具/脚本把 0/负值当成「全量」而悄悄丢候选），因此直接 ``ValueError``
+    （r12 N10）。跨版本迁移：要全量传 ``None``，要空传 ``0``。
 
     两个生产方（``backfill_provenance`` 与 ``merge_backfill_reports``）都把
     selected 放在首条，所以前 ``limit`` 条天然包含它；旧实现里「selected 不在
@@ -116,9 +125,20 @@ def _cap_relation_candidates(cands: list[dict], limit: int | None) -> list[dict]
     """
     if limit is None:
         return [dict(c) for c in cands]
-    if limit <= 0:
+    if limit < 0:
+        raise ValueError(
+            "max_relation_evidence_candidates 不能为负：None=全量、0=空、"
+            f"正数=保留前 N 条，收到 {limit}")
+    if limit == 0:
         return []
     return [dict(c) for c in cands[:limit]]
+
+
+def _copy_ambiguous_for_output(entry: dict) -> dict:
+    item = dict(entry)
+    item["candidates"] = list(entry.get("candidates") or [])
+    item["chunk_ids"] = list(entry.get("chunk_ids") or [])
+    return item
 
 
 def serialize_backfill_for_output(
@@ -131,10 +151,25 @@ def serialize_backfill_for_output(
 
     块间传递与内存 ``BackfillReport`` 保留全量（r11 F1）；API 响应/作业结果
     才是真正出网的边界，在这里统一裁剪，避免几十 MB 的笛卡尔积外发。
+
+    返回的是**完全独立**的字典：顶层之外的 ``matched_literals`` /
+    ``unmatched_aliases`` / ``seen_literals`` / ``ambiguous_mentions`` /
+    ``relations_without_evidence`` 也都是副本，消费方修改结果不会反向污染
+    内部报告（r12 N8）。
     """
     if backfill is None:
         return None
     data = dict(backfill)
+    data["matched_literals"] = dict(backfill.get("matched_literals") or {})
+    data["seen_literals"] = list(backfill.get("seen_literals") or [])
+    data["unmatched_aliases"] = [
+        dict(entry) for entry in (backfill.get("unmatched_aliases") or [])]
+    data["ambiguous_mentions"] = [
+        _copy_ambiguous_for_output(entry)
+        for entry in (backfill.get("ambiguous_mentions") or [])]
+    data["relations_without_evidence"] = [
+        dict(entry)
+        for entry in (backfill.get("relations_without_evidence") or [])]
     data["relation_evidence_candidates"] = {
         key: _cap_relation_candidates(cands, max_relation_evidence_candidates)
         for key, cands in (
@@ -477,6 +512,10 @@ def backfill_provenance(
         # 旧实现每次遍历 occupied 列表判重叠，命中多时是 O(H²)；这里
         # `find`/切片赋值都在 C 层完成，20k 字上从秒级降到毫秒级。
         occupied = bytearray(len(text))
+        # 歧义命中的去重集合：区间一旦被占用，起点唯一，所以 (surface,start)
+        # 足够。旧实现每次都线性扫已产出的 ambiguous_mentions，全部命中都
+        # 歧义时是 O(A²)（r12 S2）；这里 O(1) 判重。
+        seen_ambiguous: set[tuple[str, int]] = set()
 
         def _interval_all_free(s: int, e: int) -> bool:
             # 语义：整个区间都未被占用才接受。r2 性能改造曾写成
@@ -494,10 +533,9 @@ def backfill_provenance(
             # 但区间仍要占住：否则短名/子串会从歧义串内部「漏」出来，被错误归属。
             occupied[start:end] = b"\x01" * (end - start)
             if len(candidates) > 1:
-                if not any(
-                    am.start == start and am.surface == literal
-                    for am in report.ambiguous_mentions
-                ):
+                ambiguous_key = (literal, start)
+                if ambiguous_key not in seen_ambiguous:
+                    seen_ambiguous.add(ambiguous_key)
                     report.ambiguous_mentions.append(
                         AmbiguousMention(
                             surface=literal,
@@ -748,6 +786,10 @@ def merge_backfill_reports(
     merged = BackfillReport()
     missing_index: dict[str, dict] = {}
     ambiguous_index: dict[tuple, AmbiguousMention] = {}
+    # 关系证据候选按「全局位置」去重（r12 N1）：重叠块会对同一对共现各产
+    # 一条完全相同的候选（只差 chunk_id）。保留首条并把来源块聚合到
+    # chunk_ids，避免审计/评测候选集合被 overlap 放大。
+    evidence_positions: dict[str, dict[tuple, int]] = {}
     # 去重键带类型：同名异型（苹果/ORG 与 苹果/MISC）的幻觉别名不能互相
     # 覆盖，否则信号少计（r10 N3）。
     unmatched_index: dict[tuple[str, str, str], dict] = {}
@@ -793,7 +835,8 @@ def merge_backfill_reports(
                 if report.chunk_id not in chunk_ids:
                     chunk_ids.append(report.chunk_id)
         for key, cands in report.relation_evidence_candidates.items():
-            shifted = []
+            bucket = merged.relation_evidence_candidates.setdefault(key, [])
+            positions = evidence_positions.setdefault(key, {})
             for c in cands:
                 item = dict(c)
                 for field in ("head_start", "tail_start", "sent_start",
@@ -801,18 +844,35 @@ def merge_backfill_reports(
                     if item.get(field) is not None:
                         item[field] = item[field] + offset
                 item["chunk_id"] = report.chunk_id
-                shifted.append(item)
-            bucket = merged.relation_evidence_candidates.setdefault(key, [])
-            bucket.extend(shifted)
-            # selected 本来是「块内最近的一对」；跨块拼接后会出现多条
-            # selected=True，而 naive_merge 只保留一条 evidence span。按块顺序
-            # 保留第一条（= 首个真正提供了证据的块），其余降为普通候选
-            # （r10 N2）。
-            selected_indices = [
-                i for i, c in enumerate(bucket) if c.get("selected")]
-            if len(selected_indices) > 1:
-                for i in selected_indices[1:]:
-                    bucket[i]["selected"] = False
+                # 全局位置相同的候选就是同一对共现：只留首条，来源块聚合。
+                position = (
+                    item.get("head_start"), item.get("tail_start"),
+                    item.get("evidence_start"), item.get("evidence_end"))
+                existing_index = positions.get(position)
+                if existing_index is None:
+                    item["chunk_ids"] = (
+                        [report.chunk_id] if report.chunk_id else [])
+                    positions[position] = len(bucket)
+                    bucket.append(item)
+                    continue
+                existing = bucket[existing_index]
+                chunk_ids = existing.setdefault("chunk_ids", [])
+                if report.chunk_id and report.chunk_id not in chunk_ids:
+                    chunk_ids.append(report.chunk_id)
+                # 同一候选在别的块可能被选为「最近的一对」；先标真，
+                # 等所有块合并完再按块顺序只保留一条 selected。
+                if item.get("selected"):
+                    existing["selected"] = True
+    # selected 本来是「块内最近的一对」；跨块拼接后会出现多条
+    # selected=True，而 naive_merge 只保留一条 evidence span。按块顺序
+    # 保留第一条（= 首个真正提供了证据的块），其余降为普通候选
+    # （r10 N2 / r12 N1）。
+    for bucket in merged.relation_evidence_candidates.values():
+        selected_indices = [
+            i for i, c in enumerate(bucket) if c.get("selected")]
+        if len(selected_indices) > 1:
+            for i in selected_indices[1:]:
+                bucket[i]["selected"] = False
     # 真实分块的盲点：某块漏抽实体时，该实体的别名不会进入那一块的模式集，
     # 于是 seen_literals 里没有它，即使正文里明明存在。对「仍可能被判幻觉」
     # 的候选别名在整篇正文上补一次 AC 扫描（候选数远小于实体别名数，仍是

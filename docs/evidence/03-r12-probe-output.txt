@@ -1,0 +1,13 @@
+S1 merged_entities= ['腾讯', '混元'] relations= [('腾讯', '混元')] ingest_entities= ['混元', '腾讯'] placeholder_misc= []
+S2 16000_ambiguous_hits elapsed=0.1319s entries=16000
+N1 merged_candidates=1 chunk_ids=['d#c0', 'd#c1'] selected=1
+N2/N3 real_extractor 30x30=900 candidates=900
+N2/N3 real_extractor 50x50=2500 candidates=2000
+N2 internal_cap= 2000 output_cap= 20
+N4 cache_entries=1 same_result=True legacy_owner_arg=TypeError
+N6 partial_single_chunk_unmatched_aliases= []
+N7 dashboard_fields= {'block_confidence': None, 'entities_grounded': None, 'entities_total': None, 'relation_evidence_ratio': None, 'ambiguous_mentions': 0, 'reconciled_unattributed': 2}
+N8 deep_copy= True
+N9 slim_entities=['腾讯'] slim_relations=1 legacy_entities=2 legacy_relations=2
+N10 limit_0= []
+N10 limit_-5= ValueError: max_relation_evidence_candidates 不能为负：None=全量、0=空、正数=保留前 N 条，收到 -5

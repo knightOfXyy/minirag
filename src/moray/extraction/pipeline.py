@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from enum import Enum
 
 from ..schema import (
     DomainSpec,
@@ -38,6 +39,7 @@ from .chunking import Chunk
 from .document import CacheSavings, Document, ExtractionOutput, Usage
 from .extractor import ExtractionError, Extractor
 from .local_backfill import (
+    MAX_INTERNAL_RELATION_EVIDENCE_CANDIDATES,
     BackfillReport,
     entity_identity_key,
     max_confidence,
@@ -93,12 +95,25 @@ def remap_spans(result: ExtractionResult, chunk: Chunk) -> ExtractionResult:
     return ExtractionResult(entities=entities, relations=relations)
 
 
+class MergeMode(str, Enum):
+    """归并口径的单一开关（r12 N9）。
+
+    四个布尔（合并关系重复 / 补全描述 / 实体名去空白 / 关系端点去空白）在
+    生产路径上总是跟着瘦身开关一起走；把它们收成一个模式，调用方只表达
+    「LEGACY 兼容旧行为」还是「SLIM 瘦身口径」，避免四份默认值 + 四处分叉。
+    """
+
+    LEGACY = "legacy"
+    SLIM = "slim"
+
+
 def naive_merge(
     partials: list[ExtractionResult], *,
-    merge_relation_duplicates: bool = False,
-    fill_description: bool = False,
-    strip_entity_name: bool = False,
-    strip_relation_endpoints: bool = False,
+    mode: MergeMode | None = None,
+    merge_relation_duplicates: bool | None = None,
+    fill_description: bool | None = None,
+    strip_entity_name: bool | None = None,
+    strip_relation_endpoints: bool | None = None,
 ) -> ExtractionResult:
     """朴素归并（L09 会升级为向量+LLM 共指消解）。
 
@@ -106,34 +121,55 @@ def naive_merge(
     关系按三元组字符串去重，置信度取最大值。
     overlap 区域产生的重复 mention 会自然落在同一实体下，不会重复造实体。
 
+    ``mode``：``MergeMode.SLIM`` 一次性打开下面四个瘦身口径；
+    ``MergeMode.LEGACY``/``None`` 保持 262319b 的旧行为（r12 N9）。四个关键字
+    参数仍作为兼容 shim 保留：显式传值时覆盖模式默认，便于旧调用方/测试
+    只改其中一项。
+
     ``merge_relation_duplicates``：重复三元组是否把后见的证据/更高置信度
     并进首见条目。默认 **False**，即 262319b 的「先见赢家」旧语义——本函数
     是公开 helper（``extraction/__init__`` 导出、lessons 直接调用），默认值
-    不能悄悄改变直接调用方的输出。分块流水线只在瘦身开关打开时显式传 True。
+    不能悄悄改变直接调用方的输出。SLIM 模式打开。
 
     ``fill_description``：是否用后见条目的 description 补全空描述。与关系
     合并是两个独立行为（r4 N6）：此前它隐式跟随
     ``merge_relation_duplicates``，改关系口径会莫名改变实体描述。默认
-    False，保持 262319b 旧输出；分块流水线在瘦身开关打开时显式传 True。
+    False，保持 262319b 旧输出；SLIM 模式打开。
 
     ``strip_entity_name``：实体身份键是否忽略标准名首尾空白（r10 N9）。
     回填在块内按 ``(type, name.strip())`` 合并实体；归并层若仍用精确键，
     会把「腾讯 」与「腾讯」重新拆成两个实体（slim 模式又跳过了同名重复
-    检查，静默产出重复实体）。默认 False 保持 262319b 精确键，供公开 helper
-    的直接调用方与关闭态使用。
+    检查，静默产出重复实体）。默认 False 保持 262319b 精确键。SLIM 模式
+    打开时**存值也规范化**（r12 S1）：不只看键，实体名落库值同样去空白，
+    否则入库 ``_resolve`` 精确匹配不到真实实体、会建 MISC 占位。
 
     ``strip_relation_endpoints``：关系去重键是否对 head/tail 去首尾空白
-    （r11 N11）。实体身份键已去空白，但关系键若仍精确比较，只差空白的同一
-    关系会并存，入库 ``_resolve`` 可能把其中一条判成端点未解析。默认 False
-    保持 262319b 精确键，只有 slim 分块路径显式打开。
+    （r11 N11）。SLIM 模式打开时存值也规范化（r12 S1），不能只合并键、
+    把带空白的原串写回结果。
     """
+    if mode is None:
+        slim = False
+    else:
+        slim = MergeMode(mode) is MergeMode.SLIM
+    if merge_relation_duplicates is None:
+        merge_relation_duplicates = slim
+    if fill_description is None:
+        fill_description = slim
+    if strip_entity_name is None:
+        strip_entity_name = slim
+    if strip_relation_endpoints is None:
+        strip_relation_endpoints = slim
+
     bucket: dict[tuple[str, str], Entity] = {}
     for part in partials:
         for e in part.entities:
             key = entity_identity_key(e, strip_name=strip_entity_name)
             if key not in bucket:
                 bucket[key] = Entity(
-                    name=e.name, type=e.type,
+                    # 身份键去空白时存值也必须去空白：只改键会让带空白的
+                    # 原串进入入库/API，精确名解析失败（r12 S1）。
+                    name=(e.name.strip() if strip_entity_name else e.name),
+                    type=e.type,
                     aliases=[], mentions=[],
                     confidence=e.confidence, attributes=dict(e.attributes),
                 )
@@ -149,9 +185,10 @@ def naive_merge(
     for part in partials:
         for r in part.relations:
             if strip_relation_endpoints:
-                key = (r.head.strip(), r.predicate, r.tail.strip())
+                head, tail = r.head.strip(), r.tail.strip()
             else:
-                key = (r.head, r.predicate, r.tail)
+                head, tail = r.head, r.tail
+            key = (head, r.predicate, tail)
             existing = rel_index.get(key)
             if existing is not None:
                 if merge_relation_duplicates:
@@ -164,7 +201,9 @@ def naive_merge(
                 continue
             # 存副本：后面可能补证据/抬置信度，不能改写入参 partial 里的
             # Relation 对象（公开 helper，调用方可能复用 partials；r10 N10）。
-            kept = r.model_copy(deep=True)
+            # 去空白模式下 update 的是副本的端点，调用方对象保持原样（r12 S1）。
+            kept = r.model_copy(
+                deep=True, update={"head": head, "tail": tail})
             rel_index[key] = kept
             relations.append(kept)
 
@@ -462,12 +501,8 @@ class ChunkedExtractionPipeline:
         slim = self.slim
         merged = naive_merge(
             partials,
-            merge_relation_duplicates=slim,
-            fill_description=slim,
-            strip_entity_name=slim,
-            # r11 N11：实体身份键已去空白，关系键必须同口径，否则只差空白的
-            # 同一关系会并存，入库按名精确匹配时可能被判端点未解析。
-            strip_relation_endpoints=slim)
+            # r12 N9：四个口径收成一个模式开关；LEGACY 保持 262319b 旧行为。
+            mode=MergeMode.SLIM if slim else MergeMode.LEGACY)
         # 分块回填信号必须汇总后继续往上层传，不能在 pipeline 这里丢掉。
         # 关开关时所有块都是 None -> 保持 None（与改造前一致）。
         # 块内偏移的平移由 merge_backfill_reports 按各块 chunk_start 统一完成。
@@ -484,17 +519,23 @@ class ChunkedExtractionPipeline:
         if backfill_reports:
             merged_report = merge_backfill_reports(
                 backfill_reports, document_text=document_text,
-                # 单块文档的块扫描已覆盖全文，不再对别名做第二次整篇扫描
-                # （r11 N8）；多块/部分块失败时保持补扫。
-                single_chunk_covers_document=len(chunks) == 1)
+                # 单块必须真的覆盖整篇正文，才跳过对别名的第二次整篇 AC
+                # 扫描（r11 N8 / r12 N6）：只有一个块不代表它覆盖了全文，
+                # 调用方可能传 end < len(document_text) 的前缀块。
+                single_chunk_covers_document=(
+                    len(chunks) == 1
+                    and chunks[0].start == 0
+                    and chunks[0].end == len(document_text)))
             # 重叠块可能让同一处全局 span 同时归属两个逻辑实体；归并后
             # 统一对账，冲突处撤归属并留歧义信号（r10 S2）。
             merged, merged_report = reconcile_span_ambiguity(
                 merged, merged_report, span_chunk_ids=span_chunk_ids)
-            # 内存/块间传递保留全量候选；对外落盘由 API/作业边界裁剪
-            # （r11 F1：分块边界本身不是序列化边界）。
+            # 块间传递保留「全量」，但进程内仍有高于对外窗口的软上限，
+            # 避免笛卡尔积把结果缓存/内存撑大（r12 N2）；真正出网的
+            # API/作业边界再由 serialize_backfill_for_output 裁到 20。
             backfill = merged_report.to_dict(
-                max_relation_evidence_candidates=None)
+                max_relation_evidence_candidates=(
+                    MAX_INTERNAL_RELATION_EVIDENCE_CANDIDATES))
         return ExtractionOutput(
             document_id=document.id,
             domain_code=self.extractor.domain.code,

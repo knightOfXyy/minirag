@@ -25,7 +25,12 @@ from .chunk_metrics import (
     is_length_finish_reason,
     merge_call_metrics,
 )
-from .pipeline import ChunkedExtractionPipeline, naive_merge, remap_spans
+from .pipeline import (
+    ChunkedExtractionPipeline,
+    MergeMode,
+    naive_merge,
+    remap_spans,
+)
 from .quality import verify_spans
 from .rule_extractor import (
     RuleBasedExtractor,
@@ -52,6 +57,7 @@ __all__ = [
     "is_length_finish_reason",
     "merge_call_metrics",
     "naive_merge",
+    "MergeMode",
     "remap_spans",
     "CacheBackend",
     "ClaimableBackend",
