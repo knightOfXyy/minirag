@@ -46,7 +46,7 @@
 | `observability/` | OTEL 追踪中间件、`pipeline_runs` 质量/成本看板（含分块度量与 api/job 来源）、成本/审计/质量中间件 | L06/13 |
 | `api/` | FastAPI：抽取/作业/查询/HITL/看板；依赖注入 + lifespan | L14 |
 | `evaluation/` | 黄金集加载、严格/宽松匹配、P/R/F1、宏/微平均、基线对比 | L15 |
-| `evaluation/stress/` | 多种子确定性压力案卷（`data/gold/stress/`，正文>5×块预算）+ 答案可信闸门 + 零 LLM 分块规则抽取器 + 按块预算/重叠的网格 A/B 报告；报告自带 `overlap_note`/`entity_axis_note`：overlap 当前无判别力、实体轴只证明接线，块预算判据看关系轴 | 工单02 |
+| `evaluation/stress/` | 多种子确定性压力案卷（`data/gold/stress/`，正文>5×块预算）+ 答案可信闸门 + 零 LLM 分块规则抽取器 + 按块预算/重叠的网格 A/B 报告；报告自带 `overlap_note`/`entity_axis_note`：overlap 当前无判别力、实体轴只证明接线，块预算判据看关系轴；`budget.py` 另提供跨块残余统计与 1500/3500 放量门槛（工单04） | 工单02/04 |
 
 ## 结构化输出瘦身与本地回填（工单 03）
 
