@@ -98,6 +98,7 @@ def naive_merge(
     merge_relation_duplicates: bool = False,
     fill_description: bool = False,
     strip_entity_name: bool = False,
+    strip_relation_endpoints: bool = False,
 ) -> ExtractionResult:
     """朴素归并（L09 会升级为向量+LLM 共指消解）。
 
@@ -120,6 +121,11 @@ def naive_merge(
     会把「腾讯 」与「腾讯」重新拆成两个实体（slim 模式又跳过了同名重复
     检查，静默产出重复实体）。默认 False 保持 262319b 精确键，供公开 helper
     的直接调用方与关闭态使用。
+
+    ``strip_relation_endpoints``：关系去重键是否对 head/tail 去首尾空白
+    （r11 N11）。实体身份键已去空白，但关系键若仍精确比较，只差空白的同一
+    关系会并存，入库 ``_resolve`` 可能把其中一条判成端点未解析。默认 False
+    保持 262319b 精确键，只有 slim 分块路径显式打开。
     """
     bucket: dict[tuple[str, str], Entity] = {}
     for part in partials:
@@ -142,7 +148,10 @@ def naive_merge(
     relations: list[Relation] = []
     for part in partials:
         for r in part.relations:
-            key = (r.head, r.predicate, r.tail)
+            if strip_relation_endpoints:
+                key = (r.head.strip(), r.predicate, r.tail.strip())
+            else:
+                key = (r.head, r.predicate, r.tail)
             existing = rel_index.get(key)
             if existing is not None:
                 if merge_relation_duplicates:
@@ -410,6 +419,9 @@ class ChunkedExtractionPipeline:
         partials: list[ExtractionResult] = []
         failed: list[str] = []
         backfill_reports: list[BackfillReport] = []
+        # 每处全局 span 出现在哪些块：跨块歧义对账时写进 AmbiguousMention
+        # 的 chunk_ids，让看板/人工复核能定位来源块（r11 N1）。
+        span_chunk_ids: dict[tuple[str, int, int], list[str]] = {}
         chunk_by_id = {c.id: c for c in chunks}
         for res, u, cid, _m, raw_backfill in settled:
             usage.add(u)
@@ -425,6 +437,14 @@ class ChunkedExtractionPipeline:
             if res is None:
                 failed.append(cid)
                 continue
+            for ent in res.entities:
+                for m in ent.mentions:
+                    if m.span is None:
+                        continue
+                    span_key = (m.surface, m.span.start, m.span.end)
+                    cids = span_chunk_ids.setdefault(span_key, [])
+                    if cid not in cids:
+                        cids.append(cid)
             partials.append(res)
 
         if failed and raise_on_chunk_error:
@@ -444,7 +464,10 @@ class ChunkedExtractionPipeline:
             partials,
             merge_relation_duplicates=slim,
             fill_description=slim,
-            strip_entity_name=slim)
+            strip_entity_name=slim,
+            # r11 N11：实体身份键已去空白，关系键必须同口径，否则只差空白的
+            # 同一关系会并存，入库按名精确匹配时可能被判端点未解析。
+            strip_relation_endpoints=slim)
         # 分块回填信号必须汇总后继续往上层传，不能在 pipeline 这里丢掉。
         # 关开关时所有块都是 None -> 保持 None（与改造前一致）。
         # 块内偏移的平移由 merge_backfill_reports 按各块 chunk_start 统一完成。
@@ -460,12 +483,18 @@ class ChunkedExtractionPipeline:
         backfill: dict | None = None
         if backfill_reports:
             merged_report = merge_backfill_reports(
-                backfill_reports, document_text=document_text)
+                backfill_reports, document_text=document_text,
+                # 单块文档的块扫描已覆盖全文，不再对别名做第二次整篇扫描
+                # （r11 N8）；多块/部分块失败时保持补扫。
+                single_chunk_covers_document=len(chunks) == 1)
             # 重叠块可能让同一处全局 span 同时归属两个逻辑实体；归并后
             # 统一对账，冲突处撤归属并留歧义信号（r10 S2）。
             merged, merged_report = reconcile_span_ambiguity(
-                merged, merged_report)
-            backfill = merged_report.to_dict()
+                merged, merged_report, span_chunk_ids=span_chunk_ids)
+            # 内存/块间传递保留全量候选；对外落盘由 API/作业边界裁剪
+            # （r11 F1：分块边界本身不是序列化边界）。
+            backfill = merged_report.to_dict(
+                max_relation_evidence_candidates=None)
         return ExtractionOutput(
             document_id=document.id,
             domain_code=self.extractor.domain.code,

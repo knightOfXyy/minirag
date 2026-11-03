@@ -170,10 +170,12 @@ async def test_overlap_same_entity_keeps_single_span_mention():
         _SameEntityFake(), concurrency=1).run(
             Document(id="d", text=body), chunks)
 
-    # naive_merge 会给同一实体保留两条 mention（overlap 重复），但它们
-    # 归属同一实体，不是歧义信号。
+    # 同一实体在重叠块各命中一次：不是歧义；同 span 的重复 mention 已由
+    # reconcile_span_ambiguity 收敛为一条（r11 N10，测试名与断言一致）。
     assert out.backfill["ambiguous_mentions"] == []
-    assert [e.type for e in out.result.entities] == ["ORG"]
+    [entity] = out.result.entities
+    assert entity.type == "ORG"
+    assert [m.surface for m in entity.mentions] == ["苹果"]
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +284,8 @@ class _MwAgent:
     def __init__(self, *, source_text: str, local_backfill: bool):
         self._audit_source_text = source_text
         self._audit_local_backfill = local_backfill
+        # r11 N4：回填缓存由调用方显式持有，中间件与抽取器共用同一个字典。
+        self._audit_backfill_cache: dict = {}
 
 
 def _slim_msg():
@@ -312,12 +316,12 @@ def test_cached_backfill_runs_one_scan_per_result(monkeypatch):
         return real(result, text)
 
     monkeypatch.setattr(lb, "backfill_provenance", counting)
-    owner = SimpleNamespace()
+    cache: dict = {}
     result = ExtractionResult(entities=[Entity(name="华为", type="ORG")])
     filled_a, report_a = lb.cached_backfill_provenance(
-        owner, result, "华为在深圳。")
+        cache, result, "华为在深圳。")
     filled_b, report_b = lb.cached_backfill_provenance(
-        owner, result, "华为在深圳。")
+        cache, result, "华为在深圳。")
 
     assert calls["n"] == 1
     assert report_b is report_a
@@ -361,7 +365,7 @@ async def test_middleware_zero_span_is_unmeasured_and_reuses_extractor_cache(
     # 抽取器随后对同一份结果做回填时直接复用中间件算好的产物。
     result = ExtractionResult.model_validate(_slim_msg().structured_output)
     _filled, report = lb.cached_backfill_provenance(
-        agent, result, "华为在深圳。")
+        agent._audit_backfill_cache, result, "华为在深圳。")
     assert calls["n"] == 1
     assert report.block_confidence == pytest.approx(0.5)
 

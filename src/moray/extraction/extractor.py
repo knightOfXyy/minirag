@@ -357,6 +357,10 @@ class Extractor:
         )
         # 供 ExtractionMetricsMiddleware 核对 span（中间件存在时才有用）
         setattr(agent, "_audit_source_text", source_text)
+        # 同一次 reply 的回填缓存：中间件与抽取器显式传同一个字典（r11 N4），
+        # 缓存函数本身不再往 owner 上写私有属性。
+        audit_backfill_cache: dict = {}
+        setattr(agent, "_audit_backfill_cache", audit_backfill_cache)
         # 中间件需要知道瘦身回填是否开启：用抽取器的单一开关，而不是它自己
         # 再猜一套「无 mention 且 confidence 全 None」的判据（r9 N5）。
         setattr(agent, "_audit_local_backfill", self.local_backfill)
@@ -437,10 +441,10 @@ class Extractor:
             #    text；分块流水线随后用既有的 remap_spans 平移成全局偏移。
             backfill: BackfillReport | None = None
             if self.local_backfill:
-                # 与质量中间件共用同一份回填产物（agent 上按结果缓存），
-                # 块正文只扫描一次（r10 N5）。
+                # 与质量中间件共用同一份回填产物（显式 cache 字典），
+                # 块正文只扫描一次（r10 N5 / r11 N4）。
                 core, backfill = cached_backfill_provenance(
-                    agent, core, source_text)
+                    audit_backfill_cache, core, source_text)
 
             # 全部通过
             return ExtractionOutput(
@@ -451,7 +455,11 @@ class Extractor:
                 usage=usage,
                 attempts=attempt,
                 # 三方合并：瘦身回填信号（03）与分块度量（01）都保留，互不覆盖。
-                backfill=backfill.to_dict() if backfill is not None else None,
+                # 块间/进程内传递保留全量候选；对外落盘（API/作业结果）由
+                # `serialize_backfill_for_output` 按默认上限裁剪（r11 F1）。
+                backfill=(
+                    backfill.to_dict(max_relation_evidence_candidates=None)
+                    if backfill is not None else None),
                 call_metrics=ChunkCallMetrics(
                     chunk_id=document.id,
                     attempts=attempt,

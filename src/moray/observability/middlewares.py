@@ -167,21 +167,25 @@ class ExtractionMetricsMiddleware(_RecorderMiddleware):
                         # 1.0（否则看板会把「无 mention」伪装成 100% 一致；
                         # r10 N5，与 rule_review 的 r3 N9 口径一致）。
                         rec.span_ratio = report.ratio if report.total else None
-                        # 瘦身输出模型不吐 mention/confidence：span 空转 ratio=1.0
-                        # 会把幻觉实体也判满分。只有抽取器显式开启回填时才跑
-                        # 本地回填，用真实命中率（block_confidence）替代空转的
-                        # 1.0；不再自创第三套「无 mention 且 confidence 全 None」
-                        # 的 slim 判据（r9 N5）。
-                        # 回填产物缓存在 agent 上：抽取器随后对同一份结果做
-                        # 回填时直接复用，块正文只扫一次（r10 N5）。
+                        # 瘦身输出模型不吐 mention/confidence。零 span 时记
+                        # `None`（未测），不写空转的 1.0；确定性命中率写到
+                        # `block_confidence`，供质量分替代 span_part（r9 N5）。
+                        # 只有抽取器显式开启回填时才跑本地回填，不再自创第三套
+                        # 「无 mention 且 confidence 全 None」的 slim 判据。
+                        # 回填产物通过显式 cache 字典共享：抽取器随后对同一份
+                        # 结果做回填时直接复用，块正文只扫一次（r10 N5 / r11 N4）。
                         if (result.entities and getattr(
                                 agent, "_audit_local_backfill", False)):
                             from ..extraction.local_backfill import (
                                 cached_backfill_provenance,
                             )
 
+                            cache = getattr(
+                                agent, "_audit_backfill_cache", None)
+                            if cache is None:
+                                cache = {}
                             _, bf = cached_backfill_provenance(
-                                agent, result, source)
+                                cache, result, source)
                             rec.block_confidence = bf.block_confidence
                             rec.entities_grounded = bf.entities_grounded
                             rec.entities_total = bf.entities_total
