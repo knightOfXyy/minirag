@@ -228,9 +228,19 @@ def chunk_settings() -> dict:
 
 
 def build_chat_model(*, stream: bool = False):
-    """按 LLM_PROVIDER 构造聊天模型客户端（默认非流式，便于结构化抽取）。"""
+    """按 LLM_PROVIDER 构造聊天模型客户端（默认非流式，便于结构化抽取）。
+
+    工单 01：套一层 Instrumented{Provider}ChatModel 子类（见
+    config_instrumented），只做观测——把供应商原生 finish_reason（含
+    length 截断）与流式首 token 分段计时挂到响应 metadata，不改任何请求
+    参数、不改解析出的内容，抽取结果逐字节一致。
+    """
     s = get_settings()
-    cred_cls, model_cls = _provider_classes(s["provider"])
+    cred_cls, base_model_cls = _provider_classes(s["provider"])
+
+    from .config_instrumented import instrumented_model_class
+
+    model_cls = instrumented_model_class(base_model_cls)
 
     # 只在显式配置时才构造 Parameters：各模型层的每个参数都是 None 才不写进
     # 请求体，保证默认路径与"没这些开关时"逐字节一致。

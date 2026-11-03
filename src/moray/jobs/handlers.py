@@ -109,6 +109,8 @@ async def build_document_handler(
                 cached_input_tokens=usage.cached_input_tokens,
                 latency_ms=latency_ms))
 
+        # 工单 01：分块度量与 API 路径消费同一份 DocumentMetrics 序列化结果
+        doc_metrics = getattr(reviewed, "document_metrics", None)
         return {
             "accepted_by_review": reviewed.accepted,
             "review_iters": reviewed.review.iterations,
@@ -121,6 +123,8 @@ async def build_document_handler(
             "latency_ms": latency_ms,
             # 成本/缓存可观测：cached_input_tokens 与 cache_hit_rate 直接进作业结果
             "usage": usage.model_dump(),
+            # 分块级度量（整篇旧闭环路径为 None）；截断块数在 summary 里一目了然
+            "chunk_metrics": doc_metrics.to_dict() if doc_metrics is not None else None,
         }
 
     return handle

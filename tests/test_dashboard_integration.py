@@ -85,3 +85,30 @@ async def test_summary_domain_filter(dash):
     await _rec(d, document_id="b", domain_code="finance")
     assert (await d.summary(domain_code="finance"))["runs"] == 1
     assert (await d.summary(domain_code="general"))["runs"] == 1
+
+
+@pytest.mark.asyncio
+async def test_summary_aggregates_chunk_metrics_and_truncation(dash):
+    """工单 01：分块度量列在 SQL 面正确聚合，截断信号不被漏计。"""
+    d, pool = dash
+    # 一次 4 块运行：1 块截断、1 块返工
+    await _rec(d, document_id="chunked", chunk_calls=4, total_attempts=6,
+               truncated_chunks=1, truncation_signals=1, reworked_chunks=2,
+               rework_rate=0.5, wait_ms=100, prefill_ms=1200, decode_ms=3000,
+               chunk_metrics_json=[{"chunk_id": "x#c0000", "truncated": True}])
+    # 一次整篇旧闭环运行：chunk_calls=0，不得污染分块聚合/比率
+    await _rec(d, document_id="plain", chunk_calls=0)
+
+    s = await d.summary()
+    assert s["chunk_calls"] == 4
+    assert s["truncated_chunks"] == 1
+    assert s["truncation_signals"] == 1
+    assert s["reworked_chunks"] == 2
+    assert s["total_attempts"] == 6
+    assert s["chunk_rework_rate"] == 0.5
+    assert s["prefill_ms"] == 1200 and s["decode_ms"] == 3000
+
+    # 明细 JSONB 经连接 codec 直接解码成 list
+    row = await pool.fetchrow(
+        "SELECT chunk_metrics FROM pipeline_runs WHERE document_id='chunked'")
+    assert row["chunk_metrics"][0]["chunk_id"] == "x#c0000"

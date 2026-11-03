@@ -26,7 +26,10 @@
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 from typing import Type
+
+SimpleNamespaceTiming = SimpleNamespace
 
 from pydantic import BaseModel, ValidationError
 
@@ -44,18 +47,83 @@ from ..schema import (
     to_core_result,
     validate_against_domain,
 )
+from .chunk_metrics import (
+    FINISH_UNKNOWN,
+    ChunkCallMetrics,
+    is_length_finish_reason,
+)
 from .document import Document, ExtractionOutput, Usage
 
 logger = logging.getLogger(__name__)
 
 
+def _sum_known(values: list[float | None]) -> float | None:
+    """累加实测到的分段耗时；全部测不到（None）时保持 None 而不是 0。"""
+    known = [v for v in values if v is not None]
+    return round(sum(known), 6) if known else None
+
+
 class ExtractionError(RuntimeError):
-    """多次重试后仍无法得到合法抽取结果。"""
+    """多次重试后仍无法得到合法抽取结果。
+
+    即使失败也带回已经花掉的度量（含截断信号）：调用方不能因为抛异常
+    就把这次的 token 与 finish_reason 全丢掉，看板会因此漏记静默截断。
+    """
+
+    def __init__(self, message: str, *, metrics: ChunkCallMetrics | None = None):
+        super().__init__(message)
+        self.metrics = metrics
 
 
 # 预热用的中性短串：真实正文会替换它。放在末尾，保证「system + schema + 引导语」
 # 这段可复用前缀与真实请求逐字节一致（旧后端 prefix_warmup.py 的同款做法）。
 _WARMUP_FILLER = "（预热）"
+
+
+def _finish_reason_from_msg(reply) -> str:
+    """从模型返回中取结束原因（工单 01 截断护栏）。
+
+    agentscope 2.0 的 Msg 只保留 interrupted/completed，供应商原生的
+    finish_reason（OpenAI 兼容网关的 stop/length/...）被解析层丢弃。
+    模型边界（config_instrumented 的 Instrumented*ChatModel）把原生值挂到
+    ChatResponse.metadata；agent.reply 后仍可读 reply.metadata。离线假模型
+    可直接挂 reply.finish_reason。两者都没有时显式记 'unknown'——绝不静默
+    当成 stop。
+    """
+    metadata = getattr(reply, "metadata", None)
+    if isinstance(metadata, dict) and metadata.get("finish_reason"):
+        return str(metadata["finish_reason"]).strip().lower()
+    reason = getattr(reply, "finish_reason", None)
+    if reason is None:
+        return FINISH_UNKNOWN
+    return str(reason).strip().lower() or FINISH_UNKNOWN
+
+
+def _phase_timing_from_msg(reply) -> tuple[float | None, float | None]:
+    """取 (prefill_s, decode_s) 分段计时。
+
+    流式路径在模型边界实测首 token 时间点后挂在 metadata['timing']；
+    离线假模型可直接挂 reply.timing。非流式网关一次性返回时为
+    (None, None)。缺失是事实，不用总延迟冒充。
+    """
+    timing = None
+    metadata = getattr(reply, "metadata", None)
+    if isinstance(metadata, dict):
+        timing = metadata.get("timing")
+    if timing is None:
+        timing = getattr(reply, "timing", None)
+    if timing is None:
+        return None, None
+    if isinstance(timing, dict):
+        prefill, decode = timing.get("prefill_s"), timing.get("decode_s")
+    else:
+        prefill, decode = (
+            getattr(timing, "prefill_s", None),
+            getattr(timing, "decode_s", None))
+    return (
+        float(prefill) if prefill is not None else None,
+        float(decode) if decode is not None else None,
+    )
 
 
 def _usage_from_msg(reply) -> Usage:
@@ -159,11 +227,31 @@ class Extractor:
         )
 
     async def _call_structured(self, agent: Agent, content: str) -> object:
-        """发起一次结构化调用，返回模型原始 Msg（单测可覆盖此方法）。"""
-        return await agent.reply(
+        """发起一次结构化调用，返回模型原始 Msg（单测可覆盖此方法）。
+
+        工单 01：agentscope 的最终 Msg 不携带供应商原生 finish_reason 与
+        流式分段计时，Instrumented*ChatModel 在响应经过时把它们写进模型
+        实例的 moray_last_signals 槽位；这里在 reply 完成后取出、挂到 Msg
+        上（与离线假模型直接挂属性的接缝保持同构）。
+        """
+        reply = await agent.reply(
             UserMsg(name="user", content=content),
             structured_schema=self._schema_model,
         )
+        model = getattr(agent, "model", None)
+        signals = getattr(model, "moray_last_signals", None)
+        if signals is not None:
+            # Msg 没有 finish_reason/timing 字段，统一走 metadata（与
+            # Instrumented*ChatModel 挂 ChatResponse.metadata 同一条通道）。
+            meta = dict(getattr(reply, "metadata", None) or {})
+            if signals.finish_reason is not None:
+                meta.setdefault("finish_reason", signals.finish_reason)
+            if signals.prefill_s is not None or signals.decode_s is not None:
+                meta.setdefault("timing", SimpleNamespaceTiming(
+                    prefill_s=signals.prefill_s,
+                    decode_s=signals.decode_s))
+            reply.metadata = meta
+        return reply
 
     # ---- 核心流程 ---------------------------------------------------------
     async def extract(self, document: Document) -> ExtractionOutput:
@@ -177,9 +265,41 @@ class Extractor:
         content = self._first_prompt(document.text)
         total_attempts = self.max_retries + 1
 
+        # 工单 01：逐尝试的结束原因/分段计时，用于截断护栏与返工度量
+        attempt_reasons: list[str] = []
+        attempt_prefill: list[float | None] = []
+        attempt_decode: list[float | None] = []
+        truncated_attempts = 0
+
         for attempt in range(1, total_attempts + 1):
             reply = await self._call_structured(agent, content)
-            usage.add(_usage_from_msg(reply))
+            attempt_usage = _usage_from_msg(reply)
+            usage.add(attempt_usage)
+            reason = _finish_reason_from_msg(reply)
+            prefill_s, decode_s = _phase_timing_from_msg(reply)
+            attempt_reasons.append(reason)
+            attempt_prefill.append(prefill_s)
+            attempt_decode.append(decode_s)
+
+            # 截断护栏：finish_reason=length 必须显式可见。截断的 JSON 往往
+            # 同时让下面的 schema 校验失败并触发返工，这里先于校验识别，
+            # 用带结构化字段的 WARNING 打出来——它绝不能伪装成"普通校验失败"。
+            if is_length_finish_reason(reason):
+                truncated_attempts += 1
+                logger.warning(
+                    "结构化输出被长度上限截断 event=output_truncated "
+                    "document_id=%s domain=%s attempt=%d/%d "
+                    "in_tokens=%d out_tokens=%d finish_reason=%s truncated=True",
+                    document.id, self.domain.code, attempt, total_attempts,
+                    attempt_usage.input_tokens, attempt_usage.output_tokens,
+                    reason,
+                    extra={"event": "output_truncated", "truncated": True,
+                           "document_id": document.id,
+                           "domain_code": self.domain.code,
+                           "attempt": attempt, "finish_reason": reason,
+                           "input_tokens": attempt_usage.input_tokens,
+                           "output_tokens": attempt_usage.output_tokens},
+                )
 
             # ① 结构化层校验：枚举/类型/数值边界
             try:
@@ -207,10 +327,39 @@ class Extractor:
                 model_name=self.model_name,
                 usage=usage,
                 attempts=attempt,
+                call_metrics=ChunkCallMetrics(
+                    chunk_id=document.id,
+                    attempts=attempt,
+                    finish_reason=reason,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    cached_input_tokens=usage.cached_input_tokens,
+                    wait_s=0.0,  # 排队耗时由分块流水线在更上层测量填入
+                    prefill_s=_sum_known(attempt_prefill),
+                    decode_s=_sum_known(attempt_decode),
+                    attempt_finish_reasons=attempt_reasons,
+                    truncated_attempts=truncated_attempts,
+                ),
             )
 
+        final_reason = attempt_reasons[-1] if attempt_reasons else FINISH_UNKNOWN
+        metrics = ChunkCallMetrics(
+            chunk_id=document.id,
+            attempts=total_attempts,
+            finish_reason=final_reason,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cached_input_tokens=usage.cached_input_tokens,
+            wait_s=0.0,
+            prefill_s=_sum_known(attempt_prefill),
+            decode_s=_sum_known(attempt_decode),
+            attempt_finish_reasons=attempt_reasons,
+            truncated_attempts=truncated_attempts,
+            error=last_error,
+        )
         raise ExtractionError(
-            f"文档 {document.id} 经过 {total_attempts} 次尝试仍校验失败：{last_error}"
+            f"文档 {document.id} 经过 {total_attempts} 次尝试仍校验失败：{last_error}",
+            metrics=metrics,
         )
 
     # ---- 提示词 ------------------------------------------------------------
