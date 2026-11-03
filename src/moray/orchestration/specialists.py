@@ -57,6 +57,9 @@ class ReviewedExtraction:
     accepted: bool                     # 是否在预算内通过审校
     review: ExtractionReview
     history: list[ExtractionReview] = field(default_factory=list)
+    # 分块路径的文档级度量（工单 01）：每块一条调用记录 + 聚合摘要。
+    # 整篇旧闭环（含离线闭包路径）为 None，不伪造分块数据。
+    document_metrics: object | None = None
 
 
 ReviewerFn = Callable[[str, ExtractionResult], Awaitable[ExtractionReview]]
@@ -200,8 +203,11 @@ async def run_chunked_team(
     pipeline = ChunkedExtractionPipeline(
         real, concurrency=chunk_concurrency, result_cache=result_cache)
     chunks = chunker.chunk_text(text)
+    # 只加观测：某块重试耗尽时仍像改动前一样整篇抛错（不把失败吞成部分结果）。
+    # pipeline 会把文档级度量挂到异常上，截断/返工信号不会随异常蒸发。
     output = await pipeline.run(
-        _Doc(id="chunked", text=text, source="chunked", domain_code=domain_code), chunks)
+        _Doc(id="chunked", text=text, source="chunked", domain_code=domain_code),
+        chunks)
     if usage is not None:
         usage.add(output.usage)
 
@@ -212,4 +218,5 @@ async def run_chunked_team(
         accepted=(review.verdict == ReviewVerdict.PASS),
         review=review,
         history=[review],
+        document_metrics=output.document_metrics,
     )

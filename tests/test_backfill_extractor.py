@@ -164,10 +164,14 @@ async def test_chunked_pipeline_backfills_then_maps_to_global(monkeypatch):
     pipe = ChunkedExtractionPipeline(fake, concurrency=1)
 
     async def fake_run(document, chunks, on_chunk=None):
+        from moray.extraction.chunk_metrics import DocumentMetrics
         from moray.extraction.pipeline import naive_merge
         partials = []
+        # 合并后 _extract_one_chunk 多带一个文档级度量参数（工单 01），
+        # 这里自己建一个 metrics 收集器以保持本测试的最小假流水线。
+        metrics = DocumentMetrics(document_id=document.id, n_chunks=len(chunks))
         for c in chunks:
-            res, _u, _cid = await pipe._extract_one_chunk(c)
+            res, _u, _cid, _m = await pipe._extract_one_chunk(c, metrics)
             partials.append(res)
         return ExtractionOutput(
             document_id=document.id, domain_code="general",

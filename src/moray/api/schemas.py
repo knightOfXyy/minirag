@@ -26,6 +26,11 @@ class ExtractResponse(BaseModel):
     # token 用量（含提示缓存命中量 cached_input_tokens 与命中率 cache_hit_rate）。
     # 走固定抽取器（测试/离线）时为 None——契约只回 ExtractionResult，用量捞不回来。
     usage: dict | None = None
+    # 工单 01：分块级度量（分块路径才有；整篇/离线闭包路径为 None）。
+    # 含文档级摘要 summary（chunk_calls/truncated_chunks/rework_rate/
+    # prefill_s/decode_s）与每块一条的 chunks 明细。API 与批量作业消费同一份
+    # DocumentMetrics.to_dict()，两条路径字段逐字一致。
+    chunk_metrics: dict | None = None
 
 
 class EnqueueJobRequest(BaseModel):

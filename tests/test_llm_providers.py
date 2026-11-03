@@ -44,8 +44,13 @@ def test_default_provider_is_volcengine_unchanged(env):
     assert s["provider"] == "volcengine"
     assert s["chat_model"] == "deepseek-v4-flash-ga"      # 沿用原默认名
     assert s["base_url"].endswith("/api/coding/v3")
+    from agentscope.model import VolcengineChatModel
+
     model = build_chat_model(stream=False)
-    assert type(model).__name__ == "VolcengineChatModel"
+    # 工单 01：构造出的是 InstrumentedVolcengineChatModel（观测埋点子类），
+    # 行为同构于基类，用 isinstance 断言"选对了 provider 家族"。
+    assert isinstance(model, VolcengineChatModel)
+    assert type(model).__name__ == "InstrumentedVolcengineChatModel"
     assert model.stream is False
     # 没配开关时不往请求体里塞任何新字段
     assert model.parameters.model_dump(exclude_none=True) == {}
@@ -57,8 +62,11 @@ def test_deepseek_provider_builds_deepseek_model(env):
     s = get_settings()
     assert s["base_url"] == "https://api.deepseek.com"    # 官方默认，无需手填
     assert s["chat_model"] == "deepseek-flash"            # 2026 新模型名
+    from agentscope.model import DeepSeekChatModel
+
     model = build_chat_model(stream=False)
-    assert type(model).__name__ == "DeepSeekChatModel"
+    assert isinstance(model, DeepSeekChatModel)
+    assert type(model).__name__ == "InstrumentedDeepSeekChatModel"
     assert model.model == "deepseek-flash"
 
 
@@ -69,7 +77,11 @@ def test_openai_provider_requires_base_url_and_model(env):
         get_settings()                      # 故意不给默认值：别静默打到官方计费
     env.setenv("OPENAI_BASE_URL", "http://localhost:8000/v1")
     env.setenv("OPENAI_CHAT_MODEL", "some-served-model")
-    assert type(build_chat_model()).__name__ == "OpenAIChatModel"
+    from agentscope.model import OpenAIChatModel
+
+    model = build_chat_model()
+    assert isinstance(model, OpenAIChatModel)
+    assert type(model).__name__ == "InstrumentedOpenAIChatModel"
 
 
 def test_missing_key_names_the_variable_to_set(env):

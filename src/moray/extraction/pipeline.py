@@ -16,6 +16,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 
 from ..schema import (
     Entity,
@@ -25,9 +27,17 @@ from ..schema import (
     Span,
     domain_fingerprint,
 )
+from .chunk_metrics import (
+    FINISH_CACHE_HIT,
+    FINISH_UNKNOWN,
+    ChunkCallMetrics,
+    DocumentMetrics,
+)
 from .chunking import Chunk
 from .document import Document, ExtractionOutput, Usage
-from .extractor import Extractor
+from .extractor import ExtractionError, Extractor
+
+logger = logging.getLogger(__name__)
 
 
 def remap_spans(result: ExtractionResult, chunk: Chunk) -> ExtractionResult:
@@ -151,13 +161,44 @@ class ChunkedExtractionPipeline:
         except Exception:  # noqa: BLE001 假对象/非 DomainSpec：退回可用标识
             return f"code:{getattr(domain, 'code', 'unknown')}"
 
-    async def _extract_one_chunk(self, chunk: Chunk) -> tuple[ExtractionResult, Usage, str]:
-        """抽单个块（带限流）。返回换算后的结果、用量、块 id。
+    async def _extract_chunk_output(
+        self, mini_doc: Document, chunk: Chunk,
+    ) -> tuple[ExtractionOutput, bool]:
+        """取该块的【块内】抽取产物，返回 (产物, 是否命中内容级缓存)。
 
-        有缓存时以 (领域指纹, 模型名, 块正文) 为键取【块内】产物：命中则不发起
-        模型调用，用量只记一次 cache_hits；偏移换算仍在缓存之外做，语义不变。
+        有缓存时以 (领域指纹, 模型名, 块正文) 为键查/单飞；命中则不发起模型调用。
+        偏移换算（remap_spans）在缓存之外做，命中与未命中的结果语义完全一致。
         """
+        if self.result_cache is None:
+            return await self.extractor.extract(mini_doc), False
+
+        fingerprint = self._domain_fingerprint()
+        model_name = getattr(self.extractor, "model_name", "") or ""
+
+        async def _do_extract() -> ExtractionOutput:
+            return await self.extractor.extract(mini_doc)
+
+        return await self.result_cache.get_or_extract(
+            fingerprint, model_name, chunk.text, _do_extract)
+
+    async def _extract_one_chunk(
+        self, chunk: Chunk, metrics: DocumentMetrics,
+    ) -> tuple[ExtractionResult | None, Usage, str, ChunkCallMetrics | None]:
+        """抽单个块（带限流）。
+
+        返回 (换算后的结果|None, 用量, 块 id, 分块度量)。结果为 None 表示
+        该块多次尝试后仍失败（度量里带 error/截断信号），由调用方决定是否容忍。
+
+        缓存（05）× 度量（01）的交叉语义：命中缓存不发起模型调用、不计真实
+        token（用量只记一次 cache_hits），但仍为该块落一条 ChunkCallMetrics
+        （finish_reason=cache_hit、attempts=0、token 全 0）——文档级"每块一条"
+        的口径不能被缓存打破，否则 chunk_calls 会随缓存命中率漂移、看板失去可比性。
+        """
+        # 排队耗时：从 worker 被创建（事件循环开始调度它）到拿到信号量。
+        # 这是"时间花在哪"的第一跳——并发配额/RPM 限流造成的等待都在这里显形。
+        queued_at = time.perf_counter()
         async with self.sem:
+            wait_s = time.perf_counter() - queued_at
             # 复用 Extractor：把一个 chunk 当成一篇微型文档
             mini_doc = Document(
                 id=chunk.id,
@@ -165,24 +206,68 @@ class ChunkedExtractionPipeline:
                 source="chunk",
                 domain_code=self.extractor.domain.code,
             )
+            # 缓存与外层 try 的顺序很关键：命中缓存时不会抛抽取异常，而缓存
+            # 未命中时 Extractor 的 ExtractionError 必须走下面同一条失败路径
+            # （把该块已花 token 计入文档用量 + 把度量挂到异常上），不能被缓存层吞掉。
+            try:
+                output, hit = await self._extract_chunk_output(mini_doc, chunk)
+            except ExtractionError as exc:
+                record = exc.metrics
+                if record is not None:
+                    # Extractor 不知道排队耗时，在这一层补上
+                    record.wait_s = wait_s
+                    metrics.add(record)
+                    if record.truncated:
+                        logger.error(
+                            "分块最终因长度截断失败 event=chunk_truncated "
+                            "chunk_id=%s attempts=%d out_tokens=%d truncated=True",
+                            chunk.id, record.attempts, record.output_tokens,
+                            extra={"event": "chunk_truncated", "truncated": True,
+                                   "chunk_id": chunk.id,
+                                   "attempts": record.attempts},
+                        )
+                # 失败块已经花掉的 token 也要进文档用量：只记成功块会让
+                # 成本被系统性低估（尤其在截断导致整块返工失败时）。
+                failed_usage = Usage(
+                    input_tokens=record.input_tokens,
+                    output_tokens=record.output_tokens,
+                    cached_input_tokens=record.cached_input_tokens,
+                ) if record is not None else Usage()
+                return None, failed_usage, chunk.id, record
 
-            if self.result_cache is None:
-                output = await self.extractor.extract(mini_doc)
+            if hit:
+                # 命中：还原结果但不计真实 token，只标记一次缓存来源；
+                # 度量仍要为该块落一条（见方法 docstring 的口径说明）。
+                m = ChunkCallMetrics(
+                    chunk_id=chunk.id,
+                    attempts=0,
+                    finish_reason=FINISH_CACHE_HIT,
+                    input_tokens=0,
+                    output_tokens=0,
+                    cached_input_tokens=0,
+                    wait_s=wait_s,
+                    prefill_s=None,
+                    decode_s=None,
+                )
+                metrics.add(m)
+                return (remap_spans(output.result, chunk),
+                        Usage(cache_hits=1), chunk.id, m)
+
+            m = output.call_metrics
+            if m is not None:
+                m.chunk_id = chunk.id
+                m.wait_s = wait_s
             else:
-                fingerprint = self._domain_fingerprint()
-                model_name = getattr(self.extractor, "model_name", "") or ""
-
-                async def _do_extract() -> ExtractionOutput:
-                    return await self.extractor.extract(mini_doc)
-
-                output, hit = await self.result_cache.get_or_extract(
-                    fingerprint, model_name, chunk.text, _do_extract)
-                if hit:
-                    # 命中：还原结果，但不计真实 token，只标记一次缓存来源。
-                    usage = Usage(cache_hits=1)
-                    return remap_spans(output.result, chunk), usage, chunk.id
-
-            return remap_spans(output.result, chunk), output.usage, chunk.id
+                # 不经标准度量路径的兜底（正常 Extractor 不会走到这）
+                m = ChunkCallMetrics(
+                    chunk_id=chunk.id, attempts=output.attempts,
+                    finish_reason=FINISH_UNKNOWN,
+                    input_tokens=output.usage.input_tokens,
+                    output_tokens=output.usage.output_tokens,
+                    cached_input_tokens=output.usage.cached_input_tokens,
+                    wait_s=wait_s, prefill_s=None, decode_s=None)
+            metrics.add(m)
+            return remap_spans(output.result, chunk), output.usage, chunk.id, m
 
     async def run(
         self,
@@ -190,27 +275,49 @@ class ChunkedExtractionPipeline:
         chunks: list[Chunk],
         *,
         on_chunk=None,
+        raise_on_chunk_error: bool = True,
     ) -> ExtractionOutput:
-        """并发抽取所有块，换算偏移后归并。on_chunk(done,total,chunk_id) 可做进度回调。"""
+        """并发抽取所有块，换算偏移后归并。on_chunk(done,total,chunk_id) 可做进度回调。
+
+        raise_on_chunk_error：某块重试耗尽时默认抛异常（与历史行为一致）；
+        批量/看板路径需要"失败也落一条度量"时传 False，失败块被跳过、其余块
+        照常归并，失败信息留在 document_metrics 里。
+        """
         total = len(chunks)
         usage = Usage()
+        metrics = DocumentMetrics(document_id=document.id, n_chunks=total)
 
         # 只有多块才值得预热（单块文档预热等于白烧一次前缀）。
         # 探测请求本身的开销记在触发它这篇文档上：宁可多记，不要漏记成本。
         if self.warm_prefix and total >= 2:
-            usage.add(await self.extractor.warm_prefix())
+            warm_usage = await self.extractor.warm_prefix()
+            usage.add(warm_usage)
+            metrics.warmup = warm_usage.model_dump()
 
-        async def worker(chunk: Chunk) -> tuple[ExtractionResult, Usage, str]:
-            res, u, cid = await self._extract_one_chunk(chunk)
-            if on_chunk:
-                on_chunk(res, cid, total)
-            return res, u, cid
+        async def worker(chunk: Chunk):
+            return await self._extract_one_chunk(chunk, metrics)
 
         settled = await asyncio.gather(*(worker(c) for c in chunks))
 
-        partials = [item[0] for item in settled]
-        for _, u, _ in settled:
+        partials: list[ExtractionResult] = []
+        failed: list[str] = []
+        for res, u, cid, _m in settled:
             usage.add(u)
+            if res is None:
+                failed.append(cid)
+                continue
+            partials.append(res)
+            if on_chunk:
+                on_chunk(res, cid, total)
+
+        if failed and raise_on_chunk_error:
+            # 失败语义与改动前一致（整篇抛错），但度量不能随异常一起蒸发：
+            # 挂上完整的文档级度量，调用方仍能读到截断块数/返工率。
+            err = ExtractionError(
+                f"文档 {document.id} 有 {len(failed)}/{total} 个分块抽取失败："
+                f"{failed[:5]}；分块度量见 document_metrics（可能含截断信号）")
+            err.document_metrics = metrics  # type: ignore[attr-defined]
+            raise err
 
         merged = naive_merge(partials)
         return ExtractionOutput(
@@ -220,4 +327,5 @@ class ChunkedExtractionPipeline:
             model_name=self.extractor.model_name,
             usage=usage,
             attempts=total,
+            document_metrics=metrics,
         )

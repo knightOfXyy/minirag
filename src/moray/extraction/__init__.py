@@ -15,6 +15,14 @@ from .local_backfill import (
     BackfillReport,
     backfill_provenance,
 )
+from .chunk_metrics import (
+    FINISH_CACHE_HIT,
+    FINISH_LENGTH,
+    FINISH_UNKNOWN,
+    ChunkCallMetrics,
+    DocumentMetrics,
+    is_length_finish_reason,
+)
 from .pipeline import ChunkedExtractionPipeline, naive_merge, remap_spans
 from .quality import verify_spans
 from .rule_extractor import (
@@ -34,6 +42,12 @@ __all__ = [
     "estimate_tokens",
     "split_sentences",
     "ChunkedExtractionPipeline",
+    "ChunkCallMetrics",
+    "DocumentMetrics",
+    "FINISH_CACHE_HIT",
+    "FINISH_LENGTH",
+    "FINISH_UNKNOWN",
+    "is_length_finish_reason",
     "naive_merge",
     "remap_spans",
     "ContentResultCache",

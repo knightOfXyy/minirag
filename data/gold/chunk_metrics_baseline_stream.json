@@ -1,0 +1,89 @@
+{
+  "runs": [
+    {
+      "sample": "news_long_002.txt",
+      "mode": "stream",
+      "n_chunks": 3,
+      "wall_s": 18.5903,
+      "chunk_settings": {
+        "threshold_units": 4000,
+        "max_units": 1500,
+        "overlap_units": 200,
+        "concurrency": 4
+      },
+      "summary": {
+        "document_id": "baseline-news_long_002.txt",
+        "n_chunks": 3,
+        "chunk_calls": 3,
+        "total_attempts": 3,
+        "truncated_chunks": 0,
+        "truncation_signals": 0,
+        "rework_rate": 0.0,
+        "reworked_chunks": 0,
+        "wait_s": 1.3e-05,
+        "prefill_s": 2.049943,
+        "decode_s": 26.30638,
+        "input_tokens": 7487,
+        "output_tokens": 9392,
+        "cached_input_tokens": 6912
+      },
+      "chunks": [
+        {
+          "chunk_id": "doc#c0001",
+          "attempts": 1,
+          "finish_reason": "tool_calls",
+          "truncated": false,
+          "input_tokens": 2503,
+          "output_tokens": 1454,
+          "cached_input_tokens": 2304,
+          "wait_s": 6e-06,
+          "prefill_s": 0.679247,
+          "decode_s": 4.223152,
+          "reworked": false,
+          "truncated_attempts": 0,
+          "attempt_finish_reasons": [
+            "tool_calls"
+          ],
+          "error": ""
+        },
+        {
+          "chunk_id": "doc#c0000",
+          "attempts": 1,
+          "finish_reason": "tool_calls",
+          "truncated": false,
+          "input_tokens": 2497,
+          "output_tokens": 1622,
+          "cached_input_tokens": 2304,
+          "wait_s": 3e-06,
+          "prefill_s": 0.625775,
+          "decode_s": 4.70087,
+          "reworked": false,
+          "truncated_attempts": 0,
+          "attempt_finish_reasons": [
+            "tool_calls"
+          ],
+          "error": ""
+        },
+        {
+          "chunk_id": "doc#c0002",
+          "attempts": 1,
+          "finish_reason": "tool_calls",
+          "truncated": false,
+          "input_tokens": 2487,
+          "output_tokens": 6316,
+          "cached_input_tokens": 2304,
+          "wait_s": 4e-06,
+          "prefill_s": 0.744921,
+          "decode_s": 17.382358,
+          "reworked": false,
+          "truncated_attempts": 0,
+          "attempt_finish_reasons": [
+            "tool_calls"
+          ],
+          "error": ""
+        }
+      ],
+      "output_tokens_mean": 3130.67
+    }
+  ]
+}

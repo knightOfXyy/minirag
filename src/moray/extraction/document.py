@@ -8,9 +8,12 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field, computed_field
 
 from ..schema import ExtractionResult
+from .chunk_metrics import ChunkCallMetrics, DocumentMetrics
 
 
 class Document(BaseModel):
@@ -75,3 +78,29 @@ class ExtractionOutput(BaseModel):
         default=None,
         description="本地确定性回填信号（仅 MORAY_LOCAL_BACKFILL 打开时有值）",
     )
+    # 分块级度量（工单 01）：对单次抽取而言是"这一块"的调用记录；
+    # 整篇/分块流水线在更上层聚合成 DocumentMetrics。默认 None 以兼容
+    # 不经 Extractor 构造输出的离线假路径；真实路径恒有值。
+    call_metrics: ChunkCallMetrics | None = Field(
+        default=None,
+        description="本次（=单块）模型调用的分块级度量：结束原因/分段耗时/截断信号")
+    document_metrics: DocumentMetrics | None = Field(
+        default=None,
+        description="分块流水线文档级度量：每块一条记录 + 聚合摘要（工单 01）")
+
+    def model_post_init(self, __context: Any) -> None:
+        # pydantic v2 不会把 dataclass 当嵌套模型校验，显式转换保持类型可信
+        if self.call_metrics is not None and not isinstance(
+                self.call_metrics, ChunkCallMetrics):
+            object.__setattr__(
+                self, "call_metrics",
+                ChunkCallMetrics(**dict(self.call_metrics)))
+        if self.document_metrics is not None and not isinstance(
+                self.document_metrics, DocumentMetrics):
+            data = dict(self.document_metrics)
+            data["chunks"] = [
+                c if isinstance(c, ChunkCallMetrics)
+                else ChunkCallMetrics(**dict(c))
+                for c in data.get("chunks", [])]
+            object.__setattr__(
+                self, "document_metrics", DocumentMetrics(**data))

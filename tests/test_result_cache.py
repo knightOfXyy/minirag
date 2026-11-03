@@ -335,6 +335,115 @@ async def test_pipeline_second_run_makes_no_calls_and_matches_exactly():
 
 
 @pytest.mark.asyncio
+async def test_pipeline_cache_hit_still_emits_one_metric_record_per_chunk():
+    """缓存命中不打破文档级"每块一条"度量口径（01 × 05 合并语义）。
+
+    命中块：finish_reason=cache_hit、attempts=0、token 全 0，用量只记 cache_hits；
+    chunk_calls 仍等于块数，看板不会因命中率上升而丢失分块维度。
+    """
+    from moray.extraction import FINISH_CACHE_HIT
+
+    text = _long_text()
+    real = _CountingRealExtractor(
+        DomainSpec(code="general", name="通用",
+                   types=(TypeSpec("ORG", "机构", "机构"),)))
+    cache = ContentResultCache(InMemoryCacheBackend())
+    Document = __import__("moray.extraction.document", fromlist=["Document"]).Document
+    doc = Document(id="docM", text=text, source="t", domain_code="general")
+    chunks = _chunks(text)
+
+    out1 = await _pipeline(real, cache).run(doc, chunks)
+    dm1 = out1.document_metrics
+    assert dm1 is not None
+    assert len(dm1.chunks) == len(chunks)
+    assert dm1.summary()["cache_hit_chunks"] == 0
+    assert all(r.attempts >= 1 and r.input_tokens > 0 for r in dm1.chunks)
+
+    out2 = await _pipeline(real, cache).run(doc, chunks)
+    dm2 = out2.document_metrics
+    assert dm2 is not None
+    # 每块一条记录仍然成立，块 id 覆盖完整
+    assert len(dm2.chunks) == len(chunks)
+    assert {r.chunk_id for r in dm2.chunks} == {c.id for c in chunks}
+    s = dm2.summary()
+    assert s["chunk_calls"] == len(chunks)
+    assert s["cache_hit_chunks"] == len(chunks)
+    assert s["total_attempts"] == 0            # 命中块没有模型尝试
+    assert s["truncated_chunks"] == 0 and s["rework_rate"] == 0.0
+    # 命中不产生真实 token（成本口径不变），只记 cache_hits
+    assert s["input_tokens"] == 0 and s["output_tokens"] == 0
+    assert out2.usage.cache_hits == len(chunks)
+    for rec in dm2.chunks:
+        assert rec.finish_reason == FINISH_CACHE_HIT
+        assert rec.cache_hit is True
+        assert rec.attempts == 0
+        assert rec.input_tokens == rec.output_tokens == 0
+        assert rec.truncated is False and rec.error == ""
+
+
+@pytest.mark.asyncio
+async def test_pipeline_cache_on_failed_chunk_still_counts_tokens_and_metrics():
+    """缓存开启时失败块语义不回退（01 的失败块口径不被 05 覆盖）。
+
+    该块已花的 input/output/cached token 仍要计入文档用量；失败度量要进
+    document_metrics（宽容模式）或挂到异常上（默认整篇抛错）。
+    """
+    from moray.extraction import ChunkCallMetrics, ExtractionError
+
+    text = _long_text()
+    chunks = _chunks(text)
+    failing_id = chunks[0].id
+
+    class _FailOne(_CountingRealExtractor):
+        async def extract(self, document):
+            if document.id == failing_id:
+                raise ExtractionError(
+                    f"块 {document.id} 截断失败", metrics=ChunkCallMetrics(
+                        chunk_id=document.id, attempts=2,
+                        finish_reason="length",
+                        input_tokens=100, output_tokens=50,
+                        cached_input_tokens=10,
+                        wait_s=0.0, prefill_s=None, decode_s=None,
+                        attempt_finish_reasons=["length", "length"],
+                        truncated_attempts=2, error="length"))
+            return await super().extract(document)
+
+    def build():
+        real = _FailOne(DomainSpec(
+            code="general", name="通用",
+            types=(TypeSpec("ORG", "机构", "机构"),)))
+        return real, ContentResultCache(InMemoryCacheBackend())
+
+    Doc = __import__("moray.extraction.document", fromlist=["Document"]).Document
+
+    # 宽容模式：其余块照常归并，失败块的 token 与度量都不丢
+    real, cache = build()
+    out = await _pipeline(real, cache).run(
+        Doc(id="docF", text=text, source="t", domain_code="general"),
+        chunks, raise_on_chunk_error=False)
+    dm = out.document_metrics
+    assert dm is not None and len(dm.chunks) == len(chunks)
+    failed = [c for c in dm.chunks if c.error]
+    assert len(failed) == 1 and failed[0].chunk_id == failing_id
+    assert failed[0].truncated is True and failed[0].attempts == 2
+    # 失败块已花 token 进文档用量：其它块各 3/2 = 3*(n-1) 再叠加 100/50
+    n_ok = len(chunks) - 1
+    assert out.usage.input_tokens == 3 * n_ok + 100
+    assert out.usage.output_tokens == 2 * n_ok + 50
+    assert dm.summary()["truncated_chunks"] == 1
+
+    # 默认整篇抛错语义不变，且异常上仍挂着完整文档级度量
+    real2, cache2 = build()
+    with pytest.raises(ExtractionError) as excinfo:
+        await _pipeline(real2, cache2).run(
+            Doc(id="docF2", text=text, source="t", domain_code="general"),
+            chunks)
+    dm2 = getattr(excinfo.value, "document_metrics", None)
+    assert dm2 is not None
+    assert dm2.summary()["truncated_chunks"] == 1
+
+
+@pytest.mark.asyncio
 async def test_pipeline_without_cache_keeps_original_behavior():
     text = _long_text()
     real = _CountingRealExtractor(
