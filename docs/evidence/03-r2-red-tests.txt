@@ -1,0 +1,149 @@
+工单03 评审r2 修复：先红证据（2026-11-03，提交前实现）
+命令：ARK_API_KEY=dummy PYTHONPATH=src pytest -q -p no:cacheprovider
+结果：21 failed, 127 passed, 47 skipped（红用例全部对应评审 finding 1/2/3/4/7/8/9/10）
+说明：ARK_API_KEY=dummy 只用于让 get_settings() 通过；未发起任何模型调用。
+
+失败清单：
+FAILED tests/test_backfill_extractor.py::test_switch_on_backfills_mentions_and_evidence
+FAILED tests/test_backfill_extractor.py::test_chunked_pipeline_gates_relation_merge_by_switch
+FAILED tests/test_confidence_unknown.py::test_slim_to_core_keeps_confidence_unknown
+FAILED tests/test_confidence_unknown.py::test_ingestor_passes_unknown_confidence_through_as_none
+FAILED tests/test_confidence_unknown.py::test_rule_review_flags_evidence_less_relation_when_confidence_unknown
+FAILED tests/test_confidence_unknown.py::test_rule_review_consumes_backfill_block_confidence
+FAILED tests/test_local_backfill.py::test_same_name_different_type_is_ambiguous_and_unattributed
+FAILED tests/test_local_backfill.py::test_relation_evidence_cross_sentence_is_empty_not_fabricated
+FAILED tests/test_local_backfill.py::test_partial_overlap_short_name_does_not_leak_into_long_name
+FAILED tests/test_local_backfill.py::test_relation_evidence_splits_ascii_period_sentences
+FAILED tests/test_local_backfill.py::test_relation_evidence_handles_document_starting_with_whitespace
+FAILED tests/test_local_backfill.py::test_unmatched_aliases_absorbed_by_longer_name_is_not_hallucination
+FAILED tests/test_local_backfill.py::test_signal_keys_keep_type_so_same_name_different_type_does_not_collide
+FAILED tests/test_local_backfill.py::test_merged_report_shifts_block_offsets_and_tags_chunk
+FAILED tests/test_observability.py::test_slim_output_with_ungrounded_entity_lowers_quality_score
+FAILED tests/test_orchestration.py::test_fulltext_review_consumes_backfill_block_confidence
+FAILED tests/test_orchestration.py::test_chunked_review_consumes_pipeline_backfill_signal
+FAILED tests/test_pipeline_parts.py::test_switch_off_merge_matches_pre_change_full_field_golden
+FAILED tests/test_run_recorder.py::test_from_pipeline_carries_backfill_grounding_signal
+FAILED tests/test_schema.py::test_entity_defaults - AssertionError: assert 0....
+FAILED tests/test_slim_schema.py::test_slim_schema_accepts_logical_only_output
+
+关键失败片段（完整输出见下）：
+ssssss.F...F.............F.FFF.sssssssssss...................ssssssssss. [ 36%]
+...............F..F...........F.FFFFF.sssssssssssssssss......F.........F [ 73%]
+Fsss.....F........................FF........F......                      [100%]
+=================================== FAILURES ===================================
+________________ test_switch_on_backfills_mentions_and_evidence ________________
+
+    async def test_switch_on_backfills_mentions_and_evidence():
+        out = await _run(True)
+        res = out.result
+        by_name = {e.name: e for e in res.entities}
+    
+        # 阿里巴巴出现 2 次
+        assert [m.surface for m in by_name["阿里巴巴"].mentions] == ["阿里巴巴", "阿里巴巴"]
+        # 瘦身模型不输出 confidence：内核必须是「未知」(None)，不是 0.0 假值
+>       assert all(e.confidence is None for e in res.entities)
+E       assert False
+E        +  where False = all(<generator object test_switch_on_backfills_mentions_and_evidence.<locals>.<genexpr> at 0x7b911411cd40>)
+
+tests/test_backfill_extractor.py:82: AssertionError
+_____________ test_chunked_pipeline_gates_relation_merge_by_switch _____________
+
+    async def test_chunked_pipeline_gates_relation_merge_by_switch():
+        """开关关闭时归并走 262319b 旧语义（先见赢家）；打开才合并后见证据。"""
+        from types import SimpleNamespace
+    
+        from moray.extraction import Chunk, ChunkedExtractionPipeline
+        from moray.extraction.document import ExtractionOutput, Usage
+        from moray.schema import ExtractionResult as ER
+        from moray.schema import Span
+    
+        full = "甲投乙。无关句。"
+        s1 = full.index("。") + 1
+        chunks = [
+            Chunk(id="d#c0", text=full[:s1], start=0, end=s1, index=0),
+            Chunk(id="d#c1", text=full[s1:], start=s1, end=len(full), index=1),
+        ]
+    
+        class _PartialFake:
+            def __init__(self, flag):
+                self.local_backfill = flag
+                self.domain = SimpleNamespace(code="general")
+                self.model_name = "fake"
+    
+            async def extract(self, document):
+                evidence = None
+                if document.text.startswith("无关"):
+                    evidence = Span(start=0, end=2, text="无关")
+                res = ER(
+                    entities=[Entity(name="甲", type="ORG"),
+                              Entity(name="乙", type="ORG")],
+                    relations=[Relation(head="甲", predicate="投", tail="乙",
+                                        evidence_span=evidence)])
+                return ExtractionOutput(
+                    document_id=document.id, domain_code="general",
+                    result=res, model_name="fake", usage=Usage(), attempts=1)
+    
+        off = await ChunkedExtractionPipeline(
+            _PartialFake(False), concurrency=1).run(Document(id="d", text=full), chunks)
+        assert len(off.result.relations) == 1
+>       assert off.result.relations[0].evidence_span is None
+E       AssertionError: assert Span(start=4, end=6, text='无关') is None
+E        +  where Span(start=4, end=6, text='无关') = Relation(head='甲', predicate='投', tail='乙', evidence_span=Span(start=4, end=6, text='无关'), confidence=0.0).evidence_span
+
+tests/test_backfill_extractor.py:258: AssertionError
+__________________ test_slim_to_core_keeps_confidence_unknown __________________
+
+    def test_slim_to_core_keeps_confidence_unknown():
+        model = build_extraction_model(GENERAL_DOMAIN, slim=True)
+        dyn = model.model_validate({
+            "entities": [{"name": "华为", "type": "ORG"}],
+            "relations": [{"head": "华为", "predicate": "位于", "tail": "深圳"}],
+        })
+        core = to_core_result(dyn)
+>       assert core.entities[0].confidence is None
+E       AssertionError: assert 0.0 is None
+E        +  where 0.0 = Entity(name='华为', type='ORG', aliases=[], mentions=[], confidence=0.0, attributes={}, description='').confidence
+
+tests/test_confidence_unknown.py:27: AssertionError
+___________ test_ingestor_passes_unknown_confidence_through_as_none ____________
+
+    async def test_ingestor_passes_unknown_confidence_through_as_none():
+        from moray.extraction.document import ExtractionOutput
+    
+        store = _FakeStore()
+        ing = Ingestor(store, embedder=_FakeEmbedder())
+        output = ExtractionOutput(
+            document_id="d1",
+            domain_code="general",
+            result=ExtractionResult(
+                entities=[Entity(name="华为", type="ORG")],
+                relations=[Relation(head="华为", predicate="位于", tail="深圳")],
+            ),
+        )
+>       await ing.ingest(output)
+
+tests/test_confidence_unknown.py:78: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/moray/kb/ingestor.py:143: in ingest
+    dst_id = await self._resolve(rel.tail, domain, report)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <moray.kb.ingestor.Ingestor object at 0x7b91142ae630>, name = '深圳'
+domain = 'general'
+report = IngestReport(entities_written=1, relations_written=0, relations_skipped=[], entity_ids={'华为': 1}, merged=[], queued=[], created=['华为'])
+
+    async def _resolve(
+        self, name: str, domain: str, report: IngestReport
+    ) -> int | None:
+        """把关系里的实体名解析成 id：先看本批，再查库，最后按需建占位实体。"""
+        if name in report.entity_ids:
+            return report.entity_ids[name]
+    
+>       eid = await self.store.get_entity_id(name, domain_code=domain)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: '_FakeStore' object has no attribute 'get_entity_id'
+
+src/moray/kb/ingestor.py:180: AttributeError
+____ test_rule_review_flags_evidence_less_relation_when_confidence_unknown _____
+

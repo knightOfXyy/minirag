@@ -1,0 +1,42 @@
+{
+  "baseline_commit": "262319b",
+  "note": "naive_merge 在开关关闭时的逐字段输出快照（由 262319b 源码生成，非自证）",
+  "input": "tests/test_pipeline_parts.py::_merge_golden_inputs",
+  "legacy_merged": {
+    "entities": [
+      {
+        "name": "甲",
+        "type": "ORG",
+        "aliases": [
+          "甲甲",
+          "甲总"
+        ],
+        "mentions": [],
+        "confidence": 0.9,
+        "attributes": {
+          "k": "a",
+          "x": 1
+        },
+        "description": ""
+      },
+      {
+        "name": "乙",
+        "type": "PER",
+        "aliases": [],
+        "mentions": [],
+        "confidence": 0.6,
+        "attributes": {},
+        "description": ""
+      }
+    ],
+    "relations": [
+      {
+        "head": "甲",
+        "predicate": "投",
+        "tail": "乙",
+        "evidence_span": null,
+        "confidence": 0.4
+      }
+    ]
+  }
+}

@@ -259,3 +259,59 @@ async def test_chunked_team_exposes_backfill_signal():
     assert isinstance(out.backfill, dict)
     assert out.backfill["entities_total"] >= 1
     assert out.backfill["entities_grounded"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_fulltext_review_consumes_backfill_block_confidence():
+    """整篇路径：审校在抽取后读 sink 里的确定性命中信号并据此拦截。"""
+    sink: dict = {}
+
+    async def closure(text, feedback):
+        sink["backfill"] = {
+            "block_confidence": 0.0, "entities_total": 1,
+            "entities_grounded": 0, "ambiguous_mentions": [],
+            "unmatched_aliases": [],
+        }
+        return ExtractionResult(entities=[Entity(name="幽灵公司", type="ORG")])
+
+    out = await run_extraction_team(
+        TEXT, extractor=closure, max_iters=1, backfill_sink=sink)
+    assert out.accepted is False
+    assert any("命中" in issue for issue in out.review.issues)
+
+
+@pytest.mark.asyncio
+async def test_chunked_review_consumes_pipeline_backfill_signal():
+    """分块路径：pipeline 汇总的回填信号要进审校，而不是只挂在返回值上。"""
+    from moray.extraction.document import ExtractionOutput
+    from moray.extraction.local_backfill import backfill_provenance
+    from moray.schema import ExtractionResult as ER
+
+    class _GhostReal:
+        def __init__(self):
+            self.domain = type("D", (), {"code": "case_domain"})()
+            self.model_name = "fake"
+
+        async def extract(self, document):
+            local, report = backfill_provenance(
+                ER(entities=[Entity(name="幽灵公司", type="ORG")]),
+                document.text)
+            return ExtractionOutput(
+                document_id=document.id, domain_code="case_domain",
+                result=local, model_name=self.model_name, attempts=1,
+                backfill=report.to_dict())
+
+    text = "华为在深圳。" * 200
+    provider = _FakeProvider(_GhostReal())
+    sink: dict = {}
+
+    async def closure(text, feedback):
+        raise AssertionError("chunk path should not invoke fulltext closure")
+
+    out = await run_chunked_team(
+        text, extractor=closure, provider=provider, domain_code="case_domain",
+        chunk_threshold_units=10, chunk_max_units=20, chunk_overlap_units=0,
+        backfill_sink=sink)
+    assert out.accepted is False
+    assert any("命中" in issue for issue in out.review.issues)
+    assert sink["backfill"]["block_confidence"] == 0.0

@@ -151,7 +151,7 @@ def test_same_name_different_type_is_ambiguous_and_unattributed():
     # 两个实体都拿不到 mention（归属不确定，不猜）
     for e in result.entities:
         assert e.mentions == []
-        assert e.confidence == 0.0
+        assert e.confidence is None
 
     assert len(report.ambiguous_mentions) == 2
     for am in report.ambiguous_mentions:
@@ -223,7 +223,7 @@ def test_relation_evidence_cross_sentence_is_empty_not_fabricated():
     )
     r = result.relations[0]
     assert r.evidence_span is None
-    assert r.confidence == 0.0
+    assert r.confidence is None
     assert report.relations_with_evidence == 0
     assert report.relations_without_evidence == [
         {"head": "张三", "predicate": "创立", "tail": "腾飞公司"}
@@ -519,6 +519,178 @@ def test_overlap_resolution_is_linearish_on_20k_text():
     assert by_name["阿里巴巴"].mentions == []
     assert verify_spans(result, text).ok
     assert report.ambiguous_mentions == []
+
+
+# ---------------------------------------------------------------------------
+# 评审修复（第 2 轮）回归用例
+# ---------------------------------------------------------------------------
+def test_partial_overlap_short_name_does_not_leak_into_long_name():
+    """部分重叠（长名 0-4、短名 3-5）也必须整段判占用，短名不能漏进长名内部。"""
+    text = "阿里巴巴巴"
+    result, _ = backfill_provenance(
+        ExtractionResult(entities=[
+            Entity(name="阿里巴巴", type="ORG"),
+            Entity(name="巴巴", type="ORG"),
+        ]),
+        text,
+    )
+    by_name = {e.name: e for e in result.entities}
+    assert [m.surface for m in by_name["阿里巴巴"].mentions] == ["阿里巴巴"]
+    assert by_name["巴巴"].mentions == []
+
+    text2 = "北京大学的生活"
+    result2, _ = backfill_provenance(
+        ExtractionResult(entities=[
+            Entity(name="北京大学", type="ORG"),
+            Entity(name="大学生", type="MISC"),
+        ]),
+        text2,
+    )
+    by_name2 = {e.name: e for e in result2.entities}
+    assert [m.surface for m in by_name2["北京大学"].mentions] == ["北京大学"]
+    assert by_name2["大学生"].mentions == []
+
+
+def test_partial_overlap_does_not_block_independent_occurrence():
+    """整段占用只否决真正重叠的命中；独立出现仍归短名。"""
+    text = "巴巴在阿里巴巴工作。"
+    result, _ = backfill_provenance(
+        ExtractionResult(entities=[
+            Entity(name="阿里巴巴", type="ORG"),
+            Entity(name="巴巴", type="ORG"),
+        ]),
+        text,
+    )
+    by_name = {e.name: e for e in result.entities}
+    assert [m.surface for m in by_name["阿里巴巴"].mentions] == ["阿里巴巴"]
+    assert [m.surface for m in by_name["巴巴"].mentions] == ["巴巴"]
+    assert by_name["巴巴"].mentions[0].span.start == 0
+
+
+def test_relation_evidence_splits_ascii_period_sentences():
+    """英文句号也是句子边界：Carol-Bob 的证据不能扩到上一句。"""
+    text = "Alice met Bob in Paris. Carol met Bob in London."
+    result, report = backfill_provenance(
+        ExtractionResult(
+            entities=[
+                Entity(name="Alice", type="PER"),
+                Entity(name="Bob", type="PER"),
+                Entity(name="Carol", type="PER"),
+            ],
+            relations=[
+                Relation(head="Alice", predicate="met", tail="Bob"),
+                Relation(head="Carol", predicate="met", tail="Bob"),
+            ],
+        ),
+        text,
+    )
+    by_key = {(r.head, r.tail): r for r in result.relations}
+    carol = by_key[("Carol", "Bob")].evidence_span
+    assert carol is not None
+    assert carol.text == "Carol met Bob in London."
+    assert text[carol.start:carol.end] == carol.text
+    alice = by_key[("Alice", "Bob")].evidence_span
+    assert alice is not None and alice.text == "Alice met Bob in Paris."
+    assert report.relations_with_evidence == 2
+
+
+def test_relation_evidence_handles_document_starting_with_whitespace():
+    """正文以换行/空白开头时，句切不能返回空导致同句证据丢失。"""
+    text = "\n华为位于深圳。"
+    result, report = backfill_provenance(
+        ExtractionResult(
+            entities=[Entity(name="华为", type="ORG"), Entity(name="深圳", type="LOC")],
+            relations=[Relation(head="华为", predicate="位于", tail="深圳")],
+        ),
+        text,
+    )
+    ev = result.relations[0].evidence_span
+    assert ev is not None
+    assert ev.text == "华为位于深圳。"
+    assert text[ev.start:ev.end] == ev.text
+    assert report.relations_with_evidence == 1
+    assert report.relations_without_evidence == []
+
+
+def test_unmatched_aliases_absorbed_by_longer_name_is_not_hallucination():
+    """别名作为长名前缀/子串真实出现时，不能被当成正文不存在的幻觉别名。"""
+    result, report = backfill_provenance(
+        ExtractionResult(entities=[
+            Entity(name="阿里巴巴", type="ORG", aliases=["阿里"]),
+        ]),
+        "阿里巴巴成立于杭州。",
+    )
+    assert report.unmatched_aliases == []
+    assert [m.surface for m in result.entities[0].mentions] == ["阿里巴巴"]
+
+
+def test_signal_keys_keep_type_so_same_name_different_type_does_not_collide():
+    """同名不同类型的候选/统计键必须保留 type，不能互相覆盖。"""
+    from moray.extraction.local_backfill import entity_signal_key
+
+    text = "苹果"
+    result, report = backfill_provenance(
+        ExtractionResult(entities=[
+            Entity(name="苹果", type="ORG"),
+            Entity(name="苹果", type="MISC"),
+        ]),
+        text,
+    )
+    assert report.matched_literals == {}
+    assert len(report.ambiguous_mentions) == 1
+    assert report.ambiguous_mentions[0].candidates == [
+        entity_signal_key(Entity(name="苹果", type="ORG")),
+        entity_signal_key(Entity(name="苹果", type="MISC")),
+    ]
+
+    _, grounded = backfill_provenance(
+        ExtractionResult(entities=[Entity(name="华为", type="ORG")]),
+        "华为在深圳。",
+    )
+    assert grounded.matched_literals == {
+        entity_signal_key(Entity(name="华为", type="ORG")): 1,
+    }
+
+
+def test_merged_report_shifts_block_offsets_and_tags_chunk():
+    """跨块汇总：歧义/关系候选偏移必须平移到全局并带 chunk_id，未命中关系不重复堆叠。"""
+    from moray.extraction.local_backfill import merge_backfill_reports
+
+    chunk0 = "张三来了。"
+    chunk1 = "腾飞公司发布。苹果很好吃。"
+    _, r0 = backfill_provenance(
+        ExtractionResult(
+            entities=[Entity(name="张三", type="PER"),
+                      Entity(name="腾飞公司", type="ORG")],
+            relations=[Relation(head="张三", predicate="创立", tail="腾飞公司")],
+        ),
+        chunk0,
+    )
+    _, r1 = backfill_provenance(
+        ExtractionResult(
+            entities=[Entity(name="张三", type="PER"),
+                      Entity(name="腾飞公司", type="ORG"),
+                      Entity(name="苹果", type="ORG"),
+                      Entity(name="苹果", type="MISC")],
+            relations=[Relation(head="张三", predicate="创立", tail="腾飞公司")],
+        ),
+        chunk1,
+    )
+    merged = merge_backfill_reports([
+        BackfillReport.from_dict(r0.to_dict(), chunk_start=0, chunk_id="d#c0"),
+        BackfillReport.from_dict(r1.to_dict(), chunk_start=len(chunk0),
+                                 chunk_id="d#c1"),
+    ])
+
+    # 歧义出现在第二个块的块内 [3:5] -> 汇总后是全局 [len(chunk0)+3:...]
+    assert len(merged.ambiguous_mentions) == 1
+    am = merged.ambiguous_mentions[0]
+    assert am.start == len(chunk0) + chunk1.index("苹果")
+    assert am.chunk_id == "d#c1"
+
+    # 未命中关系按三元组去重，不同块的 chunk 都记录
+    assert len(merged.relations_without_evidence) == 1
+    assert merged.relations_without_evidence[0]["chunk_ids"] == ["d#c0", "d#c1"]
 
 
 def test_relation_evidence_not_fabricated_across_chunks():

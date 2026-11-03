@@ -21,7 +21,8 @@ def test_entity_defaults():
     e = Entity(name="阿里巴巴", type="ORG")
     assert e.aliases == []
     assert e.mentions == []
-    assert e.confidence == 0.0
+    # 未知置信度必须是 None：slim 模式模型不输出该字段，不能被当成 0.0 真实值
+    assert e.confidence is None
     assert e.attributes == {}
 
 
