@@ -73,14 +73,14 @@ def test_naive_merge_does_not_drop_later_relation_evidence():
         relations=[Relation(head="甲", predicate="投", tail="乙",
                             evidence_span=ev, confidence=0.8)],
     )
-    merged = naive_merge([a, b])
+    merged = naive_merge([a, b], merge_relation_duplicates=True)
     assert len(merged.relations) == 1
     r = merged.relations[0]
     assert r.evidence_span is not None
     assert (r.evidence_span.start, r.evidence_span.end) == (0, 4)
     assert r.confidence == 0.8
     # 反向顺序（先有证据）也不能丢
-    merged2 = naive_merge([b, a])
+    merged2 = naive_merge([b, a], merge_relation_duplicates=True)
     assert merged2.relations[0].evidence_span is not None
 
 
@@ -117,8 +117,8 @@ def test_switch_off_merge_matches_pre_change_full_field_golden():
     merged = naive_merge([a, b], merge_relation_duplicates=False)
     assert merged.model_dump() == golden["legacy_merged"]
 
-    # 开关打开（默认改进版）才把后见证据/更高置信度并进重复三元组
-    improved = naive_merge([a, b])
+    # 开关打开（显式传入）才把后见证据/更高置信度并进重复三元组
+    improved = naive_merge([a, b], merge_relation_duplicates=True)
     relation = improved.relations[0]
     assert relation.evidence_span is not None
     assert relation.confidence == 0.9

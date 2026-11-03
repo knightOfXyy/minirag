@@ -1,0 +1,520 @@
+{
+  "baseline_commit": "262319b",
+  "note": "由 262319b 源码 + 固定模型桩生成，非被测实现自证",
+  "full_payload": {
+    "entities": [
+      {
+        "name": "阿里巴巴",
+        "type": "ORG",
+        "aliases": [
+          "阿里"
+        ],
+        "mentions": [
+          {
+            "surface": "阿里巴巴",
+            "span": {
+              "start": 0,
+              "end": 4,
+              "text": "阿里巴巴"
+            }
+          },
+          {
+            "surface": "阿里",
+            "span": {
+              "start": 5,
+              "end": 7,
+              "text": "阿里"
+            }
+          }
+        ],
+        "confidence": 0.8,
+        "attributes": {
+          "hq": "杭州"
+        },
+        "description": "电商公司"
+      },
+      {
+        "name": "马云",
+        "type": "PER",
+        "aliases": [],
+        "mentions": [
+          {
+            "surface": "马云",
+            "span": {
+              "start": 8,
+              "end": 10,
+              "text": "马云"
+            }
+          }
+        ],
+        "confidence": 0.6,
+        "attributes": {},
+        "description": ""
+      }
+    ],
+    "relations": [
+      {
+        "head": "马云",
+        "predicate": "创立",
+        "tail": "阿里巴巴",
+        "evidence_span": {
+          "start": 0,
+          "end": 10,
+          "text": "阿里巴巴由马云创立"
+        },
+        "confidence": 0.7
+      }
+    ]
+  },
+  "full_text": "阿里巴巴由马云创立。阿里巴巴总部位于杭州。",
+  "extraction_output": {
+    "document_id": "d",
+    "domain_code": "general",
+    "result": {
+      "entities": [
+        {
+          "name": "阿里巴巴",
+          "type": "ORG",
+          "aliases": [
+            "阿里"
+          ],
+          "mentions": [
+            {
+              "surface": "阿里巴巴",
+              "span": {
+                "start": 0,
+                "end": 4,
+                "text": "阿里巴巴"
+              }
+            },
+            {
+              "surface": "阿里",
+              "span": {
+                "start": 5,
+                "end": 7,
+                "text": "阿里"
+              }
+            }
+          ],
+          "confidence": 0.8,
+          "attributes": {
+            "hq": "杭州"
+          },
+          "description": ""
+        },
+        {
+          "name": "马云",
+          "type": "PER",
+          "aliases": [],
+          "mentions": [
+            {
+              "surface": "马云",
+              "span": {
+                "start": 8,
+                "end": 10,
+                "text": "马云"
+              }
+            }
+          ],
+          "confidence": 0.6,
+          "attributes": {},
+          "description": ""
+        }
+      ],
+      "relations": [
+        {
+          "head": "马云",
+          "predicate": "创立",
+          "tail": "阿里巴巴",
+          "evidence_span": {
+            "start": 0,
+            "end": 10,
+            "text": "阿里巴巴由马云创立"
+          },
+          "confidence": 0.7
+        }
+      ]
+    },
+    "model_name": "deepseek-v4-flash-ga",
+    "usage": {
+      "input_tokens": 11,
+      "output_tokens": 7,
+      "cached_input_tokens": 0,
+      "cache_hit_rate": 0.0
+    },
+    "attempts": 1
+  },
+  "chunking_cases": [
+    {
+      "text": "",
+      "max_units": 1500,
+      "overlap_units": 200,
+      "chunks": []
+    },
+    {
+      "text": "",
+      "max_units": 6,
+      "overlap_units": 0,
+      "chunks": []
+    },
+    {
+      "text": "",
+      "max_units": 4,
+      "overlap_units": 1,
+      "chunks": []
+    },
+    {
+      "text": "\n华为在深圳。",
+      "max_units": 1500,
+      "overlap_units": 200,
+      "chunks": []
+    },
+    {
+      "text": "\n华为在深圳。",
+      "max_units": 6,
+      "overlap_units": 0,
+      "chunks": []
+    },
+    {
+      "text": "\n华为在深圳。",
+      "max_units": 4,
+      "overlap_units": 1,
+      "chunks": []
+    },
+    {
+      "text": "。华为在深圳。",
+      "max_units": 1500,
+      "overlap_units": 200,
+      "chunks": []
+    },
+    {
+      "text": "。华为在深圳。",
+      "max_units": 6,
+      "overlap_units": 0,
+      "chunks": []
+    },
+    {
+      "text": "。华为在深圳。",
+      "max_units": 4,
+      "overlap_units": 1,
+      "chunks": []
+    },
+    {
+      "text": "华为在深圳。腾讯在广州。",
+      "max_units": 1500,
+      "overlap_units": 200,
+      "chunks": [
+        {
+          "id": "doc#c0000",
+          "text": "华为在深圳。腾讯在广州。",
+          "start": 0,
+          "end": 12,
+          "index": 0
+        }
+      ]
+    },
+    {
+      "text": "华为在深圳。腾讯在广州。",
+      "max_units": 6,
+      "overlap_units": 0,
+      "chunks": [
+        {
+          "id": "doc#c0000",
+          "text": "华为在深圳。",
+          "start": 0,
+          "end": 6,
+          "index": 0
+        },
+        {
+          "id": "doc#c0001",
+          "text": "腾讯在广州。",
+          "start": 6,
+          "end": 12,
+          "index": 1
+        }
+      ]
+    },
+    {
+      "text": "华为在深圳。腾讯在广州。",
+      "max_units": 4,
+      "overlap_units": 1,
+      "chunks": [
+        {
+          "id": "doc#c0000",
+          "text": "华为在深",
+          "start": 0,
+          "end": 4,
+          "index": 0
+        },
+        {
+          "id": "doc#c0001",
+          "text": "圳。",
+          "start": 4,
+          "end": 6,
+          "index": 1
+        },
+        {
+          "id": "doc#c0002",
+          "text": "腾讯在广",
+          "start": 6,
+          "end": 10,
+          "index": 2
+        },
+        {
+          "id": "doc#c0003",
+          "text": "州。",
+          "start": 10,
+          "end": 12,
+          "index": 3
+        }
+      ]
+    },
+    {
+      "text": "第一句。第二句！第三句？\n第四句",
+      "max_units": 1500,
+      "overlap_units": 200,
+      "chunks": [
+        {
+          "id": "doc#c0000",
+          "text": "第一句。第二句！第三句？\n第四句",
+          "start": 0,
+          "end": 16,
+          "index": 0
+        }
+      ]
+    },
+    {
+      "text": "第一句。第二句！第三句？\n第四句",
+      "max_units": 6,
+      "overlap_units": 0,
+      "chunks": [
+        {
+          "id": "doc#c0000",
+          "text": "第一句。",
+          "start": 0,
+          "end": 4,
+          "index": 0
+        },
+        {
+          "id": "doc#c0001",
+          "text": "第二句！",
+          "start": 4,
+          "end": 8,
+          "index": 1
+        },
+        {
+          "id": "doc#c0002",
+          "text": "第三句？\n",
+          "start": 8,
+          "end": 13,
+          "index": 2
+        },
+        {
+          "id": "doc#c0003",
+          "text": "第四句",
+          "start": 13,
+          "end": 16,
+          "index": 3
+        }
+      ]
+    },
+    {
+      "text": "第一句。第二句！第三句？\n第四句",
+      "max_units": 4,
+      "overlap_units": 1,
+      "chunks": [
+        {
+          "id": "doc#c0000",
+          "text": "第一句。",
+          "start": 0,
+          "end": 4,
+          "index": 0
+        },
+        {
+          "id": "doc#c0001",
+          "text": "第二句！",
+          "start": 4,
+          "end": 8,
+          "index": 1
+        },
+        {
+          "id": "doc#c0002",
+          "text": "第三句？\n",
+          "start": 8,
+          "end": 13,
+          "index": 2
+        },
+        {
+          "id": "doc#c0003",
+          "text": "第四句",
+          "start": 13,
+          "end": 16,
+          "index": 3
+        }
+      ]
+    },
+    {
+      "text": "Alice met Bob. Carol met Bob.",
+      "max_units": 1500,
+      "overlap_units": 200,
+      "chunks": [
+        {
+          "id": "doc#c0000",
+          "text": "Alice met Bob. Carol met Bob.",
+          "start": 0,
+          "end": 29,
+          "index": 0
+        }
+      ]
+    },
+    {
+      "text": "Alice met Bob. Carol met Bob.",
+      "max_units": 6,
+      "overlap_units": 0,
+      "chunks": [
+        {
+          "id": "doc#c0000",
+          "text": "Alice met Bob. Carol m",
+          "start": 0,
+          "end": 22,
+          "index": 0
+        },
+        {
+          "id": "doc#c0001",
+          "text": "et Bob.",
+          "start": 22,
+          "end": 29,
+          "index": 1
+        }
+      ]
+    },
+    {
+      "text": "Alice met Bob. Carol met Bob.",
+      "max_units": 4,
+      "overlap_units": 1,
+      "chunks": [
+        {
+          "id": "doc#c0000",
+          "text": "Alice met Bob.",
+          "start": 0,
+          "end": 14,
+          "index": 0
+        },
+        {
+          "id": "doc#c0001",
+          "text": " Carol met Bob.",
+          "start": 14,
+          "end": 29,
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "chunked_text": "阿里巴巴由马云创立。腾讯总部在深圳。",
+  "chunked_output": {
+    "document_id": "d",
+    "domain_code": "general",
+    "result": {
+      "entities": [
+        {
+          "name": "阿里巴巴",
+          "type": "ORG",
+          "aliases": [],
+          "mentions": [
+            {
+              "surface": "阿里巴巴",
+              "span": {
+                "start": 0,
+                "end": 4,
+                "text": "阿里巴巴"
+              }
+            }
+          ],
+          "confidence": 0.9,
+          "attributes": {},
+          "description": ""
+        },
+        {
+          "name": "马云",
+          "type": "PER",
+          "aliases": [],
+          "mentions": [
+            {
+              "surface": "马云",
+              "span": {
+                "start": 5,
+                "end": 7,
+                "text": "马云"
+              }
+            }
+          ],
+          "confidence": 0.7,
+          "attributes": {},
+          "description": ""
+        },
+        {
+          "name": "腾讯",
+          "type": "ORG",
+          "aliases": [
+            "鹅厂"
+          ],
+          "mentions": [
+            {
+              "surface": "腾讯",
+              "span": {
+                "start": 10,
+                "end": 12,
+                "text": "腾讯"
+              }
+            }
+          ],
+          "confidence": 0.5,
+          "attributes": {},
+          "description": ""
+        },
+        {
+          "name": "深圳",
+          "type": "LOC",
+          "aliases": [],
+          "mentions": [
+            {
+              "surface": "深圳",
+              "span": {
+                "start": 15,
+                "end": 17,
+                "text": "深圳"
+              }
+            }
+          ],
+          "confidence": 0.6,
+          "attributes": {},
+          "description": ""
+        }
+      ],
+      "relations": [
+        {
+          "head": "马云",
+          "predicate": "创立",
+          "tail": "阿里巴巴",
+          "evidence_span": null,
+          "confidence": 0.8
+        },
+        {
+          "head": "腾讯",
+          "predicate": "总部位于",
+          "tail": "深圳",
+          "evidence_span": null,
+          "confidence": 0.7
+        }
+      ]
+    },
+    "model_name": "fake-262319b",
+    "usage": {
+      "input_tokens": 6,
+      "output_tokens": 4,
+      "cached_input_tokens": 0,
+      "cache_hit_rate": 0.0
+    },
+    "attempts": 2
+  }
+}

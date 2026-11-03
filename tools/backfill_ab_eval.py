@@ -16,11 +16,9 @@
     PYTHONPATH=src python tools/backfill_ab_eval.py --mode llm
     PYTHONPATH=src python tools/backfill_ab_eval.py --mode rule
 
-    # 工单 02 扩展压力语料（需 02 的 moray.evaluation.stress loader 已合入；
-    # 本分支尚未合入，所以这条命令当前不可执行，只作为合入后的复跑口径）：
-    PYTHONPATH=src python tools/backfill_ab_eval.py \
-      --gold data/gold/stress --mode llm \
-      --json-out docs/evidence/03-stress-ab-llm.json
+    # 工单 02 扩展压力语料：本分支已合入 02 loader；验收 8/9 的完整 A/B
+    # （含单块 token/截断）请用 tools/backfill_stress_ab.py，本脚本保持
+    # 「每篇文档一次抽取」的基线口径。
 
 真实 LLM 模式需要项目 .env 里的模型密钥（默认读取当前环境）。
 

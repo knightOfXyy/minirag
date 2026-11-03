@@ -93,7 +93,7 @@ def remap_spans(result: ExtractionResult, chunk: Chunk) -> ExtractionResult:
 
 
 def naive_merge(
-    partials: list[ExtractionResult], *, merge_relation_duplicates: bool = True
+    partials: list[ExtractionResult], *, merge_relation_duplicates: bool = False
 ) -> ExtractionResult:
     """朴素归并（L09 会升级为向量+LLM 共指消解）。
 
@@ -102,8 +102,9 @@ def naive_merge(
     overlap 区域产生的重复 mention 会自然落在同一实体下，不会重复造实体。
 
     ``merge_relation_duplicates``：重复三元组是否把后见的证据/更高置信度
-    并进首见条目。分块流水线只在瘦身开关打开时启用——开关关闭必须保持
-    262319b 的「先见赢家」语义（验收 7 逐字段一致）。
+    并进首见条目。默认 **False**，即 262319b 的「先见赢家」旧语义——本函数
+    是公开 helper（``extraction/__init__`` 导出、lessons 直接调用），默认值
+    不能悄悄改变直接调用方的输出。分块流水线只在瘦身开关打开时显式传 True。
     """
     bucket: dict[tuple[str, str], Entity] = {}
     for part in partials:

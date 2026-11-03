@@ -1,3 +1,14 @@
+工单03 评审 r3 修复后测试（2026-11-03，临时分支已 fast-forward 到 dev a4c10cd）
+
+== 离线（无 DB）==
+命令：ARK_API_KEY=dummy PYTHONPATH=src pytest -q -p no:cacheprovider
+308 passed, 65 skipped in 17.53s
+其中 r3 回归：tests/test_r3_review_fixes.py = 17 passed
+（修复前同一文件 13 failed / 3 passed，见 d7da329「先红」提交）
+
+== 含 DB 集成 ==
+本轮未复跑（RUN_DB_TESTS=1 会 TRUNCATE 共享表）；下面保留 r2 时的记录。
+
 工单03 评审 r2 修复后测试（2026-11-03）
 
 == 离线（无 DB）==

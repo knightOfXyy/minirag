@@ -81,6 +81,8 @@ class DynamicExtractorProvider:
             try:
                 out = await extractor.extract(
                     Document(id=f"{domain_code}-dyn", text=body,
+                             # 03 r3 B2：返工反馈只进模型正文；回填/审计仍对原始正文
+                             source_text=text if feedback else None,
                              source="dynamic", domain_code=domain_code))
             except ExtractionError as exc:
                 metrics = getattr(exc, "metrics", None)

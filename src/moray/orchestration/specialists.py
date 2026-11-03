@@ -48,7 +48,7 @@ class ExtractionReview:
 
     verdict: str                       # pass / needs_fix
     issues: list[str] = field(default_factory=list)   # 具体问题（给抽取员返工）
-    span_ratio: float = 1.0            # 出处一致率（客观指标，非模型主观）
+    span_ratio: float | None = None      # 出处一致率；没有可核对 span 时为 None（未测）
     iterations: int = 1
 
 
@@ -107,13 +107,27 @@ def rule_review(
     if len(names) != len(result.entities):
         issues.append("实体列表存在同名重复项，未去重")
 
-    # ④ 没有任何证据 span 的关系（臆测风险）。slim 模式 confidence 是未知(None)，
-    #    旧条件 `confidence >= 0.8` 会让本工单目标模式永不触发——未知 + 无证据
-    #    同样要拦，full 模式仍只看高置信（保持旧语义）。
+    # ④ 没有任何证据 span 的关系（臆测风险）。
+    #    · full 模式（无 backfill 信号）：旧语义仍只看「未知 + 高置信」；
+    #    · slim 模式：模型不输出证据，证据为空本身不是错误。用回填信号区分：
+    #      两端都在正文中被命中（同句/跨句/跨块均可）→ 合法，证据留空；
+    #      端点根本没在正文出现 → 才是臆测，要拦。
+    def _endpoint_grounded(name: str) -> bool:
+        for ent in result.entities:
+            if ent.name == name or name in ent.aliases:
+                return bool(ent.mentions)
+        return False
+
     for r in result.relations:
-        if r.evidence_span is None and (
-            r.confidence is None or r.confidence >= 0.8
-        ):
+        if r.evidence_span is not None:
+            continue
+        if backfill is not None:
+            if _endpoint_grounded(r.head) and _endpoint_grounded(r.tail):
+                continue
+            issues.append(
+                f"关系 {r.head}-[{r.predicate}]->{r.tail} 无原文证据"
+                f"（端点在正文中未命中）")
+        elif r.confidence is None or r.confidence >= 0.8:
             issues.append(
                 f"关系 {r.head}-[{r.predicate}]->{r.tail} 无原文证据"
                 f"（置信度{'未知' if r.confidence is None else r.confidence}）")
@@ -136,8 +150,12 @@ def rule_review(
             issues.append(f"{len(phantom)} 个模型给出的别名在正文中不存在（疑似幻觉）")
 
     verdict = ReviewVerdict.PASS if not issues else ReviewVerdict.NEEDS_FIX
-    return ExtractionReview(verdict=verdict, issues=issues,
-                            span_ratio=span_report.ratio)
+    # 没有可核对的 span（slim 模型不输出）时记「未测」(None)，不要写空转的 1.0，
+    # 否则看板 pipeline_runs.span_ratio 会伪装成 100% 一致；回填信号单独走
+    # block_confidence，两者不混。
+    return ExtractionReview(
+        verdict=verdict, issues=issues,
+        span_ratio=span_report.ratio if span_report.total else None)
 
 
 async def run_extraction_team(

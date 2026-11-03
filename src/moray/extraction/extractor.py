@@ -343,8 +343,14 @@ class Extractor:
     # ---- 核心流程 ---------------------------------------------------------
     async def extract(self, document: Document) -> ExtractionOutput:
         agent = self._build_agent()
+        # 回填/审计用的原文：返工轮 document.text 可能已追加反馈，不能拿它
+        # 当 span 坐标系（否则反馈里的实体名会回填出越界 span）。
+        source_text = (
+            document.source_text
+            if document.source_text is not None else document.text
+        )
         # 供 ExtractionMetricsMiddleware 核对 span（中间件存在时才有用）
-        setattr(agent, "_audit_source_text", document.text)
+        setattr(agent, "_audit_source_text", source_text)
         usage = Usage()
         last_error = ""
 
@@ -436,11 +442,11 @@ class Extractor:
                 continue
 
             # ④ 瘦身模式：模型只给逻辑实体/关系，出现位置由本地确定性回填。
-            #    在「块/文档文本」上回填得到相对该文本的偏移；分块流水线随后
-            #    用既有的 remap_spans 平移成文档全局偏移，行为不变。
+            #    回填坐标系必须是原始正文（source_text），不能是带返工反馈的
+            #    text；分块流水线随后用既有的 remap_spans 平移成全局偏移。
             backfill: BackfillReport | None = None
             if self.local_backfill:
-                core, backfill = backfill_provenance(core, document.text)
+                core, backfill = backfill_provenance(core, source_text)
 
             # 全部通过
             return ExtractionOutput(

@@ -21,6 +21,13 @@ class Document(BaseModel):
 
     id: str = Field(description="文档稳定唯一 ID，用于实体出处溯源")
     text: str = Field(description="文档正文；字符偏移 span 都相对它计算")
+    # 返工轮会把审校反馈追加到 text 末尾（让模型看到要改什么），但 mention/span
+    # 与关系证据必须相对【原始正文】回填，否则反馈里的实体名/三元组会生成
+    # 越界 span。source_text 为空时语义等同 text（普通路径无需传）。
+    source_text: str | None = Field(
+        default=None,
+        description="回填/审计所用的原始正文；为空时等于 text",
+    )
     title: str = ""
     source: str = Field(default="unknown", description="来源，如 news/contract/upload")
     domain_code: str = Field(default="general", description="抽取时使用的领域配置 code")

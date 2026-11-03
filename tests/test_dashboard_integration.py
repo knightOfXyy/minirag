@@ -43,6 +43,18 @@ async def test_record_and_recent(dash):
 
 
 @pytest.mark.asyncio
+async def test_summary_span_ratio_unmeasured_is_none(dash):
+    """N9：slim 没有可核对 span 时落 NULL；聚合必须是「未测」而不是 1.0/0。"""
+    d, pool = dash
+    await _rec(d, document_id="slim", span_ratio=None)
+    row = await pool.fetchrow(
+        "SELECT span_ratio FROM pipeline_runs WHERE document_id='slim'")
+    assert row["span_ratio"] is None
+    s = await d.summary()
+    assert s["avg_span_ratio"] is None
+
+
+@pytest.mark.asyncio
 async def test_summary_aggregates(dash):
     d, _ = dash
     await _rec(d, document_id="a", review_passed=True, span_ratio=1.0,

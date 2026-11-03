@@ -291,7 +291,9 @@ class Dashboard:
             SELECT
               count(*)                                              AS runs,
               count(*) FILTER (WHERE review_passed)                  AS passed,
-              coalesce(avg(span_ratio),0)                            AS avg_span_ratio,
+              -- 零 span（slim 模型不自报）时 span_ratio 落 NULL；全批次未测
+              -- 时聚合保持 NULL（未测），不用 coalesce 0 伪装成"一致率 0"。
+              avg(span_ratio)                                        AS avg_span_ratio,
               coalesce(avg(block_confidence),0)                      AS avg_block_confidence,
               coalesce(sum(entities_grounded),0)                     AS entities_grounded,
               coalesce(sum(entities_total),0)                        AS entities_total,
@@ -356,9 +358,9 @@ class Dashboard:
             d["prefill_ms"] = None
         if not d.get("decode_measured_runs"):
             d["decode_ms"] = None
-        # 数值规整
+        # 数值规整（None = 未测，保持 None；不要 float(None) 崩或写成 0）
         for k in ("avg_span_ratio", "avg_review_iters", "avg_latency_ms"):
-            d[k] = round(float(d[k]), 3)
+            d[k] = round(float(d[k]), 3) if d[k] is not None else None
         return d
 
     async def recent(self, limit: int = 10) -> list[dict]:
