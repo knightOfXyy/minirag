@@ -1,5 +1,10 @@
 """压力案卷黄金语料子包：确定性合成语料 + 离线分块评测（工单 02）。"""
 
+from .budget import (
+    MAX_ENTITY_F1_DROP_PT,
+    evaluate_budget_gate,
+    relation_chunk_profile,
+)
 from .corpus import (
     DECOY_PREFIX,
     PREDICATE_TRIGGERS,
@@ -38,6 +43,9 @@ from .runner import (
 )
 
 __all__ = [
+    "MAX_ENTITY_F1_DROP_PT",
+    "evaluate_budget_gate",
+    "relation_chunk_profile",
     "DECOY_PREFIX",
     "PREDICATE_TRIGGERS",
     "STRESS_SEEDS",
