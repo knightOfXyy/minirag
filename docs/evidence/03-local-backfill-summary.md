@@ -1,64 +1,60 @@
 # 工单 03 证据汇总：结构化输出瘦身 + mention/span 确定性本地回填
 
 开关：环境变量 `MORAY_LOCAL_BACKFILL`（`1/true/yes/on` 打开），**默认关闭**。
-关闭时抽取路径与结果口径与改造前逐字段一致（见 golden 快照测试与开关关闭用例）。
+关闭时：full schema / 提示词 / 归并语义保持 262319b（schema+结果逐字段 golden）。
+打开时：模型只出逻辑实体/关系，mention/span 与关系证据由本地 Aho-Corasick
+一次线性扫描回填；稳定内核 `Entity/EntityMention/Span/Relation` 字段不变。
 
-## 本轮（评审第 1 次修复）改了什么
+## 本轮（评审 r2 修复）逐条处理
 
-| 评审发现 | 处理 | 证据 |
-|---|---|---|
-| **blocker** 把 grounding 写回内核 `Entity/Relation.confidence` | 回填不再写 confidence，保留输入值（瘦身模型缺省 0.0）；确定性信号只走 `BackfillReport`；质量中间件把「缺失 confidence」当未知而非低置信；full schema 下 specialists 规则④恢复有效，slim 的等价信号是 `relations_without_evidence` | `test_backfill_keeps_kernel_confidence_untouched`、`test_slim_output_without_confidence_is_not_counted_as_low_confidence`、`03-local-backfill-contract.json` 的 `kernel_confidence_note` |
-| should：回填信号在 pipeline/provider/jobs/API 被丢 | 分块信号按块汇总进 `ExtractionOutput.backfill`；`ReviewedExtraction.backfill` 透传；provider 增加 `backfill_sink`；作业结果与 `/extract` 响应都返回 backfill | `test_pipeline_run_aggregates_backfill_signal_with_global_spans`、`test_provider_passes_backfill_sink`、`test_job_handler_result_and_output_carry_backfill`、`test_extract_api_response_carries_backfill` |
-| should：验收 8 用规则抽取器自证、脚本未入库 | 新增可复现脚本 `tools/backfill_ab_eval.py`（`--mode llm` 真实模型 / `--mode rule` 仅离线冒烟并显式标注）；用真实 LLM 在仓库内黄金语料重跑 A/B | `03-ab-llm.json`、`03-ab-rule.json`、`03-stress-corpus-eval.txt` |
-| should：验收 7「逐字段一致」空转、full schema 字段顺序变了 | 从改造前基线 `262319b` 导出 schema+提示词 golden，逐字节比对；恢复 full 字段顺序 `name/type/aliases/mentions/confidence/attributes` | `tests/golden/full_schema_262319b.json`、`test_full_schema_and_prompt_match_pre_change_golden` |
-| should：重叠裁决 O(H²)，20k 字 4.5s | 用按字符 `bytearray` 做区间占用，`find`/切片赋值在 C 层完成；新增 20k 字性能回归 | `test_overlap_resolution_is_linearish_on_20k_text`（本机实测 6.8ms，断言 <1.5s） |
-| should：分块接线测试绕过 `pipeline.run` | 旧用例改为真实调用 `pipeline.run`，同时验证信号汇总与全局 span | `test_chunked_pipeline_backfills_then_maps_to_global`、`test_pipeline_run_aggregates_backfill_signal_with_global_spans` |
-| nit：歧义命中不占区间，短名漏进歧义串 | 歧义命中同样占住区间 | `test_ambiguous_hit_occupies_interval_so_substring_does_not_leak`、`test_non_prefix_substring_inside_longer_name_is_not_matched` |
-| nit：最近一对证据 span 不可观测 | 候选里增加 `selected` 标记，可直接对上 `evidence_span` | `test_relation_evidence_marks_the_selected_nearest_pair` |
-| nit：`unmatched_aliases` 把标准名当幻觉 | 只统计模型给的别名（`literal != name`） | `test_unmatched_aliases_never_counts_canonical_name_as_hallucination` |
-| nit：候选 key 拼接碰撞 | key 改为 JSON 编码三元组 | `test_relation_evidence_candidate_key_does_not_collide` |
-| nit：合并逻辑重复、关系证据首见丢证据 | 抽取共用 `merge_entity_metadata`；`naive_merge` 对重复三元组合并证据并取最大置信度 | `test_naive_merge_does_not_drop_later_relation_evidence` |
-| nit：token 对比用手写 payload | 测试改为由真实 schema 模型 `model_validate(...).model_dump()` 生成 payload；证据改用真实 LLM `usage.output_tokens` | `test_slim_output_payload_is_at_least_30pct_smaller`、`03-ab-llm.json` |
+| # | 评审发现 | 处理 | 证据 |
+|---|---|---|---|
+| 1 | **blocker** slim 下 confidence 恒 0.0 被当真、规则④永不触发 | `confidence` 改为可空：slim 缺失 = `None`，入库写 NULL（不冲掉已知值），查询/API 回 `null`，`/relations` 排序 `NULLS LAST`；规则④对「未知 + 无证据」也拦截；审校/看板消费 `block_confidence` | `test_slim_to_core_keeps_confidence_unknown`、`test_ingestor_passes_unknown_confidence_through_as_none`、`test_unknown_confidence_is_null_not_zero`、`test_relation_unknown_confidence_sorts_last`、`test_rule_review_flags_evidence_less_relation_when_confidence_unknown`、`03-local-backfill-contract.json` |
+| 2 | should `_is_free` 语义反了，部分重叠短名漏进长名 | 改为整段全空闲才接受（`_interval_all_free`），部分重叠用例覆盖 | `test_partial_overlap_short_name_does_not_leak_into_long_name`、`test_partial_overlap_does_not_block_independent_occurrence` |
+| 3 | should 英文句号不切句、开头空白句列表为空 | `split_sentences(ascii_period=True)` 供关系证据使用（不切 3.14）；开头空白不再返回空；证据 span 裁掉句首尾空白 | `test_relation_evidence_splits_ascii_period_sentences`、`test_relation_evidence_handles_document_starting_with_whitespace` |
+| 4 | should 关闭开关仍改变归并输出 | `naive_merge(merge_relation_duplicates=...)`：pipeline 仅在开关打开时合并后见证据/置信度/description；关闭走 262319b 旧语义 | `test_switch_off_merge_matches_pre_change_full_field_golden`（golden 由 262319b 源码生成）、`test_chunked_pipeline_gates_relation_merge_by_switch` |
+| 5 | should 验收 8 未在 02 压力语料验证、文件名误导 | 误导文件改名 `03-stress-corpus-eval.txt` → `03-baseline-ab.txt`；明确标注压力集 LLM 复跑**未闭环**（本分支无 02 loader、本机无 key），写清合入后的复跑命令 | `03-baseline-ab.txt`、`tools/backfill_ab_eval.py` docstring |
+| 6 | should 验收 9 用 per-document 与 attempts 冒充 | 证据文件明确「验收 9 未闭环」，列出 01 chunk_metrics/截断口径与后续命令；不再声称达标 | `03-output-token-reduction.txt`、`03-baseline-ab.txt` |
+| 7 | should 质量中间件 slim 恒 1.0、无下游消费回填 | 中间件对无 mention 的 slim 输出跑本地回填，用命中率替代空转 span 1.0；`ExtractionMetrics`/`RunRecorder`/`pipeline_runs` 记录 block_confidence/命中数/证据率/歧义数 | `test_slim_output_with_ungrounded_entity_lowers_quality_score`、`test_from_pipeline_carries_backfill_grounding_signal`、`test_summary_includes_backfill_signals` |
+| 8 | nit 被长名吸收的别名误报幻觉 | 别名改用「正文中字面存在性」判定 | `test_unmatched_aliases_absorbed_by_longer_name_is_not_hallucination` |
+| 9 | nit 信号键只用 name，同名异型覆盖 | 统计键/歧义候选改为 JSON `[type, name]`（`entity_signal_key`） | `test_signal_keys_keep_type_so_same_name_different_type_does_not_collide` |
+| 10 | nit 跨块汇总仍是块内偏移、未命中关系堆叠 | 汇总按 `chunk_start` 平移并带 `chunk_id`；`relations_without_evidence` 按三元组去重并聚合 `chunk_ids` | `test_merged_report_shifts_block_offsets_and_tags_chunk` |
+| 11 | nit 先红后绿不可核 | 本轮先提交失败用例（21 failed）再提交实现；red 输出入库 | `03-r2-red-tests.txt`（提交 `03a7c79` 先红） |
+| 12 | nit 文档未记录开关/模块职责 | `docs/ARCHITECTURE.md` 新增瘦身回填章节与 `MORAY_LOCAL_BACKFILL`；`local_backfill.py` 头注释指路各职责 | `docs/ARCHITECTURE.md` |
 
-## 稳定内核契约
+## 稳定内核 / 确定性信号契约
 
 - 回填只补 `mentions[].span` 与 `relations[].evidence_span`。
-- **不改** `Entity.confidence` / `Relation.confidence`；瘦身模式模型不输出该字段时保持默认 `0.0`。
-- 确定性质量信号（块级置信度、命中、未命中别名、歧义、关系证据）在 `ExtractionOutput.backfill` / API `backfill` / 作业结果 `backfill` 中旁路暴露。
+- **不改** `confidence` 的语义（模型自报）；但 slim 模型不自报时必须是
+  `None`/NULL（未知），不能用 0.0 冒充。full schema 仍要求模型给 0~1。
+- 确定性质量信号在 `ExtractionOutput.backfill` / API `backfill` / 作业结果
+  `backfill` 旁路暴露：块级置信度、命中数、未命中别名、歧义、关系证据候选。
+- 跨块汇总后的偏移是文档全局坐标，并带 `chunk_id`。
 
 实际请求/响应样例见 `03-local-backfill-contract.json`。
 
-## 验收条目对照
+## 验收条目逐条（工单 03）
 
-1. **先红后绿（多实体/别名/多次出现/中英混排）**
-   `test_multi_entity_alias_repeated_mixed_script_backfill`。
-2. **N 次出现 → N mention，span 与原文切片 100% 一致**
-   `test_n_occurrences_produce_n_mentions_with_exact_slices`；真实 LLM A/B 中 slim span 一致率 min=mean=1.0000（full 为 0.2000/0.6778）。
-3. **前缀/子串最长匹配优先**
-   `test_prefix_substring_longest_match_wins`、`test_non_prefix_substring_inside_longer_name_is_not_matched`。
-4. **别名/标准名同实体；正文不存在的别名不产 mention 且计入信号**
-   `test_canonical_and_alias_ground_to_same_entity_phantom_alias_signaled`、`test_unmatched_aliases_never_counts_canonical_name_as_hallucination`。
-5. **同句共现回填证据；跨句/跨块留空不臆造；最近一对 + 全候选**
-   `test_relation_evidence_same_sentence_backfilled`、
-   `test_relation_evidence_cross_sentence_is_empty_not_fabricated`、
-   `test_relation_evidence_not_fabricated_across_chunks`、
-   `test_relation_evidence_nearest_pair_wins_and_all_kept`。
-6. **同名歧义未归属、不写错实体**
-   `test_same_name_different_type_is_ambiguous_and_unattributed`、
-   `test_alias_ownership_conflict_is_ambiguous`、`test_duplicate_logical_entities_are_coalesced_not_ambiguous`。
-7. **开关关闭逐字段一致 + 默认关**
-   `test_full_schema_and_prompt_match_pre_change_golden`（对 262319b golden 逐字节）、
-   `test_default_switch_off_is_identical_to_before`、
-   `test_switch_off_does_not_backfill_model_fields_preserved`、
-   `test_env_flag_enables_backfill_by_default`。
-8. **实体 macro-F1 跌幅 ≤0.5pt、关系 F1 不下降；span 一致率不低于改造前**
-   真实 LLM（`data/gold` 6 篇，DeepSeek）：实体 relaxed `Δ=+0.0000`、关系 `Δ=+0.0000`、实体 strict `+0.1667`；span 一致率 full `0.6778` → slim `1.0000`。见 `03-ab-llm.json`。
-   （工单 02 的扩展压力语料在兄弟分支；本仓脚本可对任意 tagged 黄金目录复跑，合并后按同一命令复测压力集。）
-9. **输出 token 显著下降（≥30%），截断不增加**
-   同一真实 LLM A/B：output tokens `2011 → 953`（**−52.6%**），每篇均值 `335.17 → 158.83`；模型尝试次数 `6 → 6`（无新增重试/截断迹象）。见 `03-ab-llm.json`。
-10. **纯本地确定性、每块正文只扫描一趟（线性）**
-    `test_scan_is_single_linear_pass_independent_of_pattern_count`；
-    另加 20k 字重叠裁决性能回归（旧 O(H²) 已消除）。
+| # | 条目 | 结论 | 依据 |
+|---|---|---|---|
+| 1 | 先红后绿 | **本轮可核**（历史 185fb41 仍不可追溯） | `03-r2-red-tests.txt`：21 failed → 实现后全绿 |
+| 2 | N 次出现 → N mention、span 原文切片 | 达成 | `test_n_occurrences_produce_n_mentions_with_exact_slices`；slim span 1.0 |
+| 3 | 前缀/子串最长匹配不错误覆盖 | 达成（含部分重叠） | `test_prefix_substring_longest_match_wins`、`test_partial_overlap_short_name_does_not_leak_into_long_name` |
+| 4 | 别名/标准名同实体；幻觉别名计入信号 | 达成 | `test_canonical_and_alias_ground_to_same_entity_phantom_alias_signaled`、`test_unmatched_aliases_absorbed_by_longer_name_is_not_hallucination` |
+| 5 | 同句共现回填证据；跨句/跨块不臆造 | 达成（中文/英文/开头空白） | `test_relation_evidence_splits_ascii_period_sentences`、`test_relation_evidence_handles_document_starting_with_whitespace`、`test_relation_evidence_not_fabricated_across_chunks` |
+| 6 | 同名歧义未归属 | 达成 | `test_same_name_different_type_is_ambiguous_and_unattributed`、`test_alias_ownership_conflict_is_ambiguous` |
+| 7 | 开关关闭逐字段一致 + 默认关 | **达成（口径已讲清）**：schema/prompt 对 262319b 逐字节；归并结果对 262319b 全字段 golden；默认关 | `test_full_schema_and_prompt_match_pre_change_golden`、`test_switch_off_merge_matches_pre_change_full_field_golden` |
+| 8 | 02 扩展语料实体 F1 不跌、关系不降 | **未闭环**：本分支无 02 stress loader、本机无 LLM key；基线集真实 LLM A/B 保留在 `03-ab-llm.json`（非压力集） | `03-baseline-ab.txt` |
+| 9 | 单块 output token ≥30% 降、截断不增 | **未闭环**：缺工单 01 chunk_metrics + LLM key；现有数字是 per-document 旁证，已明确标注 | `03-output-token-reduction.txt` |
+| 10 | 纯本地确定性、每块只扫一遍（线性） | 达成 | `test_scan_is_single_linear_pass_independent_of_pattern_count`、20k 性能回归 |
 
-测试：`129 passed, 47 skipped`（skip 为需 PostgreSQL/嵌入模型的集成测试），
-见 `03-pytest-output.txt`。
+## 测试
+
+```bash
+# 离线（无 DB；ARK_API_KEY=dummy 仅为让 get_settings() 通过，不发请求）
+ARK_API_KEY=dummy PYTHONPATH=src pytest -q          # 148 passed, 50 skipped, 0 failed
+# 含 pgvector/看板/入库/作业/合并/API 集成（本机 moray-pgvector 在 5433）
+RUN_DB_TESTS=1 ARK_API_KEY=dummy PYTHONPATH=src pytest -q   # 198 passed, 0 failed
+```
+
+原始输出：`03-pytest-output.txt`（本轮更新）。

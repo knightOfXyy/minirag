@@ -167,7 +167,8 @@ def create_app(
             chunk_threshold_units=cs["threshold_units"],
             chunk_max_units=cs["max_units"],
             chunk_overlap_units=cs["overlap_units"],
-            chunk_concurrency=cs["concurrency"])
+            chunk_concurrency=cs["concurrency"],
+            backfill_sink=backfill_sink)
 
         # 分块路径的信号在 reviewed.backfill；整篇路径（provider 闭包）走 sink。
         backfill = (reviewed.backfill if reviewed.backfill is not None
@@ -280,7 +281,8 @@ def create_app(
             "source": r["src_name"], "source_type": r["src_type"],
             "predicate": r["predicate"],
             "target": r["dst_name"], "target_type": r["dst_type"],
-            "confidence": round(float(r["confidence"]), 3)} for r in rels]}
+            "confidence": (None if r["confidence"] is None
+                           else round(float(r["confidence"]), 3))} for r in rels]}
 
     # ------------------------------------------------------------------ HITL
     @app.get("/reviews")

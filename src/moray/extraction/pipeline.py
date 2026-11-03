@@ -29,6 +29,7 @@ from .document import Document, ExtractionOutput, Usage
 from .extractor import Extractor
 from .local_backfill import (
     BackfillReport,
+    max_confidence,
     merge_backfill_reports,
     merge_entity_metadata,
 )
@@ -78,12 +79,17 @@ def remap_spans(result: ExtractionResult, chunk: Chunk) -> ExtractionResult:
     return ExtractionResult(entities=entities, relations=relations)
 
 
-def naive_merge(partials: list[ExtractionResult]) -> ExtractionResult:
+def naive_merge(
+    partials: list[ExtractionResult], *, merge_relation_duplicates: bool = True
+) -> ExtractionResult:
     """朴素归并（L09 会升级为向量+LLM 共指消解）。
 
     规则：实体按 (type, 标准名) 聚合；别名并集；mention 全部保留。
     关系按三元组字符串去重，置信度取最大值。
-    overlap 区域产生的重复 mention 会自然落在同一实体下，不会重复造实体。
+
+    ``merge_relation_duplicates``：重复三元组是否把后见的证据/更高置信度
+    并进首见条目。分块流水线只在瘦身开关打开时启用——开关关闭必须保持
+    262319b 的「先见赢家」语义（验收 7 逐字段一致）。
     """
     bucket: dict[tuple[str, str], Entity] = {}
     for part in partials:
@@ -98,7 +104,9 @@ def naive_merge(partials: list[ExtractionResult]) -> ExtractionResult:
             ent = bucket[key]
             # 与 local_backfill 共用同一套元数据合并规则（别名并集/属性首见/
             # 置信度取大），避免两处逻辑漂移；mention 在归并层必须全量保留。
-            merge_entity_metadata(ent, e)
+            # description 补全也是新行为：开关关闭时必须保持 262319b 旧输出。
+            merge_entity_metadata(
+                ent, e, fill_description=merge_relation_duplicates)
             ent.mentions.extend(e.mentions)
 
     rel_index: dict[tuple[str, str, str], Relation] = {}
@@ -108,10 +116,13 @@ def naive_merge(partials: list[ExtractionResult]) -> ExtractionResult:
             key = (r.head, r.predicate, r.tail)
             existing = rel_index.get(key)
             if existing is not None:
-                # 同一三元组在别的块可能才拿到证据/更高置信度：首见不能赢家通吃。
-                if existing.evidence_span is None and r.evidence_span is not None:
-                    existing.evidence_span = r.evidence_span
-                existing.confidence = max(existing.confidence, r.confidence)
+                if merge_relation_duplicates:
+                    # 同一三元组在别的块可能才拿到证据/更高置信度：
+                    # 首见不能赢家通吃。
+                    if existing.evidence_span is None and r.evidence_span is not None:
+                        existing.evidence_span = r.evidence_span
+                    existing.confidence = max_confidence(
+                        existing.confidence, r.confidence)
                 continue
             rel_index[key] = r
             relations.append(r)
@@ -141,7 +152,7 @@ class ChunkedExtractionPipeline:
 
     async def _extract_one_chunk(
         self, chunk: Chunk
-    ) -> tuple[ExtractionResult, Usage, str, dict | None]:
+    ) -> tuple[ExtractionResult, Usage, str, BackfillReport | None]:
         """抽单个块（带限流）。返回换算后的结果、用量、块 id、回填信号。"""
         async with self.sem:
             # 复用 Extractor：把一个 chunk 当成一篇微型文档
@@ -152,8 +163,13 @@ class ChunkedExtractionPipeline:
                 domain_code=self.extractor.domain.code,
             )
             output = await self.extractor.extract(mini_doc)
+            report = (
+                BackfillReport.from_dict(
+                    output.backfill, chunk_start=chunk.start, chunk_id=chunk.id)
+                if output.backfill is not None else None
+            )
             return (remap_spans(output.result, chunk), output.usage, chunk.id,
-                    output.backfill)
+                    report)
 
     async def run(
         self,
@@ -171,7 +187,7 @@ class ChunkedExtractionPipeline:
         if self.warm_prefix and total >= 2:
             usage.add(await self.extractor.warm_prefix())
 
-        async def worker(chunk: Chunk) -> tuple[ExtractionResult, Usage, str, dict | None]:
+        async def worker(chunk: Chunk) -> tuple[ExtractionResult, Usage, str, BackfillReport | None]:
             res, u, cid, backfill = await self._extract_one_chunk(chunk)
             if on_chunk:
                 on_chunk(res, cid, total)
@@ -183,13 +199,16 @@ class ChunkedExtractionPipeline:
         for _, u, _, _ in settled:
             usage.add(u)
 
-        merged = naive_merge(partials)
+        merged = naive_merge(
+            partials,
+            # 开关关闭 = 262319b 旧归并语义，不把后见证据/置信度并进重复三元组。
+            merge_relation_duplicates=getattr(
+                self.extractor, "local_backfill", False),
+        )
         # 分块回填信号必须汇总后继续往上层传，不能在 pipeline 这里丢掉。
         # 关开关时所有块都是 None -> 保持 None（与改造前一致）。
-        reports = []
-        for _, _, _, raw in settled:
-            if raw is not None:
-                reports.append(BackfillReport.from_dict(raw))
+        # 汇总时按块 chunk_start 平移块内偏移并带 chunk_id（见 merge_backfill_reports）。
+        reports = [item[3] for item in settled if item[3] is not None]
         backfill = merge_backfill_reports(reports).to_dict() if reports else None
         return ExtractionOutput(
             document_id=document.id,

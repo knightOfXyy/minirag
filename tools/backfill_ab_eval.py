@@ -16,7 +16,17 @@
     PYTHONPATH=src python tools/backfill_ab_eval.py --mode llm
     PYTHONPATH=src python tools/backfill_ab_eval.py --mode rule
 
+    # 工单 02 扩展压力语料（需 02 的 moray.evaluation.stress loader 已合入；
+    # 本分支尚未合入，所以这条命令当前不可执行，只作为合入后的复跑口径）：
+    PYTHONPATH=src python tools/backfill_ab_eval.py \
+      --gold data/gold/stress --mode llm \
+      --json-out docs/evidence/03-stress-ab-llm.json
+
 真实 LLM 模式需要项目 .env 里的模型密钥（默认读取当前环境）。
+
+口径注意：本脚本按「每篇文档一次抽取」统计 output token，``attempts`` 只是
+校验重试次数；它们**不是**工单 01 的「单块 output token / 截断块数」指标。
+验收 9 必须接 01 的 chunk_metrics（本分支未合入），不能用本脚本的数字冒充。
 """
 
 from __future__ import annotations
@@ -137,9 +147,10 @@ def _print(before: RunStats, after: RunStats, *, mode: str) -> None:
               f"  delta={a['output_tokens'] - b['output_tokens']:+d}"
               f" ({(1 - a['output_tokens'] / b['output_tokens']) * 100 if b['output_tokens'] else 0:.1f}% 降)")
         print(f"每篇平均 output tokens full={b['mean_output_tokens_per_case']}"
-              f" slim={a['mean_output_tokens_per_case']}")
+              f" slim={a['mean_output_tokens_per_case']}"
+              "（每篇文档口径，非工单单块口径）")
         print(f"模型尝试次数 full={b['attempts']} slim={a['attempts']}"
-              "（包含校验失败重试；不增加即无新增截断迹象）")
+              "（校验重试次数，不能代表截断块数；验收 9 需接工单 01 chunk_metrics）")
         print(f"回填命中 full={b['backfill_entities_grounded']}/{b['backfill_entities_total']}"
               f" slim={a['backfill_entities_grounded']}/{a['backfill_entities_total']}")
     else:
@@ -150,7 +161,7 @@ def _print(before: RunStats, after: RunStats, *, mode: str) -> None:
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("llm", "rule"), default="rule")
-    parser.add_argument("--corpus", type=Path,
+    parser.add_argument("--corpus", "--gold", dest="corpus", type=Path,
                         default=Path("data/gold"))
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--json-out", type=Path, default=None)

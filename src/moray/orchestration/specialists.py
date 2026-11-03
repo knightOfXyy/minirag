@@ -69,7 +69,9 @@ ReviewerFn = Callable[[str, ExtractionResult], Awaitable[ExtractionReview]]
 # 一个零成本的"规则审校员"：不调模型，只做能 100% 确定的客观检查。
 # 真实系统里它是 LLM 审校 Agent 的第一道廉价闸门；这关不过就不必浪费模型。
 # ---------------------------------------------------------------------------
-def rule_review(text: str, result: ExtractionResult) -> ExtractionReview:
+def rule_review(
+    text: str, result: ExtractionResult, *, backfill: dict | None = None
+) -> ExtractionReview:
     issues: list[str] = []
 
     # ① span 客观核对（复用 L04 的质量探针）
@@ -94,11 +96,33 @@ def rule_review(text: str, result: ExtractionResult) -> ExtractionReview:
     if len(names) != len(result.entities):
         issues.append("实体列表存在同名重复项，未去重")
 
-    # ④ 没有任何证据 span 的高置信关系（臆测风险）
+    # ④ 没有任何证据 span 的关系（臆测风险）。slim 模式 confidence 是未知(None)，
+    #    旧条件 `confidence >= 0.8` 会让本工单目标模式永不触发——未知 + 无证据
+    #    同样要拦，full 模式仍只看高置信（保持旧语义）。
     for r in result.relations:
-        if r.evidence_span is None and r.confidence >= 0.8:
+        if r.evidence_span is None and (
+            r.confidence is None or r.confidence >= 0.8
+        ):
             issues.append(
-                f"关系 {r.head}-[{r.predicate}]->{r.tail} 置信度高却无原文证据")
+                f"关系 {r.head}-[{r.predicate}]->{r.tail} 无原文证据"
+                f"（置信度{'未知' if r.confidence is None else r.confidence}）")
+
+    # ⑤ 确定性回填信号：块级命中率 + 歧义未归属 + 正文不存在的别名。
+    #    slim 模式模型不输出 confidence/span，这里是真正可用的质量信号。
+    if backfill:
+        total = int(backfill.get("entities_total") or 0)
+        grounded = int(backfill.get("entities_grounded") or 0)
+        confidence = backfill.get("block_confidence")
+        if confidence is not None and confidence < 1.0:
+            issues.append(
+                f"回填命中率 {grounded}/{total}"
+                f"（块级置信度 {confidence}）：有实体未在正文中找到出处")
+        ambiguous = backfill.get("ambiguous_mentions") or []
+        if ambiguous:
+            issues.append(f"{len(ambiguous)} 处提及歧义未归属，需人工确认")
+        phantom = backfill.get("unmatched_aliases") or []
+        if phantom:
+            issues.append(f"{len(phantom)} 个模型给出的别名在正文中不存在（疑似幻觉）")
 
     verdict = ReviewVerdict.PASS if not issues else ReviewVerdict.NEEDS_FIX
     return ExtractionReview(verdict=verdict, issues=issues,
@@ -111,6 +135,7 @@ async def run_extraction_team(
     extractor: ExtractorFn,
     reviewer: ReviewerFn | None = None,
     max_iters: int = 3,
+    backfill_sink: dict | None = None,
 ) -> ReviewedExtraction:
     """抽取-审校-返工质量闭环。
 
@@ -119,9 +144,13 @@ async def run_extraction_team(
     reviewer:  async (text, result) -> ExtractionReview；默认用规则审校员。
     max_iters: 最多抽取轮数（含首轮），超出仍不通过则按最后结果返回并标记
                accepted=False，交给上层（通常转人工）。
+    backfill_sink: 抽取器把本次确定性回填信号写进 ``sink["backfill"]``；
+               默认审校员在每轮审校时读取，用于判定块级命中率/歧义。
     """
     async def _default_reviewer(t: str, r: ExtractionResult) -> ExtractionReview:
-        return rule_review(t, r)
+        # 每轮都现读 sink：抽取器刚写进去的块级信号要能被当轮审校消费。
+        current = (backfill_sink or {}).get("backfill")
+        return rule_review(t, r, backfill=current)
 
     reviewer = reviewer or _default_reviewer
     history: list[ExtractionReview] = []
@@ -165,6 +194,7 @@ async def run_chunked_team(
     chunk_overlap_units: int = 200,
     chunk_concurrency: int = 4,
     usage=None,
+    backfill_sink: dict | None = None,
 ) -> ReviewedExtraction:
     """超过分块阈值且有真 Extractor 可取时，走「分块 map → 全局坐标归并 →
     单轮规则审校」；否则逐字节保持 :func:`run_extraction_team` 旧行为。
@@ -182,14 +212,18 @@ async def run_chunked_team(
     返回的 review.iterations 在分块路径恒为 1（单轮），整篇路径为实际轮数。
     """
     if provider is None:
-        return await run_extraction_team(text, extractor=extractor, max_iters=max_iters)
+        return await run_extraction_team(
+            text, extractor=extractor, max_iters=max_iters,
+            backfill_sink=backfill_sink)
 
     from ..extraction.chunking import Chunker
     from ..extraction.document import Document as _Doc
 
     chunker = Chunker(max_units=chunk_max_units, overlap_units=chunk_overlap_units)
     if chunker.count(text) <= chunk_threshold_units:
-        return await run_extraction_team(text, extractor=extractor, max_iters=max_iters)
+        return await run_extraction_team(
+            text, extractor=extractor, max_iters=max_iters,
+            backfill_sink=backfill_sink)
 
     real, _domain = await provider.get_extractor(domain_code)
     from ..extraction.pipeline import ChunkedExtractionPipeline
@@ -201,7 +235,10 @@ async def run_chunked_team(
     if usage is not None:
         usage.add(output.usage)
 
-    review = rule_review(text, output.result)
+    # 回填信号既进 ReviewedExtraction，也写给上层 sink（API/作业复用同一份）。
+    if backfill_sink is not None and output.backfill is not None:
+        backfill_sink["backfill"] = output.backfill
+    review = rule_review(text, output.result, backfill=output.backfill)
     review.iterations = 1
     return ReviewedExtraction(
         result=output.result,

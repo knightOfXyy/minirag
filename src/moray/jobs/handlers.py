@@ -84,7 +84,8 @@ async def build_document_handler(
             chunk_threshold_units=_cs["threshold_units"],
             chunk_max_units=_cs["max_units"],
             chunk_overlap_units=_cs["overlap_units"],
-            chunk_concurrency=_cs["concurrency"])
+            chunk_concurrency=_cs["concurrency"],
+            backfill_sink=backfill_sink)
 
         # ② 包成 ExtractionOutput 交给 L08/L09 入库（幂等）
         # 分块路径的回填信号在 reviewed.backfill；整篇路径（provider 闭包）
@@ -113,7 +114,8 @@ async def build_document_handler(
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,
                 cached_input_tokens=usage.cached_input_tokens,
-                latency_ms=latency_ms))
+                latency_ms=latency_ms,
+                backfill=output.backfill))
 
         return {
             "accepted_by_review": reviewed.accepted,

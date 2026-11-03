@@ -102,12 +102,14 @@ class EntityStore:
         domain_code: str = "general",
         aliases: list[str] | None = None,
         attributes: dict[str, Any] | None = None,
-        confidence: float = 0.0,
+        confidence: float | None = None,
         mentions: list[dict] | None = None,
     ) -> int:
         """幂等写入一个实体（含向量/别名/出处），返回实体 id。
 
         同一 (domain, type, name) 已存在则更新向量与属性，并合并别名/出处。
+        confidence=None 表示「未知」（瘦身模式模型不自报），写 NULL；
+        GREATEST 会忽略 NULL，因此未知不会把已有已知值冲成 0。
         mentions: [{'document_id','surface','start','end','chunk_id'}]
         """
         async with self.pool.acquire() as conn:
@@ -271,7 +273,7 @@ class EntityStore:
         predicate: str,
         target_id: int,
         domain_code: str = "general",
-        confidence: float = 0.0,
+        confidence: float | None = None,
     ) -> int:
         row = await self.pool.fetchrow(
             """
@@ -326,7 +328,7 @@ class EntityStore:
             JOIN entities se ON se.id=r.source_entity_id
             JOIN entities te ON te.id=r.target_entity_id
             WHERE {where}
-            ORDER BY r.confidence DESC
+            ORDER BY r.confidence DESC NULLS LAST
         """
         return [dict(r) for r in await self.pool.fetch(sql, *params)]
 

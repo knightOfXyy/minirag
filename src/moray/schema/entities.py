@@ -73,11 +73,14 @@ class Entity(BaseModel):
         default_factory=list,
         description="该实体在原文中的每一次具体出现（含字面写法和位置）",
     )
-    confidence: float = Field(
-        default=0.0,
+    confidence: float | None = Field(
+        default=None,
         ge=0.0,
         le=1.0,
-        description="抽取置信度，0~1；越确信越接近 1",
+        description=(
+            "抽取置信度，0~1；越确信越接近 1。"
+            "未知时为 null（瘦身模式模型不自报置信度）——不要用 0.0 冒充未知"
+        ),
     )
     # 动态属性包：领域专有的、不稳定的字段都放这里（如合同金额、药品剂量）。
     # L08 入库时映射到 PostgreSQL 的 JSONB 列，可索引、加领域字段不改表结构。
@@ -118,8 +121,13 @@ class Relation(BaseModel):
         default=None,
         description="支撑该关系的原文证据句位置，用于溯源",
     )
-    confidence: float = Field(
-        default=0.0, ge=0.0, le=1.0, description="关系抽取置信度，0~1"
+    confidence: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "关系抽取置信度，0~1；未知时为 null（瘦身模式模型不自报）"
+        ),
     )
 
 

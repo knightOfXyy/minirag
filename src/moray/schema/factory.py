@@ -134,7 +134,10 @@ def build_extraction_model(domain: DomainSpec, *, slim: bool = False) -> Type[Ba
         f"{domain.code.title()}Entity", __base__=BaseModel, **entity_fields
     )
 
-    # ③ 关系模型：瘦身时只保留 头/谓词/尾，去掉证据偏移与置信度
+    # ③ 关系模型：瘦身时只保留 头/谓词/尾，去掉证据偏移与置信度。
+    #    全量模式也生成独立模型（而不是直接复用内核 Relation）：内核的
+    #    confidence 已改为可空（未知=None），但模型契约必须与改造前逐字节
+    #    一致（仍要求模型给 0~1 数值），所以这里按旧版字段描述重建。
     if slim:
         dyn_relation = create_model(
             f"{domain.code.title()}Relation",
@@ -144,7 +147,25 @@ def build_extraction_model(domain: DomainSpec, *, slim: bool = False) -> Type[Ba
             __base__=BaseModel,
         )
     else:
-        dyn_relation = Relation
+        dyn_relation = create_model(
+            "Relation",
+            head=(str, Field(description="头实体的标准名称（关系的发起方）")),
+            predicate=(str, Field(
+                description=(
+                    "关系类型，尽量使用规范动词短语，如 "
+                    "「创立」「任职于」「总部位于」「投资」「收购」「子公司」"
+                ),
+            )),
+            tail=(str, Field(description="尾实体的标准名称（关系的承受方）")),
+            evidence_span=(Span | None, Field(
+                default=None, description="支撑该关系的原文证据句位置，用于溯源")),
+            confidence=(float, Field(
+                default=0.0, ge=0.0, le=1.0,
+                description="关系抽取置信度，0~1")),
+            __base__=BaseModel,
+        )
+        # 与内核 Relation 的文档字符串一致，保证 full schema golden 逐字节不变
+        dyn_relation.__doc__ = Relation.__doc__
 
     # ④ 顶层结果模型：实体 + 关系
     suffix = "Slim" if slim else ""
@@ -177,7 +198,9 @@ def to_core_result(dynamic_result: BaseModel) -> ExtractionResult:
             type=e["type"],          # 动态枚举值 -> 稳定字符串代码
             aliases=e.get("aliases", []),
             mentions=[EntityMention(**m) for m in e.get("mentions", [])],
-            confidence=e.get("confidence", 0.0),
+            # slim schema 没有 confidence：缺失 = 未知(None)，不能伪造成 0.0；
+            # full schema 仍带模型自报值（模型缺省 0.0 保持旧行为）。
+            confidence=e.get("confidence"),
             attributes=e.get("attributes", {}),
         )
         for e in data.get("entities", [])
@@ -192,7 +215,7 @@ def to_core_result(dynamic_result: BaseModel) -> ExtractionResult:
                 predicate=r["predicate"],
                 tail=r["tail"],
                 evidence_span=Span(**ev) if ev else None,
-                confidence=r.get("confidence", 0.0),
+                confidence=r.get("confidence"),
             )
         )
 

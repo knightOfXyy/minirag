@@ -33,6 +33,12 @@ class RunRecorder:
     n_entities: int = 0
     n_relations: int = 0
     span_ratio: float | None = None
+    # 确定性回填信号（仅瘦身开关打开时有值；关闭时 None）
+    block_confidence: float | None = None
+    entities_grounded: int | None = None
+    entities_total: int | None = None
+    relation_evidence_ratio: float | None = None
+    ambiguous_mentions: int = 0
     review_passed: bool | None = None
     review_iters: int = 1
     open_issues: int = 0
@@ -61,8 +67,14 @@ class RunRecorder:
         latency_ms: int = 0,
         model_name: str = "",
         trace_id: str | None = None,
+        backfill: dict | None = None,
     ) -> "RunRecorder":
-        """从 L10 ReviewedExtraction + L08/09 IngestReport 便捷构造。"""
+        """从 L10 ReviewedExtraction + L08/09 IngestReport 便捷构造。
+
+        backfill 是瘦身模式的确定性信号；关闭开关时传 None，字段保持 NULL，
+        看板不会把「未测」当成「满分/零分」。
+        """
+        bf = backfill or {}
         return cls(
             document_id=document_id,
             domain_code=domain_code,
@@ -70,6 +82,11 @@ class RunRecorder:
             n_relations=len(reviewed.result.relations),
             span_ratio=span_ratio if span_ratio is not None
             else reviewed.review.span_ratio,
+            block_confidence=bf.get("block_confidence"),
+            entities_grounded=bf.get("entities_grounded"),
+            entities_total=bf.get("entities_total"),
+            relation_evidence_ratio=bf.get("relation_evidence_ratio"),
+            ambiguous_mentions=len(bf.get("ambiguous_mentions") or []),
             review_passed=reviewed.accepted,
             review_iters=reviewed.review.iterations,
             open_issues=0 if reviewed.accepted else len(reviewed.review.issues),
@@ -97,14 +114,18 @@ class Dashboard:
             """
             INSERT INTO pipeline_runs
               (document_id, domain_code, n_entities, n_relations, span_ratio,
+               block_confidence, entities_grounded, entities_total,
+               relation_evidence_ratio, ambiguous_mentions,
                review_passed, review_iters, open_issues,
                n_auto_merged, n_queued, n_created,
                input_tokens, output_tokens, cached_input_tokens,
                latency_ms, model_name, trace_id)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
             RETURNING id
             """,
             r.document_id, r.domain_code, r.n_entities, r.n_relations, r.span_ratio,
+            r.block_confidence, r.entities_grounded, r.entities_total,
+            r.relation_evidence_ratio, r.ambiguous_mentions,
             r.review_passed, r.review_iters, r.open_issues,
             r.n_auto_merged, r.n_queued, r.n_created,
             r.input_tokens, r.output_tokens, r.cached_input_tokens,
@@ -122,6 +143,11 @@ class Dashboard:
               count(*)                                              AS runs,
               count(*) FILTER (WHERE review_passed)                  AS passed,
               coalesce(avg(span_ratio),0)                            AS avg_span_ratio,
+              coalesce(avg(block_confidence),0)                      AS avg_block_confidence,
+              coalesce(sum(entities_grounded),0)                     AS entities_grounded,
+              coalesce(sum(entities_total),0)                        AS entities_total,
+              coalesce(avg(relation_evidence_ratio),0)               AS avg_relation_evidence_ratio,
+              coalesce(sum(ambiguous_mentions),0)                    AS ambiguous_mentions,
               coalesce(avg(review_iters),0)                          AS avg_review_iters,
               coalesce(sum(open_issues),0)                           AS total_open_issues,
               coalesce(sum(n_entities),0)                            AS total_entities,

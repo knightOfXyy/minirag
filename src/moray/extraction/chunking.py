@@ -37,7 +37,10 @@ def estimate_tokens(text: str) -> int:
 
 
 # 句子结束符（中英）+ 换行。保留结束符在句子里，便于直接还原原文。
-_SENT_RE = re.compile(r"[^。！？!?；;\n]+[。！？!?；;\n]*")
+_SENT_BOUNDARY = re.compile(r"[。！？!?；;\n]")
+# 关系证据用的句切：额外认「英文句号 + 空白/结尾」，但不切 3.14 这类小数点。
+_SENT_BOUNDARY_ASCII = re.compile(r"[。！？!?；;\n]|\.(?=\s|$)")
+_TERMINATORS = "。！？!?；;\n"
 
 
 @dataclass(frozen=True)
@@ -56,22 +59,32 @@ class Chunk:
         return estimate_tokens(self.text)
 
 
-def split_sentences(text: str) -> list[tuple[int, int]]:
+def split_sentences(
+    text: str, *, ascii_period: bool = False
+) -> list[tuple[int, int]]:
     """把文本切成句子，返回每句在原文中的 [start, end)。
 
-    用游标 + 正则而不是 text.split，保证偏移永远精确。
+    ``ascii_period`` 供关系证据使用：英文句号后跟空白/结尾也算句末。
+    分块路径保持默认（不认英文句号），行为与改造前一致。
+    用边界扫描而不是 ``text.split``，保证偏移永远精确；开头就是空白/结束符
+    时也不会像旧实现那样直接返回空列表（正文以换行开头的案卷会丢全部证据）。
     """
+    pattern = _SENT_BOUNDARY_ASCII if ascii_period else _SENT_BOUNDARY
     sentences: list[tuple[int, int]] = []
-    pos = 0
-    while pos < len(text):
-        m = _SENT_RE.match(text, pos)
-        if not m:
-            break
-        if m.end() == pos:  # 理论上不会，防御死循环
-            pos += 1
+    start = 0
+    for m in pattern.finditer(text):
+        end = m.end()
+        # 连续的中文结束符（如「？！」）与旧实现一样归入同一句；
+        # 英文句号只吃它自己，后面的空格留给下一句（上层切片时再裁掉）。
+        if text[m.start()] != ".":
+            while end < len(text) and text[end] in _TERMINATORS:
+                end += 1
+        if end <= start:
             continue
-        sentences.append((m.start(), m.end()))
-        pos = m.end()
+        sentences.append((start, end))
+        start = end
+    if start < len(text):
+        sentences.append((start, len(text)))
     return sentences
 
 

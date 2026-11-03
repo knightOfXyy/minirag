@@ -85,3 +85,18 @@ async def test_summary_domain_filter(dash):
     await _rec(d, document_id="b", domain_code="finance")
     assert (await d.summary(domain_code="finance"))["runs"] == 1
     assert (await d.summary(domain_code="general"))["runs"] == 1
+
+
+@pytest.mark.asyncio
+async def test_summary_includes_backfill_signals(dash):
+    """看板消费确定性回填命中率（开关关闭时为 NULL 聚合）。"""
+    d, _ = dash
+    await _rec(d, document_id="a", block_confidence=0.5,
+               entities_grounded=1, entities_total=2,
+               relation_evidence_ratio=0.5, ambiguous_mentions=1)
+    await _rec(d, document_id="b")
+    s = await d.summary()
+    assert s["avg_block_confidence"] == 0.5   # NULL 不参与平均（b 未测，不算 0）
+    assert (s["entities_grounded"], s["entities_total"]) == (1, 2)
+    assert s["ambiguous_mentions"] == 1
+    assert s["avg_relation_evidence_ratio"] == 0.5

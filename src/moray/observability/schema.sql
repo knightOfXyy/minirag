@@ -13,6 +13,11 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
 
     -- 质量
     span_ratio        REAL,                          -- 出处一致率 0~1
+    block_confidence  REAL,                          -- 瘦身回填命中率（未知=NULL）
+    entities_grounded INTEGER,                       -- 回填命中实体数（未知=NULL）
+    entities_total    INTEGER,                       -- 参与回填的实体数（未知=NULL）
+    relation_evidence_ratio REAL,                    -- 关系证据命中率（未知=NULL）
+    ambiguous_mentions INTEGER NOT NULL DEFAULT 0,   -- 歧义未归属提及数
     review_passed     BOOLEAN,                       -- 是否通过审校门禁
     review_iters      INTEGER NOT NULL DEFAULT 1,    -- 审校返工轮数
     open_issues       INTEGER NOT NULL DEFAULT 0,    -- 仍未解决的问题数
@@ -36,3 +41,8 @@ CREATE INDEX IF NOT EXISTS idx_runs_created ON pipeline_runs(created_at);
 
 -- 对已有库平滑升级（必须先于任何引用新列的语句；可重复执行）
 ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS cached_input_tokens INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS block_confidence REAL;
+ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS entities_grounded INTEGER;
+ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS entities_total INTEGER;
+ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS relation_evidence_ratio REAL;
+ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS ambiguous_mentions INTEGER NOT NULL DEFAULT 0;
