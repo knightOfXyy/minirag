@@ -104,7 +104,6 @@ def rule_review(
     index = literal_index(result.entities)
     # 瘦身/回填模式才放宽「唯一归属别名即端点合法」（03 r5 F1）：backfill 信号
     # 只在 MORAY_LOCAL_BACKFILL 打开（slim）时由调用方透传，关闭态保持严格口径。
-    slim = backfill is not None
     literal_owners: dict[str, set[tuple[str, str]]] = {
         literal: {(result.entities[i].type, result.entities[i].name)
                   for i in idxs}
