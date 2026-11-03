@@ -88,6 +88,38 @@ async def test_summary_domain_filter(dash):
 
 
 @pytest.mark.asyncio
+async def test_unmeasured_phase_timings_stay_null(dash):
+    """F2：非流式不可测时落 NULL，聚合在零测量时返回 None 而不是 0。"""
+    d, pool = dash
+    await _rec(d, document_id="plain", chunk_calls=1,
+               prefill_ms=None, decode_ms=None)
+    row = await pool.fetchrow(
+        "SELECT prefill_ms, decode_ms FROM pipeline_runs WHERE document_id='plain'")
+    assert row["prefill_ms"] is None and row["decode_ms"] is None
+    s = await d.summary()
+    assert s["prefill_measured_runs"] == 0
+    assert s["prefill_ms"] is None and s["decode_ms"] is None
+
+
+@pytest.mark.asyncio
+async def test_summary_and_recent_can_distinguish_source(dash):
+    """F7：API 行与批量行可区分、可按来源过滤，历史默认 job。"""
+    d, _ = dash
+    await _rec(d, document_id="api1", source="api", chunk_calls=2,
+               truncation_signals=1)
+    await _rec(d, document_id="job1", source="job", chunk_calls=3)
+    await _rec(d, document_id="legacy")  # source 默认 job
+
+    assert (await d.summary())["runs"] == 3
+    assert (await d.summary(source="api"))["runs"] == 1
+    assert (await d.summary(source="job"))["runs"] == 2
+    assert (await d.summary(source="api"))["truncation_signals"] == 1
+    rows = {r["document_id"]: r for r in await d.recent()}
+    assert rows["api1"]["source"] == "api"
+    assert rows["legacy"]["source"] == "job"
+
+
+@pytest.mark.asyncio
 async def test_summary_aggregates_chunk_metrics_and_truncation(dash):
     """工单 01：分块度量列在 SQL 面正确聚合，截断信号不被漏计。"""
     d, pool = dash

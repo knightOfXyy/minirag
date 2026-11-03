@@ -21,14 +21,16 @@ import argparse
 import asyncio
 import json
 import statistics
+import subprocess
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from moray.config import chunk_settings  # noqa: E402
-from moray.extraction import (  # noqa: E402
+from moray.config import chunk_settings, get_settings
+from moray.extraction import (
     ChunkedExtractionPipeline,
     Chunker,
     Document,
@@ -48,6 +50,7 @@ async def run_once(text: str, sample_name: str, *, stream: bool):
         # 走流式构造：仅为基准测量，把 _build_agent 换成流式模型（方法须是同步的，
         # agent.reply 自己是 async）；不改变提示词/校验/切块任何一环。
         from agentscope.agent import Agent
+
         from moray.config import build_chat_model
 
         def _build_agent_stream():
@@ -83,6 +86,26 @@ async def run_once(text: str, sample_name: str, *, stream: bool):
             round(statistics.mean(
                 [c.output_tokens for c in dm.chunks]), 2)
             if dm.chunks else 0),
+    }
+
+
+def _git_sha() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True,
+            stderr=subprocess.DEVNULL).strip()
+    except Exception:  # noqa: BLE001 非 git 环境也要能跑
+        return "unknown"
+
+
+def _baseline_meta() -> dict:
+    """基线可审计所需的来源信息：换模型/换 prompt 后才能判断是否可比。"""
+    s = get_settings()
+    return {
+        "provider": s.get("provider"),
+        "chat_model": s.get("chat_model"),
+        "generated_at": datetime.now(UTC).isoformat(),
+        "git_sha": _git_sha(),
     }
 
 
@@ -132,7 +155,7 @@ async def amain() -> None:
         runs.append(rep)
         _print_report(rep)
 
-    out = {"runs": runs}
+    out = {"meta": _baseline_meta(), "runs": runs}
     if args.repeat > 1:
         def _agg(field):
             vals = [r["summary"][field] for r in runs]

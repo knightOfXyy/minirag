@@ -20,12 +20,16 @@ BatchRunner 只负责"认领任务、跑 handler、记状态"；具体怎么处�
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
+from ..extraction import ExtractionError
 from ..extraction.document import Document, ExtractionOutput, Usage
 from ..kb import EntityStore, Ingestor
 from ..orchestration import run_chunked_team
 from .jobstore import JobRecord
+
+logger = logging.getLogger(__name__)
 
 
 async def build_document_handler(
@@ -81,15 +85,33 @@ async def build_document_handler(
         from ..config import chunk_settings as _chunk_settings
 
         _cs = _chunk_settings()
-        reviewed = await run_chunked_team(
-            text, extractor=active_extractor,
-            provider=extractor_provider, domain_code=domain_code,
-            max_iters=3, usage=usage,
-            chunk_threshold_units=_cs["threshold_units"],
-            chunk_max_units=_cs["max_units"],
-            chunk_overlap_units=_cs["overlap_units"],
-            chunk_concurrency=_cs["concurrency"],
-            result_cache=result_cache)
+        try:
+            reviewed = await run_chunked_team(
+                text, extractor=active_extractor,
+                provider=extractor_provider, domain_code=domain_code,
+                max_iters=3, usage=usage,
+                chunk_threshold_units=_cs["threshold_units"],
+                chunk_max_units=_cs["max_units"],
+                chunk_overlap_units=_cs["overlap_units"],
+                chunk_concurrency=_cs["concurrency"],
+                result_cache=result_cache)
+        except ExtractionError as exc:
+            # 批量路径同样不能把失败块的截断/返工信号丢掉（F5）：
+            # 先落一行失败观测再原样抛给 BatchRunner 做重试/终态裁决。
+            if dashboard is not None:
+                from ..observability import RunRecorder
+
+                try:
+                    await dashboard.record(RunRecorder.from_failure(
+                        document_id=doc.id, domain_code=doc.domain_code,
+                        document_metrics=getattr(exc, "document_metrics", None),
+                        error=str(exc), source="job", model_name=model_name,
+                        latency_ms=int((time.perf_counter() - t0) * 1000)))
+                except Exception:  # noqa: BLE001 观测失败不能掩盖原始抽取错误
+                    logger.warning(
+                        "失败作业写看板失败 document_id=%s", doc.id,
+                        exc_info=True)
+            raise
 
         # ② 包成 ExtractionOutput 交给 L08/L09 入库（幂等）
         # 分块路径的回填信号在 reviewed.backfill；整篇路径（provider 闭包）
@@ -114,7 +136,8 @@ async def build_document_handler(
 
             await dashboard.record(RunRecorder.from_pipeline(
                 document_id=doc.id, reviewed=reviewed, ingest_report=report,
-                domain_code=doc.domain_code, model_name=model_name,
+                domain_code=doc.domain_code, source="job",
+                model_name=model_name,
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,
                 cached_input_tokens=usage.cached_input_tokens,

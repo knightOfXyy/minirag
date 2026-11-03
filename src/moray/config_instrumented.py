@@ -43,8 +43,11 @@ class LastCallSignals:
     decode_s: float | None = None
 
     def update(self, *, finish_reason=None, prefill_s=None, decode_s=None) -> None:
-        if finish_reason is not None:
-            self.finish_reason = str(finish_reason).strip().lower()
+        # 每次调用都重置，不能沿用上一次尝试的值：供应商某次没回 finish_reason
+        # 时若保留上一轮的 length，会把一次正常返工误记成截断（信号虚高）。
+        self.finish_reason = (
+            str(finish_reason).strip().lower()
+            if finish_reason is not None else None)
         self.prefill_s = prefill_s
         self.decode_s = decode_s
 
@@ -172,11 +175,15 @@ def _make_instrumented(base_cls: type):
             # 最近一次响应的信号槽（Extractor 在每次 await 完成后读取）
             self.moray_last_signals = LastCallSignals()
 
-        def _parse_completion_response(self, start_datetime, response):
+        def _parse_completion_response(
+                self, start_datetime, response, *args, **kwargs):
             # 各家签名不一致：Volcengine 的同名方法是 async def，DeepSeek/
             # OpenAI 是普通 def。统一 await（非协程直接取值），三份子类共用。
+            # OpenAI 基类按 3 个位置参数调用（多一个 audio_format），必须
+            # 原样转发 *args/**kwargs，否则 LLM_PROVIDER=openai 每次非流式
+            # 调用都会 TypeError。
             result = super()._parse_completion_response(
-                start_datetime, response)
+                start_datetime, response, *args, **kwargs)
 
             async def _awrap(coro):
                 resp = await coro

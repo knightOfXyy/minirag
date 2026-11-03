@@ -26,10 +26,7 @@
 from __future__ import annotations
 
 import logging
-from types import SimpleNamespace
 from typing import Type
-
-SimpleNamespaceTiming = SimpleNamespace
 
 from pydantic import BaseModel, ValidationError
 
@@ -258,9 +255,9 @@ class Extractor:
             if signals.finish_reason is not None:
                 meta.setdefault("finish_reason", signals.finish_reason)
             if signals.prefill_s is not None or signals.decode_s is not None:
-                meta.setdefault("timing", SimpleNamespaceTiming(
-                    prefill_s=signals.prefill_s,
-                    decode_s=signals.decode_s))
+                meta.setdefault("timing", {
+                    "prefill_s": signals.prefill_s,
+                    "decode_s": signals.decode_s})
             reply.metadata = meta
         return reply
 

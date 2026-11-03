@@ -177,6 +177,34 @@ def test_instrumented_model_class_resolves_known_providers():
         instrumented_model_class(OpenAIChatModel), OpenAIChatModel)
 
 
+def test_openai_parse_accepts_base_class_three_positional_args():
+    """F1 回归：OpenAI 基类按 3 个位置参数调用解析器，覆盖不能窄化签名。
+
+    只断言 issubclass 会漏掉 TypeError；这里按基类真实调用形态走一遍。
+    """
+    from agentscope.model import OpenAIChatModel
+
+    cls = instrumented_model_class(OpenAIChatModel)
+    model = object.__new__(cls)
+    model.moray_last_signals = LastCallSignals()
+    completion = SimpleNamespace(
+        choices=[_choice("length", content="x")],
+        usage=None, id="openai-r1")
+    start = datetime.now()
+    resp = model._parse_completion_response(start, completion, "wav")
+    assert resp.metadata["finish_reason"] == "length"
+    assert model.moray_last_signals.finish_reason == "length"
+
+
+def test_last_call_signals_reset_finish_reason_between_attempts():
+    """F6：供应商这次没回 finish_reason 时，不能沿用上一轮的 length。"""
+    sink = LastCallSignals()
+    sink.update(finish_reason="length", prefill_s=0.1, decode_s=0.2)
+    sink.update(finish_reason=None, prefill_s=None, decode_s=None)
+    assert sink.finish_reason is None
+    assert sink.prefill_s is None and sink.decode_s is None
+
+
 @pytest.mark.asyncio
 async def test_real_agent_reply_propagates_signals_via_model_sink(monkeypatch):
     """端到端接缝：真实 Agent.reply + 假模型实例，Extractor 能从 Msg 读到信号。

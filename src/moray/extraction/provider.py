@@ -49,6 +49,7 @@ class DynamicExtractorProvider:
         self,
         domain_code: str,
         usage_sink: Usage | None = None,
+        metrics_sink: list | None = None,
         backfill_sink: dict | None = None,
     ):
         """返回一个绑定该领域的 async (text, feedback)->ExtractionResult。
@@ -60,6 +61,9 @@ class DynamicExtractorProvider:
         backfill_sink: 可选字典。瘦身回填的确定性信号同样不在
         ExtractionResult 里；调用方传一个空 dict，本层把最后一次抽取的
         ``out.backfill`` 写进 ``backfill_sink["backfill"]``，避免主链丢信号。
+
+        metrics_sink: 可选的 ChunkCallMetrics 列表。短文档（不分块）路径需要
+        把每次调用的 finish_reason/截断信号带出去，否则 length 只留一条日志。
         """
         extractor, _domain = await self.get_extractor(domain_code)
 
@@ -76,6 +80,8 @@ class DynamicExtractorProvider:
                 usage_sink.add(out.usage)
             if backfill_sink is not None:
                 backfill_sink["backfill"] = out.backfill
+            if metrics_sink is not None and out.call_metrics is not None:
+                metrics_sink.append(out.call_metrics)
             return out.result
 
         return _fn

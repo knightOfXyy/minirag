@@ -1,4 +1,11 @@
 {
+  "meta": {
+    "provider": "volcengine",
+    "chat_model": "deepseek-v4-flash-ga",
+    "generated_at": "2026-11-03",
+    "artifact_commit": "74f8fc6",
+    "meta_source": "backfilled from docs/chunk-metrics-01.md 与 .env.example 默认值；之后的新基线由 scripts/chunk_metrics_baseline.py 自动写入完整 meta（含 git_sha）"
+  },
   "runs": [
     {
       "sample": "news_long_002.txt",

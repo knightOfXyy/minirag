@@ -26,16 +26,17 @@ FastAPI 服务化（L14）
 from __future__ import annotations
 
 import hashlib
+import logging
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from types import SimpleNamespace
 from typing import Awaitable, Callable
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 
+from ..extraction import ExtractionError
 from ..extraction.document import Document, ExtractionOutput, Usage
-from ..kb import EntityStore, Ingestor, KnowledgeBase
+from ..kb import EntityStore, Ingestor, IngestReport, KnowledgeBase
 from ..orchestration import run_chunked_team
 from .schemas import (
     EnqueueJobRequest,
@@ -44,16 +45,10 @@ from .schemas import (
     ReviewDecisionRequest,
 )
 
+logger = logging.getLogger(__name__)
+
 # extractor_fn: async (text, feedback) -> ExtractionResult
 ExtractorFn = Callable[[str, str | None], Awaitable]
-
-
-class SimpleIngestReport:
-    """未走入库（ingest=False）时给看板组装 RunRecorder 的空计数占位。"""
-
-    merged: list = []
-    queued: list = []
-    created: list = []
 
 
 @dataclass
@@ -174,15 +169,34 @@ def create_app(
         from ..config import chunk_settings
 
         cs = chunk_settings()
-        reviewed = await run_chunked_team(
-            req.text, extractor=extractor_fn,
-            provider=d.extractor_provider, domain_code=req.domain_code,
-            max_iters=3, usage=usage,
-            chunk_threshold_units=cs["threshold_units"],
-            chunk_max_units=cs["max_units"],
-            chunk_overlap_units=cs["overlap_units"],
-            chunk_concurrency=cs["concurrency"],
-            result_cache=d.result_cache)
+        try:
+            reviewed = await run_chunked_team(
+                req.text, extractor=extractor_fn,
+                provider=d.extractor_provider, domain_code=req.domain_code,
+                max_iters=3, usage=usage,
+                chunk_threshold_units=cs["threshold_units"],
+                chunk_max_units=cs["max_units"],
+                chunk_overlap_units=cs["overlap_units"],
+                chunk_concurrency=cs["concurrency"],
+                result_cache=d.result_cache)
+        except ExtractionError as exc:
+            # 整篇失败（典型：某块永久失败且可能被截断）也要落一行观测：
+            # 否则最容易暴露截断的路径反而在看板上完全消失（F5）。
+            if d.dashboard is not None:
+                from ..observability import RunRecorder
+
+                try:
+                    await d.dashboard.record(RunRecorder.from_failure(
+                        document_id=doc_id, domain_code=req.domain_code,
+                        document_metrics=getattr(exc, "document_metrics", None),
+                        error=str(exc), source="api", model_name="api",
+                        latency_ms=int(
+                            (time.perf_counter() - extract_started_at) * 1000)))
+                except Exception:  # noqa: BLE001 观测失败不能掩盖原始抽取错误
+                    logger.warning(
+                        "失败作业写看板失败 document_id=%s", doc_id,
+                        exc_info=True)
+            raise
 
         # 分块路径的信号在 reviewed.backfill；整篇路径（provider 闭包）走 sink。
         backfill = (reviewed.backfill if reviewed.backfill is not None
@@ -209,22 +223,30 @@ def create_app(
         # 工单 01：实时 API 路径与批量作业共用同一份看板数据面——
         # 只要装配了 dashboard，每次抽取都落一行 pipeline_runs，分块度量随行走。
         # 未入库时用空的 IngestReport 计数组装（看板是观测面，不依赖入库）。
+        # 观测库故障不能让抽取请求 500（改动前 API 在 ingest=false 时不依赖 DB）。
         if d.dashboard is not None:
             from ..observability import RunRecorder
 
             if ingest_report is None:
-                ingest_report = SimpleIngestReport()
+                ingest_report = IngestReport()
             api_latency_ms = int(
                 (time.perf_counter() - extract_started_at) * 1000)
-            await d.dashboard.record(RunRecorder.from_pipeline(
-                document_id=doc_id, reviewed=reviewed,
-                ingest_report=ingest_report,
-                domain_code=req.domain_code, model_name="api",
-                input_tokens=(usage.input_tokens if usage is not None else 0),
-                output_tokens=(usage.output_tokens if usage is not None else 0),
-                cached_input_tokens=(
-                    usage.cached_input_tokens if usage is not None else 0),
-                latency_ms=api_latency_ms))
+            try:
+                await d.dashboard.record(RunRecorder.from_pipeline(
+                    document_id=doc_id, reviewed=reviewed,
+                    ingest_report=ingest_report,
+                    domain_code=req.domain_code, source="api",
+                    model_name="api",
+                    input_tokens=(
+                        usage.input_tokens if usage is not None else 0),
+                    output_tokens=(
+                        usage.output_tokens if usage is not None else 0),
+                    cached_input_tokens=(
+                        usage.cached_input_tokens if usage is not None else 0),
+                    latency_ms=api_latency_ms))
+            except Exception:  # noqa: BLE001 观测失败不能拖垮实时抽取
+                logger.warning(
+                    "API 写看板失败 document_id=%s", doc_id, exc_info=True)
 
         dm = getattr(reviewed, "document_metrics", None)
         return ExtractResponse(
@@ -347,9 +369,10 @@ def create_app(
     # ------------------------------------------------------------------ 看板
     @app.get("/metrics/dashboard")
     async def dashboard(domain_code: str | None = None,
+                        source: str | None = None,
                         d: AppDeps = Depends(get_deps)):
         if d.dashboard is None:
             raise HTTPException(501, "未配置看板")
-        return await d.dashboard.summary(domain_code=domain_code)
+        return await d.dashboard.summary(domain_code=domain_code, source=source)
 
     return app

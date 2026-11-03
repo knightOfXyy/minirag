@@ -24,9 +24,11 @@ AgentScope 2.0 提供两种编排原语（见 lessons/l10 的讲解）：
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
+from ..extraction.chunk_metrics import DocumentMetrics, merge_call_metrics
 from ..extraction.quality import verify_spans
 from ..schema import ExtractionResult
 
@@ -198,7 +200,32 @@ async def run_chunked_team(
 
     chunker = Chunker(max_units=chunk_max_units, overlap_units=chunk_overlap_units)
     if chunker.count(text) <= chunk_threshold_units:
-        return await run_extraction_team(text, extractor=extractor, max_iters=max_iters)
+        # 短文档虽然不走分块 pipeline，仍可能有 finish_reason=length：
+        # 若 provider 支持度量回传，就收集本轮（含审校返工轮）的 call_metrics，
+        # 包成"1 块"的文档级度量，截断信号才能进看板（F4）。
+        sink: list = []
+        short_backfill: dict = {}
+        short_extractor = extractor
+        provider_extract = getattr(provider, "extract", None)
+        if provider_extract is not None:
+            params = inspect.signature(provider_extract).parameters
+            if "metrics_sink" in params:
+                extra_kwargs: dict = {}
+                # 回填信号同样不能因为换短文档闭包而丢（03 特性）。
+                if "backfill_sink" in params:
+                    extra_kwargs["backfill_sink"] = short_backfill
+                short_extractor = await provider_extract(
+                    domain_code, usage_sink=usage, metrics_sink=sink,
+                    **extra_kwargs)
+        reviewed = await run_extraction_team(
+            text, extractor=short_extractor, max_iters=max_iters)
+        if sink:
+            dm = DocumentMetrics(document_id="chunked", n_chunks=1)
+            dm.add(merge_call_metrics(sink))
+            reviewed.document_metrics = dm
+        if reviewed.backfill is None:
+            reviewed.backfill = short_backfill.get("backfill")
+        return reviewed
 
     real, _domain = await provider.get_extractor(domain_code)
     from ..extraction.pipeline import ChunkedExtractionPipeline

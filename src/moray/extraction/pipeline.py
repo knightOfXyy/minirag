@@ -308,7 +308,13 @@ class ChunkedExtractionPipeline:
             metrics.warmup = warm_usage.model_dump()
 
         async def worker(chunk: Chunk):
-            return await self._extract_one_chunk(chunk, metrics)
+            result = await self._extract_one_chunk(chunk, metrics)
+            res, _usage, cid, _record, _backfill = result
+            # 恢复"每块完成即回调"的进度语义（改动工单前就是这样）：
+            # 失败块仍不回调，但成功块不再等到全部 gather 完才通知。
+            if res is not None and on_chunk:
+                on_chunk(res, cid, total)
+            return result
 
         settled = await asyncio.gather(*(worker(c) for c in chunks))
 
@@ -325,8 +331,6 @@ class ChunkedExtractionPipeline:
                 failed.append(cid)
                 continue
             partials.append(res)
-            if on_chunk:
-                on_chunk(res, cid, total)
 
         if failed and raise_on_chunk_error:
             # 失败语义与改动前一致（整篇抛错），但度量不能随异常一起蒸发：
