@@ -74,11 +74,10 @@ async def _build_runner(
 
     # 分块结果内容级缓存：默认关闭；启用时在本 worker 进程内共享一个实例，
     # 断点续跑/失败重试/重复提交的相同分块因此能命中（纯加速层）。
-    from ..config import build_result_cache
+    from ..config import build_result_cache_safe
 
-    result_cache = await build_result_cache(pool=pool)
-    if result_cache is not None:
-        await result_cache.init_schema()   # postgres 后端建表（memory 为 no-op）
+    # 建表失败只降级为不缓存，不让 worker 起不来（nit-6）。
+    result_cache = await build_result_cache_safe(pool=pool)
 
     handler = await build_document_handler(
         store=store, ingestor=ingestor,

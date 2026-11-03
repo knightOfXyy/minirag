@@ -51,6 +51,16 @@ def test_unknown_backend_fails_fast(_env):
         result_cache_settings()
 
 
+def test_disabled_cache_ignores_invalid_backend_and_ttl(_env):
+    """nit-5：回滚时只把 ENABLED=0，残留写错的 BACKEND/TTL 不能挡住启动。"""
+    _env.setenv("MORAY_RESULT_CACHE_ENABLED", "0")
+    _env.setenv("MORAY_RESULT_CACHE_BACKEND", "postgress")
+    _env.setenv("MORAY_RESULT_CACHE_TTL_HOURS", "abc")
+    _env.setenv("MORAY_RESULT_CACHE_REMOTE_WAIT_SECONDS", "nan")
+    s = result_cache_settings()
+    assert s == {"enabled": False}
+
+
 def test_postgres_backend_requires_pool(_env):
     _env.setenv("MORAY_RESULT_CACHE_ENABLED", "1")
     _env.setenv("MORAY_RESULT_CACHE_BACKEND", "postgres")
@@ -60,6 +70,7 @@ def test_postgres_backend_requires_pool(_env):
 
 
 def test_ttl_setting_has_default_and_parses(_env):
+    _env.setenv("MORAY_RESULT_CACHE_ENABLED", "1")
     assert result_cache_settings()["ttl_hours"] == 0
     _env.setenv("MORAY_RESULT_CACHE_TTL_HOURS", "12")
     assert result_cache_settings()["ttl_hours"] == 12
@@ -68,6 +79,7 @@ def test_ttl_setting_has_default_and_parses(_env):
 @pytest.mark.parametrize("bad", ["12h", "-1", "1.5", "abc"])
 def test_invalid_ttl_fails_fast(_env, bad):
     """TTL 非法值不能静默变成 0=永不清理（N5）。"""
+    _env.setenv("MORAY_RESULT_CACHE_ENABLED", "1")
     _env.setenv("MORAY_RESULT_CACHE_TTL_HOURS", bad)
     with pytest.raises(ConfigError, match="MORAY_RESULT_CACHE_TTL_HOURS"):
         result_cache_settings()
@@ -75,6 +87,7 @@ def test_invalid_ttl_fails_fast(_env, bad):
 
 def test_remote_wait_defaults_and_parses(_env):
     """跨进程等待窗口必须可配置（S2），默认明显高于 p99 单块耗时。"""
+    _env.setenv("MORAY_RESULT_CACHE_ENABLED", "1")
     assert result_cache_settings()["remote_wait_seconds"] == 300.0
     _env.setenv("MORAY_RESULT_CACHE_REMOTE_WAIT_SECONDS", "120.5")
     assert result_cache_settings()["remote_wait_seconds"] == 120.5
@@ -82,6 +95,7 @@ def test_remote_wait_defaults_and_parses(_env):
 
 @pytest.mark.parametrize("bad", ["0", "-5", "nan", "inf", "abc"])
 def test_invalid_remote_wait_fails_fast(_env, bad):
+    _env.setenv("MORAY_RESULT_CACHE_ENABLED", "1")
     _env.setenv("MORAY_RESULT_CACHE_REMOTE_WAIT_SECONDS", bad)
     with pytest.raises(
             ConfigError, match="MORAY_RESULT_CACHE_REMOTE_WAIT_SECONDS"):
@@ -96,3 +110,37 @@ def test_build_result_cache_passes_remote_wait_through(_env):
     cache = asyncio.run(build_result_cache())
     assert cache is not None
     assert cache.remote_wait_seconds == 42.5
+
+
+async def test_schema_failure_degrades_to_no_cache(monkeypatch):
+    """nit-6：缓存建表失败不能拖垮 API/worker 启动，只降级为不缓存。"""
+    import moray.config as config_mod
+
+    class _BrokenCache:
+        async def init_schema(self):
+            raise RuntimeError("DDL 权限不足")
+
+    async def fake_build(settings=None, *, pool=None):
+        return _BrokenCache()
+
+    monkeypatch.setattr(config_mod, "build_result_cache", fake_build)
+    assert await config_mod.build_result_cache_safe() is None
+
+
+async def test_schema_success_keeps_cache(monkeypatch):
+    import moray.config as config_mod
+
+    class _OkCache:
+        inited = False
+
+        async def init_schema(self):
+            self.inited = True
+
+    ok = _OkCache()
+
+    async def fake_build(settings=None, *, pool=None):
+        return ok
+
+    monkeypatch.setattr(config_mod, "build_result_cache", fake_build)
+    assert await config_mod.build_result_cache_safe() is ok
+    assert ok.inited is True

@@ -36,7 +36,7 @@ import hashlib
 import json
 import logging
 from collections import OrderedDict
-from typing import Awaitable, Callable, Protocol
+from typing import Awaitable, Callable, Protocol, runtime_checkable
 
 from .document import ExtractionOutput
 
@@ -75,6 +75,8 @@ class CacheBackend(Protocol):
 
 # 可选能力：支持跨进程单飞的后端用空载荷行占位（leader 令牌）。只有实现
 # 这个 Protocol 的后端才会启用跨进程单飞；内存后端不实现，契约自洽（N6）。
+# runtime_checkable 让运行期判定与导出的契约一致，而不是靠 getattr 猜方法名（nit-10）。
+@runtime_checkable
 class ClaimableBackend(Protocol):
     async def try_claim(self, key: str, lease_seconds: float) -> bool: ...
 
@@ -192,31 +194,55 @@ class ContentResultCache:
         if not is_leader:
             # 命中返回独立副本，与后端命中路径语义一致（N1）：等待方/调用方
             # 改写自己的结果不会污染 leader 或缓存。
-            return (await future).model_copy(deep=True), True
+            try:
+                return (await future).model_copy(deep=True), True
+            finally:
+                # 等待方被取消/异常退出时回退计数（nit-7）：否则 leader 失败会
+                # 给一个没人 await 的 future set_exception（日志告警）。
+                remaining = self._waiters.get(key, 0) - 1
+                if remaining > 0:
+                    self._waiters[key] = remaining
+                else:
+                    self._waiters.pop(key, None)
 
-        # ③ leader 锁外二次确认：覆盖“首读与登记之间别的协程刚写完”这一窗口。
-        cached = await self._safe_get(key)
-        if cached is not None:
-            self._finish_inflight(key, cached)
-            return cached, True
-
-        # ④ 支持跨进程占位的后端：抢到占位才是 leader，没抢到就等对方的载荷。
+        # ③ 从这里开始本协程“拥有”该键的 _inflight。二次读、跨进程占位、等待、
+        # 抽取、回写全部放进 try：这些 await 点任意一个被取消（uvicorn 关停/
+        # 请求取消/外层 wait_for）都必须清理 future 与占位，否则同键后续请求
+        # 会永久挂在 pending future 上（blocker-1）。
         claimable = getattr(self.backend, "try_claim", None) is not None
-        if claimable:
-            if not await self._safe_claim(key):
-                cached = await self._wait_remote(key)
-                if cached is not None:
-                    self._finish_inflight(key, cached)
-                    return cached, True
-                # 等待超时/对方失败：_wait_remote 已尽量重新占位，自己抽。
-
-        # 本协程是这一键的“抽取者”：真正调用模型，结束后唤醒等待者并回写。
-        renewer = asyncio.create_task(self._renew_loop(key)) if claimable else None
+        # 只有 _safe_claim / _wait_remote 明确返回“我抢到了”才为 True：
+        # 等待方超时自抽失败时绝不能 release 别人的健康占位（should-1）。
+        owns_claim = False
+        renewer: asyncio.Task | None = None
         try:
+            cached = await self._safe_get(key)
+            if cached is not None:
+                self._finish_inflight(key, cached)
+                return cached, True
+
+            # ④ 支持跨进程占位的后端：抢到占位才是 leader，没抢到就等对方的载荷。
+            if claimable:
+                if await self._safe_claim(key):
+                    owns_claim = True
+                else:
+                    cached, owns_claim = await self._wait_remote(key)
+                    if cached is not None:
+                        self._finish_inflight(key, cached)
+                        return cached, True
+                    # 等待超时/对方失败：_wait_remote 会回传是否抢到了新占位。
+
+            # 只有确实持有占位才续租：无条件起续租循环会替别人的占位续命。
+            if claimable and owns_claim:
+                renewer = asyncio.create_task(self._renew_loop(key))
+
+            # 本协程是这一键的“抽取者”：真正调用模型，结束后唤醒等待者并回写。
             output = await extract()
+            await self._safe_set(key, output)
+            self._finish_inflight(key, output)
+            return output, False
         except BaseException as exc:
             self._fail_inflight(key, exc)
-            if claimable:
+            if owns_claim:
                 await self._safe_release(key)
             raise
         finally:
@@ -226,9 +252,6 @@ class ContentResultCache:
                     await renewer
                 except asyncio.CancelledError:
                     pass
-        await self._safe_set(key, output)
-        self._finish_inflight(key, output)
-        return output, False
 
     async def has_cached(
         self,
@@ -296,10 +319,28 @@ class ContentResultCache:
         except Exception as exc:  # noqa: BLE001 释放失败只会多占一行，租约到期后可覆盖
             logger.warning("抽取缓存占位释放失败（忽略）key=%s: %r", key[:16], exc)
 
-    async def _wait_remote(self, key: str) -> ExtractionOutput | None:
+    async def _discard_corrupt(self, key: str, raw) -> None:
+        """删除损坏载荷行（仅在值仍是读到的那个坏值时），让本协程能抢占重抽。
+
+        后端不实现 discard 时是 no-op：单飞仍由 try_claim 尽力而为。
+        """
+        discard = getattr(self.backend, "discard", None)
+        if discard is None:
+            return
+        try:
+            await discard(key, raw)
+        except Exception as exc:  # noqa: BLE001 删坏行失败 → 继续尝试占位/重抽
+            logger.warning("抽取缓存删除损坏载荷失败（忽略）key=%s: %r",
+                           key[:16], exc)
+
+    async def _wait_remote(
+            self, key: str) -> tuple[ExtractionOutput | None, bool]:
         """等另一个 worker 回写载荷；租约过期或超时后重新抢占地盘。
 
-        返回 None 表示“轮到我抽”（已尽量抢到新的占位），由调用方继续 extract。
+        返回 ``(cached, owns_claim)``：
+          · ``cached`` 非 None 表示等到了载荷（owns_claim 恒 False）；
+          · ``cached is None`` 表示“轮到我抽”，``owns_claim`` 说明本协程是否
+            确实抢到了占位（决定失败时能不能 release、能不能起续租循环）。
         轮询按指数退避（N9），不会在慢 leader 期间打出上千条 SELECT。
         """
         loop = asyncio.get_running_loop()
@@ -312,17 +353,20 @@ class ContentResultCache:
             except Exception as exc:  # noqa: BLE001 后端不可读 → 自己抽
                 logger.warning("等待跨进程缓存时读取失败，改为自行抽取 key=%s: %r",
                                key[:16], exc)
-                return None
+                return None, False
             if raw is None:
                 # 占位行消失 = leader 失败并释放；立刻重新抢，早于超时恢复。
                 if await self._safe_claim(key):
-                    return None
+                    return None, True
             elif raw != "":
                 cached = self._decode(key, raw)
                 if cached is not None:
-                    return cached
-                # 载荷损坏：立刻自己重抽并由 set 覆盖（占位行已存在，抢不到）。
-                return None
+                    return cached, False
+                # 载荷损坏：删掉（仅当值仍是我们读到的坏值）再走占位，抢到的
+                # 一方重抽并覆盖；没抢到就继续轮询，避免两个 worker 同时重抽（nit-3）。
+                await self._discard_corrupt(key, raw)
+                if await self._safe_claim(key):
+                    return None, True
             else:
                 # 占位行还在：只有经过一个完整租约后才尝试接管。健康 leader 会
                 # 续租，原子抢占会失败；崩溃 leader 的租约过期后等待方立刻接手，
@@ -330,12 +374,11 @@ class ContentResultCache:
                 if loop.time() - last_takeover >= self.claim_lease_seconds:
                     last_takeover = loop.time()
                     if await self._safe_claim(key):
-                        return None
+                        return None, True
             await asyncio.sleep(delay)
             delay = min(delay * 2, self.max_poll_seconds)
         # 等太久（leader 卡死且租约异常）：尽量重新抢占地盘后自己抽，绝不永久卡住。
-        await self._safe_claim(key)
-        return None
+        return None, await self._safe_claim(key)
 
     async def _safe_set(self, key: str, output: ExtractionOutput) -> None:
         try:
@@ -475,6 +518,16 @@ class PostgresCacheBackend:
             "DELETE FROM extraction_result_cache "
             "WHERE cache_key=$1 AND payload=$2",
             key, _CLAIM_PAYLOAD)
+
+    async def discard(self, key: str, expected_value: str) -> None:
+        """删除损坏载荷行：只在值仍等于读到的坏值时删，避免误删别人刚回写的
+        有效结果（nit-3）。"""
+        if not isinstance(expected_value, str) or expected_value == _CLAIM_PAYLOAD:
+            return
+        await self.pool.execute(
+            "DELETE FROM extraction_result_cache "
+            "WHERE cache_key=$1 AND payload=$2",
+            key, expected_value)
 
     async def purge_expired(self) -> None:
         if self.ttl_hours <= 0:

@@ -15,10 +15,13 @@ build_chat_model() 拿模型，因此换供应商不改业务代码：
 
 from __future__ import annotations
 
+import logging
 import os
 from functools import lru_cache
 
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 # 包根目录的上两级 = 项目根（src/moray/config.py -> 项目根）
 _PROJECT_ROOT = os.path.abspath(
@@ -300,6 +303,10 @@ def result_cache_settings() -> dict:
     from .extraction.cache import DEFAULT_REMOTE_WAIT_SECONDS
 
     enabled = _first_env("MORAY_RESULT_CACHE_ENABLED").lower() in _ENABLED_WORDS
+    if not enabled:
+        # 关闭时完全不校验其余项：回滚只需把 ENABLED 置 0，残留写错的
+        # BACKEND/TTL/等待窗口不能挡住 API/worker 启动（nit-5）。
+        return {"enabled": False}
     backend = _first_env("MORAY_RESULT_CACHE_BACKEND") or "memory"
     if backend not in _RESULT_CACHE_BACKENDS:
         raise ConfigError(
@@ -318,8 +325,8 @@ def result_cache_settings() -> dict:
 async def build_result_cache(settings: dict | None = None, *, pool=None):
     """按配置构造分块结果缓存；关闭时返回 None（= 完全不缓存）。
 
-    这里只读开关、选后端，不建表也不吞异常：postgres 后端的 DDL 由调用方在
-    启动处 ``await cache.init_schema()`` 完成（N1），建表失败照常抛出让运维看见；
+    这里只读开关、选后端，不建表、不吞配置错误：postgres 后端的 DDL 由启动处
+    调用 ``build_result_cache_safe``（建表失败降级为不缓存，nit-6）完成；
     运行期读/写失败仍由 ContentResultCache 降级为正常抽取。
     postgres 后端必须传入 asyncpg 连接池，缺失时启动即报错（S7）。
     """
@@ -346,6 +353,24 @@ async def build_result_cache(settings: dict | None = None, *, pool=None):
             remote_wait_seconds=wait_seconds)
     return ContentResultCache(
         InMemoryCacheBackend(), remote_wait_seconds=wait_seconds)
+
+
+async def build_result_cache_safe(settings: dict | None = None, *, pool=None):
+    """构造缓存并建表；建表失败降级为「不缓存」而不是拖垮服务启动（nit-6）。
+
+    缓存是纯加速层：postgres DDL 因权限/迁移未就绪失败时，作业库连接池本身
+    仍可用，API/worker 应继续以无缓存模式运行（只记 warning），不能起不来。
+    关闭态与 memory 后端行为不变。
+    """
+    cache = await build_result_cache(settings, pool=pool)
+    if cache is None:
+        return None
+    try:
+        await cache.init_schema()
+    except Exception as exc:  # noqa: BLE001 缓存不可用 → 降级为不缓存
+        logger.warning("分块结果缓存建表失败，本次启动降级为不缓存: %r", exc)
+        return None
+    return cache
 
 
 def build_chat_model(*, stream: bool = False):

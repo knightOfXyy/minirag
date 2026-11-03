@@ -159,13 +159,15 @@ python -m moray.jobs.worker --offline --once
 
 ## 4b. 分块结果内容级缓存（工单 05，纯加速层、默认关闭）
 
-`MORAY_RESULT_CACHE_ENABLED=1` 开启后，分块抽取前按「领域配置指纹 + 模型名 +
-分块正文 + 提示模板版本」查缓存，命中不再调 LLM，也不产生真实 token。
+`MORAY_RESULT_CACHE_ENABLED=1` 开启后，分块抽取前按「领域配置指纹（含 user 消息
+模板 hash） + 模型身份（provider + base_url + 模型名） + 分块正文」查缓存，命中
+不再调 LLM，也不产生真实 token。
 
 - **后端选择**：`MORAY_RESULT_CACHE_BACKEND=memory`（默认）只在单进程内有效；
   多 worker 副本之间共享、或 worker 重启后仍要续跑命中，必须用
   `MORAY_RESULT_CACHE_BACKEND=postgres`（复用作业库，表
-  `extraction_result_cache`，由 worker/API 启动时自动建表）。
+  `extraction_result_cache`，由 worker/API 启动时自动建表；建表失败只降级为
+  不缓存并记 warning，不会让服务起不来）。
 - **跨进程单飞**：postgres 后端用空载荷占位行抢 leader，其余 worker 等它回写；
   占位行带 30s 租约，leader 抽取期间按 1/3 租约续期——健康但慢的 leader 不会被
   抢，崩溃/卡死的 leader 会在一个租约内被接管，等待方不必付满等待窗口。
@@ -174,7 +176,10 @@ python -m moray.jobs.worker --offline --once
 - **容量**：`MORAY_RESULT_CACHE_TTL_HOURS` 控制 PG 行保留时间（0=不清理，
   非法值启动即 `ConfigError`）；过期清理最多每 60s 跑一次，不会每块写入都
   `DELETE`。内存后端有 LRU 上限，长跑不会无限增长。
-- 后端名写错会在启动时直接 `ConfigError`，不会静默退回 memory。
+- **`attempts` 口径**：缓存关闭时与历史实现一致（= 块数，默认配置不改作业语义）；
+  开启后为真实模型尝试次数累计（含校验重试，命中块计 0，全命中为 0）。
+- **配置校验**：缓存开启时后端名写错会在启动时直接 `ConfigError`，不会静默退回
+  memory；缓存关闭时不校验其余缓存项，回滚只需把 `ENABLED` 置 0。
 
 ## 4c. 动态领域配置（domain_configs 配置中心，热更）
 

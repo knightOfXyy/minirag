@@ -431,6 +431,30 @@ async def test_corrupt_payload_is_treated_as_miss():
 
 
 @pytest.mark.asyncio
+async def test_concurrent_workers_on_corrupt_payload_reextract_once():
+    """nit-3：坏载荷也走占位 —— 两个 worker 同时遇到同一条坏行只重抽一次。"""
+    import asyncio
+
+    backend = _ClaimableFakeBackend()
+    key = build_cache_key("fp", "m", "坏载荷单飞")
+    backend._store[key] = "{这不是合法json"
+    cache_a = ContentResultCache(backend)
+    cache_b = ContentResultCache(backend, poll_seconds=0.005)
+    calls = {"n": 0}
+
+    async def extract():
+        calls["n"] += 1
+        await asyncio.sleep(0.05)      # 让另一个实例进入等待/轮询
+        return _output()
+
+    results = await asyncio.gather(
+        cache_a.get_or_extract("fp", "m", "坏载荷单飞", extract),
+        cache_b.get_or_extract("fp", "m", "坏载荷单飞", extract))
+    assert calls["n"] == 1
+    assert sorted(hit for _, hit in results) == [False, True]
+
+
+@pytest.mark.asyncio
 async def test_concurrent_singleflight_failure_propagates_and_clears():
     """抽取者失败时等待者收到同一异常，且键被释放后可再次正常抽取（不永久卡单飞）。"""
     import asyncio
@@ -1132,5 +1156,298 @@ async def test_non_domain_spec_fallback_includes_full_identity():
     await _pipeline(a, cache).run(Document(id="d", text=text, source="t"), chunks)
     await _pipeline(b, cache).run(Document(id="d", text=text, source="t"), chunks)
     assert b.calls == len(chunks)      # 同一 code 但配置内容不同 → 不命中
+
+
+# ---------------------------------------------------------------------------
+# 第 3 轮评审回归：取消不钉死、等待方不误删占位、attempts 旧口径
+# （对应 reviews/05-r3-minirag-review.md 的 blocker-1 / should-1 / should-2）
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_cancelled_call_in_remote_wait_does_not_wedge_key():
+    """blocker-1：在 _wait_remote 里被取消后，同键新调用必须还能完成。
+
+    旧实现从登记 _inflight 到进入 try 之间没有异常保护：取消会留下一个永远
+    pending 的 future，之后同键调用全被当等待方永久挂住。这里复现该窗口。
+    """
+    import asyncio
+
+    backend = _ClaimableFakeBackend()
+    key = build_cache_key("fp", "m", "取消不钉死")
+    assert await backend.try_claim(key, 30.0)      # 别的 worker 持有健康占位
+    cache = ContentResultCache(
+        backend, remote_wait_seconds=30.0,
+        poll_seconds=0.005, claim_lease_seconds=30.0)
+    calls = {"n": 0}
+
+    async def extract():
+        calls["n"] += 1
+        return _output()
+
+    task = asyncio.create_task(
+        cache.get_or_extract("fp", "m", "取消不钉死", extract))
+    await asyncio.sleep(0.05)                      # 让它在 _wait_remote 轮询
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # 出问题的实现会在这里留下 pending future
+    assert key not in cache._inflight
+
+    await backend.release(key)                     # 原 leader 失败/结束
+    out, hit = await asyncio.wait_for(
+        cache.get_or_extract("fp", "m", "取消不钉死", extract), timeout=1.0)
+    assert hit is False
+    assert calls["n"] == 1
+    assert out.result.entities[0].name == "华为"
+
+
+@pytest.mark.asyncio
+async def test_waiter_self_extract_failure_does_not_release_other_claim():
+    """should-1：等待超时后自抽失败，不能 release 掉别人仍存活的占位。
+
+    旧实现无条件 release，第三个 worker 立刻能抢占 → 同键出现第二次真调。
+    """
+    import asyncio
+
+    backend = _ClaimableFakeBackend()
+    key = build_cache_key("fp", "m", "别删别人的占位")
+    assert await backend.try_claim(key, 30.0)       # Q 的占位健康且未过期
+    cache = ContentResultCache(
+        backend, remote_wait_seconds=0.05,
+        poll_seconds=0.005, claim_lease_seconds=30.0)
+
+    async def boom():
+        raise RuntimeError("自抽失败")
+
+    with pytest.raises(RuntimeError):
+        await cache.get_or_extract("fp", "m", "别删别人的占位", boom)
+
+    assert backend.releases == 0                   # 没碰别人的占位
+    # Q 的占位仍在：第三个 worker 抢不到，不会发生第二次真调
+    assert await backend.try_claim(key, 0.01) is False
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_waiter_decrements_waiter_count():
+    """nit-7：等待方被取消后 _waiters 计数必须回退，否则 leader 失败时会给
+    没人 await 的 future 设置异常（Future exception was never retrieved）。"""
+    import asyncio
+
+    cache = ContentResultCache(InMemoryCacheBackend())
+    release = asyncio.Event()
+
+    async def slow():
+        await release.wait()
+        return _output()
+
+    key = build_cache_key("fp", "m", "等待者取消")
+    leader = asyncio.create_task(
+        cache.get_or_extract("fp", "m", "等待者取消", slow))
+    await asyncio.sleep(0)          # 让 leader 登记 _inflight 并进入 slow()
+    waiter = asyncio.create_task(
+        cache.get_or_extract("fp", "m", "等待者取消", slow))
+    await asyncio.sleep(0)          # 让 waiter 登记为等待者
+    assert cache._waiters.get(key, 0) == 1
+
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    assert cache._waiters.get(key, 0) == 0
+
+    release.set()
+    out, hit = await leader
+    assert hit is False and out.result.entities[0].name == "华为"
+
+
+class _RetryCountExtractor(_CountingRealExtractor):
+    """每个块都上报 attempts=2（模拟一次校验重试后成功）。"""
+
+    async def extract(self, document):
+        out = await super().extract(document)
+        out.attempts = 2
+        return out
+
+
+@pytest.mark.asyncio
+async def test_pipeline_without_cache_attempts_stays_chunk_count():
+    """should-2：缓存关闭时 attempts 口径必须与旧实现一致（= 块数）。
+
+    旧实现是 attempts=total；r2 改成累加真实尝试次数后，3 块其中一块重试
+    会从 3 变 4，违反验收 6「缓存关闭时行为与无缓存完全一致」。
+    """
+    text = _long_text()
+    chunks = _chunks(text)
+    Document = __import__("moray.extraction.document", fromlist=["Document"]).Document
+    real = _RetryCountExtractor(
+        DomainSpec(code="general", name="通用",
+                   types=(TypeSpec("ORG", "机构", "机构"),)))
+    out = await _pipeline(real, None).run(
+        Document(id="d", text=text, source="t"), chunks)
+    assert real.calls == len(chunks)
+    assert out.attempts == len(chunks)       # 旧口径：块数，而不是 2×块数
+
+
+@pytest.mark.asyncio
+async def test_pipeline_with_cache_attempts_counts_real_attempts():
+    """should-2 的另一半：开了缓存才用「真实尝试次数」累加（命中块计 0）。
+
+    口径写死在这里，避免下轮再含糊：关闭 = 块数；开启 = 真实尝试数。
+    """
+    text = _long_text()
+    chunks = _chunks(text)
+    Document = __import__("moray.extraction.document", fromlist=["Document"]).Document
+    real = _RetryCountExtractor(
+        DomainSpec(code="general", name="通用",
+                   types=(TypeSpec("ORG", "机构", "机构"),)))
+    cache = ContentResultCache(InMemoryCacheBackend())
+    doc = Document(id="d", text=text, source="t")
+    out = await _pipeline(real, cache).run(doc, chunks)
+    assert out.attempts == 2 * len(chunks)
+    # 全命中的第二次仍为 0（命中块没有模型尝试）
+    out2 = await _pipeline(real, cache).run(doc, chunks)
+    assert out2.attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_waiter_takes_over_after_lease_expires_mid_wait():
+    """nit-8：进来时占位有效、等待期间租约才过期 —— 必须走 _wait_remote 的
+    接管分支（不是入口处的二次 _safe_claim），一个租约后接管且只真调一次。"""
+    import asyncio
+
+    backend = _ClaimableFakeBackend()
+    key = build_cache_key("fp", "m", "等待期租约过期")
+    assert await backend.try_claim(key, 0.08)     # 进来时仍有效
+    cache = ContentResultCache(
+        backend, remote_wait_seconds=5.0,
+        poll_seconds=0.01, claim_lease_seconds=0.05)
+    calls = {"n": 0}
+
+    async def extract():
+        calls["n"] += 1
+        return _output()
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    out, hit = await cache.get_or_extract("fp", "m", "等待期租约过期", extract)
+    elapsed = loop.time() - started
+    assert hit is False and calls["n"] == 1
+    assert elapsed >= 0.05                       # 至少等一个租约才接管
+    assert elapsed < 1.0                         # 远小于 remote_wait_seconds
+    assert out.result.entities[0].name == "华为"
+
+
+# ---------------------------------------------------------------------------
+# 第 3 轮 nit：模型身份/模板版本进键、预热探测并发、Protocol 可运行期断言
+# ---------------------------------------------------------------------------
+def test_extractor_model_identity_includes_provider_and_base_url(monkeypatch):
+    """nit-1：同一 chat_model 挂在两个 provider/base_url 下不能共用缓存键。"""
+    from moray.extraction import extractor as extractor_mod
+
+    settings = {"provider": "ark", "base_url": "https://a.example",
+                "chat_model": "same-model"}
+    monkeypatch.setattr(extractor_mod, "get_settings", lambda: dict(settings))
+    a = extractor_mod.Extractor("general")
+    settings["base_url"] = "https://b.example"
+    b = extractor_mod.Extractor("general")
+
+    assert a.model_name == b.model_name == "same-model"
+    assert a.model_identity != b.model_identity
+    assert "a.example" in a.model_identity
+
+
+@pytest.mark.asyncio
+async def test_pipeline_uses_model_identity_when_available():
+    """nit-1：pipeline 进键的是 model_identity（provider+base_url+model），
+    而不是裸 chat_model。"""
+    text = _long_text()
+    chunks = _chunks(text)
+    Document = __import__("moray.extraction.document", fromlist=["Document"]).Document
+    real = _CountingRealExtractor(
+        DomainSpec(code="general", name="通用",
+                   types=(TypeSpec("ORG", "机构", "机构"),)))
+    real.model_identity = "ark|https://a.example|same-model"
+    cache = ContentResultCache(InMemoryCacheBackend())
+    doc = Document(id="d", text=text, source="t")
+
+    await _pipeline(real, cache).run(doc, chunks)
+    n1 = real.calls
+    # 模型名字不变，只是网关变了 → 必须换键重抽
+    real.model_identity = "ark|https://b.example|same-model"
+    await _pipeline(real, cache).run(doc, chunks)
+    assert real.calls == n1 + len(chunks)
+
+
+@pytest.mark.asyncio
+async def test_prompt_lead_in_and_retry_prompt_change_invalidates_cache():
+    """nit-2：_LEAD_IN / _retry_prompt 是真实 user 消息模板，改了必须失效，
+    不能只靠人手递增 _PROMPT_TEMPLATE_VERSION。"""
+    text = _long_text()
+    chunks = _chunks(text)
+    Document = __import__("moray.extraction.document", fromlist=["Document"]).Document
+    real = _CountingRealExtractor(
+        DomainSpec(code="general", name="通用",
+                   types=(TypeSpec("ORG", "机构", "机构"),)))
+    real._LEAD_IN = "请抽取下面正文中的实体与关系：\n\n"
+
+    @staticmethod
+    def _retry_prompt(error):
+        return f"修正：{error}"
+
+    real._retry_prompt = _retry_prompt
+    cache = ContentResultCache(InMemoryCacheBackend())
+    doc = Document(id="d", text=text, source="t")
+
+    await _pipeline(real, cache).run(doc, chunks)
+    n1 = real.calls
+    real._LEAD_IN = "请抽取（v2）：\n\n"          # 只改模板，正文/领域/模型不变
+    await _pipeline(real, cache).run(doc, chunks)
+    assert real.calls == n1 + len(chunks)
+
+
+class _ConcurrentProbeCache:
+    """只实现 pipeline 用到的两个方法的假缓存，记录 has_cached 并发峰值。"""
+
+    def __init__(self):
+        self.active = 0
+        self.max_active = 0
+
+    async def has_cached(self, domain_fingerprint, model_name, chunk_text):
+        import asyncio
+
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            await asyncio.sleep(0.02)
+            return True
+        finally:
+            self.active -= 1
+
+    async def get_or_extract(self, domain_fingerprint, model_name, chunk_text,
+                             extract):
+        return await extract(), True
+
+
+@pytest.mark.asyncio
+async def test_warm_prefix_probe_reads_are_concurrent():
+    """nit-4：预热前的 has_cached 探测不能串行 N 次后端往返。"""
+    text = _long_text()
+    chunks = _chunks(text)
+    Document = __import__("moray.extraction.document", fromlist=["Document"]).Document
+    real = _CountingRealExtractor(
+        DomainSpec(code="general", name="通用",
+                   types=(TypeSpec("ORG", "机构", "机构"),)))
+    probe = _ConcurrentProbeCache()
+    pipe = ChunkedExtractionPipeline(
+        real, concurrency=2, warm_prefix=True, result_cache=probe)
+    await pipe.run(Document(id="d", text=text, source="t"), chunks)
+    assert probe.max_active >= 2
+
+
+def test_claimable_backend_protocol_is_runtime_checkable():
+    """nit-10：导出并在运行期判定的 Protocol 必须 runtime_checkable。"""
+    from moray.extraction.cache import ClaimableBackend
+
+    assert isinstance(_ClaimableFakeBackend(), ClaimableBackend)
+    assert not isinstance(InMemoryCacheBackend(), ClaimableBackend)
 
 

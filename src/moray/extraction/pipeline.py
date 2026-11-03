@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
 
@@ -173,16 +174,33 @@ class ChunkedExtractionPipeline:
             self._domain_fingerprint() if result_cache is not None else None)
 
     def _domain_fingerprint(self) -> str:
-        """当前抽取器所用领域配置的版本指纹。
+        """当前抽取器所用领域配置 + 提示模板的版本指纹。
 
         真 Extractor 持有完整 DomainSpec，走内容级指纹（system prompt + schema）。
         对不是 DomainSpec 的假对象，回退值必须包含该对象的完整 repr：只退化成
         code 会让“同 code、不同枚举”的配置共用缓存键（N3）。
+
+        user 消息模板（``Extractor._LEAD_IN`` / ``_retry_prompt``）同样影响输出，
+        且改动不会体现在 DomainSpec 里：把它们的 hash 并进指纹，改模板自动失效，
+        不再依赖人手递增 ``_PROMPT_TEMPLATE_VERSION``（nit-2）。
         """
         domain = getattr(self.extractor, "domain", None)
         if isinstance(domain, DomainSpec):
-            return domain_fingerprint(domain)
-        return f"code:{getattr(domain, 'code', 'unknown')}|repr:{domain!r}"
+            base = domain_fingerprint(domain)
+        else:
+            base = f"code:{getattr(domain, 'code', 'unknown')}|repr:{domain!r}"
+        lead_in = getattr(self.extractor, "_LEAD_IN", "")
+        retry_prompt = getattr(self.extractor, "_retry_prompt", None)
+        retry_sample = retry_prompt("{error}") if callable(retry_prompt) else ""
+        template = hashlib.sha256(
+            f"{lead_in}\x00{retry_sample}".encode("utf-8")).hexdigest()[:16]
+        return f"{base}|tpl:{template}"
+
+    def _cache_model_identity(self) -> str:
+        """缓存键里的模型身份：优先用 Extractor 的完整身份（provider+base_url+
+        model），假对象退化为裸 model_name（nit-1）。"""
+        return (getattr(self.extractor, "model_identity", None)
+                or getattr(self.extractor, "model_name", "") or "")
 
     async def _extract_chunk_output(
         self, mini_doc: Document, chunk: Chunk,
@@ -347,12 +365,15 @@ class ChunkedExtractionPipeline:
         if self.warm_prefix and total >= 2:
             all_cached = False
             if self.result_cache is not None:
-                model_name = getattr(self.extractor, "model_name", "") or ""
-                all_cached = all([
-                    await self.result_cache.has_cached(
+                model_name = self._cache_model_identity()
+                # 并发探测：postgres 后端下串行 N 次 RTT 只为决定要不要预热
+                # 是纯浪费（nit-4）。
+                probes = await asyncio.gather(*[
+                    self.result_cache.has_cached(
                         self._cached_domain_fingerprint, model_name, c.text)
                     for c in chunks
                 ])
+                all_cached = all(probes)
             if not all_cached:
                 warm_usage = await self.extractor.warm_prefix()
                 usage.add(warm_usage)
@@ -410,16 +431,19 @@ class ChunkedExtractionPipeline:
         # 块内偏移的平移由 merge_backfill_reports 按各块 chunk_start 统一完成。
         backfill = (merge_backfill_reports(backfill_reports).to_dict()
                     if backfill_reports else None)
+        # attempts 口径（should-2，写死避免再漂移）：
+        #   · result_cache is None：与历史实现完全一致 = 块数（默认配置不改语义）；
+        #   · 开缓存：真实模型尝试次数累计，命中块计 0（全命中为 0）。
+        attempts = (total if self.result_cache is None
+                    else sum(m.attempts for _r, _u, _c, m, _b in settled
+                             if m is not None))
         return ExtractionOutput(
             document_id=document.id,
             domain_code=self.extractor.domain.code,
             result=merged,
             model_name=self.extractor.model_name,
             usage=usage,
-            # 实际模型尝试次数：命中块计 0，真实抽取块按提取器上报的次数累加。
-            # 全命中时是 0 而不是块数（N4）。五元组里尝试次数挂在分块度量上。
-            attempts=sum(
-                item[3].attempts for item in settled if item[3] is not None),
+            attempts=attempts,
             document_metrics=metrics,
             backfill=backfill,
         )
