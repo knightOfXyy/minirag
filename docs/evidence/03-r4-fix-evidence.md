@@ -72,11 +72,26 @@ PYTHONPATH=src python tools/backfill_stress_ab.py \
 r4 N3 指出的单次采样脆弱性：本轮用 3 轮均值/最小值把它显式暴露，不再用
 单次 +0.93pt 宣称稳健。
 
-**r5 F10 口径说明（不擅自改验收门槛）**：上面的「达成」仅指工单原文的
-3 轮均值口径；若改成 **worst-of-N**（任一轮/任一篇都不得超过 −0.5pt），
-本轮实测 **未达标**（单轮 −1.30pt、seed20261104 −2.88pt）。是否把放量门槛
-改成 worst-of-N、或扩大语料/轮数让区间收敛，属产品/工单 owner 决策，
-本修复轮不擅自改门槛，只把两种口径的结论同时写清。
+**r7 F2 口径裁定（owner 2026-11-03，替代 r5 F10 的「待定」）**：
+
+- 验收口径钉死为 **mean-of-3**：3 轮重复（`repeat=3`、`temperature=0`；
+  provider 不暴露 seed；语料 3 篇 = seed20261102/20261103/20261104），
+  每轮先算 full/slim 的语料级实体 macro relaxed F1 差，再对 3 轮 delta 取
+  算术平均 = **+0.0733pt**。门槛「跌幅 ≤ 0.5pt」→ **达成**。复算入口：
+  `docs/evidence/03-r3-stress-ab.json` 的 `repeats[*].delta` 与
+  `aggregate.delta.entity_macro_f1_delta_pt`；公式
+  `mean([+1.00, -1.30, +0.52]) = +0.0733`。
+- 同一份证据并列披露 **worst-of-N 未达标**：单轮最低 −1.30pt、
+  seed20261104 逐篇均值 −2.88pt。文档口径原句：
+  **「均值达标、最差值未达标，放量决策须另行评估」**。
+- 证据可复现性：`git_sha=9f95ed4` 早于 r5/r6/r7。`9f95ed4..HEAD` 的差异面
+  只有 `rule_review` 的端点/重复判定、`local_backfill` 的关系端点 strip 与
+  整篇别名补扫、05 缓存键、聚合脚本 `_aggregate_delta` 的 min/max 口径；
+  **不涉及实体/关系匹配逻辑、prompt 或 schema**，因此上述 A/B 数字仍代表
+  HEAD 行为，但无法从 HEAD 直接重放（需真实 LLM 凭证）。
+- **给工单 04 的接口（owner 要求）**：04 决定是否翻默认开关时，gate 必须
+  同时报告 mean-of-N 与 worst-of-N；**worst-of-N 超过 −0.5pt 时不得翻默认
+  开关**（需 owner 单独批准）。本条只是口径归档，不是对风险的豁免。
 
 ## 三、工单 03 十条验收复核（本轮修复后）
 
