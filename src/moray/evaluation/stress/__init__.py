@@ -2,6 +2,7 @@
 
 from .budget import (
     MAX_ENTITY_F1_DROP_PT,
+    MAX_RELATION_PRECISION_DROP_PT,
     evaluate_budget_gate,
     relation_chunk_profile,
 )
@@ -27,9 +28,14 @@ from .loader import (
     stress_case_to_gold,
 )
 from .metrics import (
+    TYPE_LABEL_PREFIXES,
     CaseEvaluation,
     aggregate_cases,
+    apply_type_label_aliases,
     evaluate_case,
+    gold_covered_sentence_spans,
+    normalize_entity_name_aliases,
+    relation_covered_prf,
     relation_recall_for_predicates,
 )
 from .runner import (
@@ -44,8 +50,14 @@ from .runner import (
 
 __all__ = [
     "MAX_ENTITY_F1_DROP_PT",
+    "MAX_RELATION_PRECISION_DROP_PT",
+    "TYPE_LABEL_PREFIXES",
+    "apply_type_label_aliases",
     "evaluate_budget_gate",
+    "gold_covered_sentence_spans",
+    "normalize_entity_name_aliases",
     "relation_chunk_profile",
+    "relation_covered_prf",
     "DECOY_PREFIX",
     "PREDICATE_TRIGGERS",
     "STRESS_SEEDS",

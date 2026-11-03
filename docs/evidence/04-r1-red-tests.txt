@@ -1,0 +1,16 @@
+
+==================================== ERRORS ====================================
+_____________ ERROR collecting tests/test_chunk_budget_r1_fixes.py _____________
+ImportError while importing test module '/home/dell/orca/workspaces/minirag/tmp-yzd-feat-relation-202610-04/tests/test_chunk_budget_r1_fixes.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_chunk_budget_r1_fixes.py:31: in <module>
+    from tools.chunk_budget_ab import (  # noqa: E402
+E   ImportError: cannot import name '_delta_summary_pt' from 'tools.chunk_budget_ab' (/home/dell/orca/workspaces/minirag/tmp-yzd-feat-relation-202610-04/tools/chunk_budget_ab.py)
+=========================== short test summary info ============================
+ERROR tests/test_chunk_budget_r1_fixes.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.80s
