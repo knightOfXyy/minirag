@@ -75,6 +75,7 @@ class DynamicExtractorProvider:
                 body = text + "\n\n【上次问题，请务必修正】\n" + feedback
             out = await extractor.extract(
                 Document(id=f"{domain_code}-dyn", text=body,
+                         source_text=text if feedback else None,
                          source="dynamic", domain_code=domain_code))
             if usage_sink is not None:
                 usage_sink.add(out.usage)

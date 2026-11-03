@@ -60,15 +60,20 @@ class Chunk:
 
 
 def split_sentences(
-    text: str, *, ascii_period: bool = False
+    text: str, *, ascii_period: bool = False, preserve_leading: bool = False
 ) -> list[tuple[int, int]]:
     """把文本切成句子，返回每句在原文中的 [start, end)。
 
     ``ascii_period`` 供关系证据使用：英文句号后跟空白/结尾也算句末。
-    分块路径保持默认（不认英文句号），行为与改造前一致。
-    用边界扫描而不是 ``text.split``，保证偏移永远精确；开头就是空白/结束符
-    时也不会像旧实现那样直接返回空列表（正文以换行开头的案卷会丢全部证据）。
+
+    ``preserve_leading=False``（分块路径默认）逐字节保持 262319b 的边界语义：
+    正文以结束符/换行开头时旧实现返回空列表，这里同样返回空——关闭开关的
+    分块结果必须与改造前一致（验收 7）。关系证据回填传 ``preserve_leading=True``，
+    这样以空白/结束符开头的案卷不会丢掉全部证据。
+    用边界扫描而不是 ``text.split``，保证偏移永远精确。
     """
+    if not preserve_leading and text and text[0] in _TERMINATORS:
+        return []
     pattern = _SENT_BOUNDARY_ASCII if ascii_period else _SENT_BOUNDARY
     sentences: list[tuple[int, int]] = []
     start = 0

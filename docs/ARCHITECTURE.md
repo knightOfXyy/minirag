@@ -61,6 +61,18 @@
 - 置信度：模型自报语义不变；slim 模式不自报 = `None`/SQL NULL（未知），
   不能被 0.0 冒充。下游（审校/看板/API）消费 `BackfillReport.block_confidence`
   等确定性信号。
+- **置信度默认值（刻意破坏性变更）**：内核 `Entity.confidence` /
+  `Relation.confidence` 的默认值由 `0.0` 改为 `None`（未知）。full 动态
+  schema 的模型契约仍是 0~1 数值（缺省 0.0），`to_core_result` 对 full 输出
+  保持 0.0；只有直接构造内核对象且不传 confidence 的调用方会看到 `null`。
+  迁移方式：把 `confidence` 当可空字段判空，不要 `float(confidence)` 或
+  `confidence < x` 直接比较。
+- 回填坐标系：`Document.source_text` 是 mention/span 的唯一坐标系。返工轮
+  provider 会把审校反馈追加到 `text`（让模型看到要改什么），但必须同时传
+  `source_text=原始正文`，否则反馈里的实体名会被回填成越界 span。
+- 切句边界：`split_sentences(preserve_leading=False)` 是分块默认，逐字节保持
+  262319b 的边界（以结束符/换行开头返回空）；关系证据回填显式
+  `preserve_leading=True`，两种语义不得互相污染。
 
 ## 贯穿全项目的工程原则
 
@@ -78,8 +90,8 @@
 ## 测试
 
 ```bash
-python -m pytest tests/ -q                 # 281 个离线确定性单测（CI 同款）
-RUN_DB_TESTS=1 python -m pytest tests/ -q  # 全量 342（+61 个 pgvector/MCP/API/作业/合并集成）
+python -m pytest tests/ -q                 # 307 个离线确定性单测（CI 同款）
+RUN_DB_TESTS=1 python -m pytest tests/ -q  # 全量（+DB/pgvector/MCP/API/作业集成；本轮未复跑）
 ```
 
 ## 从哪开始读代码

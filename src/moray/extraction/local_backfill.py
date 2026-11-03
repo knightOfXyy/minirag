@@ -65,6 +65,8 @@ class AmbiguousMention:
     candidates: list[str]
     reason: str = ""
     chunk_id: str = ""
+    # 重叠块里同一处原文出现只保留一条歧义记录，来源块全部记在这里
+    chunk_ids: list[str] = field(default_factory=list)
 
 
 def max_confidence(a: float | None, b: float | None) -> float | None:
@@ -91,6 +93,10 @@ class BackfillReport:
     matched_literals: dict[str, int] = field(default_factory=dict)
     # 模型给了、但正文里一次都没出现的名字/别名（疑似幻觉）
     unmatched_aliases: list[dict] = field(default_factory=list)
+    # 该块正文中出现过的全部字面（来自 AC 原始命中，含被最长匹配/歧义吸收的）。
+    # 别名幻觉判定只看这份集合，不再对每个别名做一次全文包含扫描；
+    # 跨块汇总时取并集，让「正文」语义覆盖整篇文档而不是单块。
+    seen_literals: list[str] = field(default_factory=list)
     # 歧义未归属的出现
     ambiguous_mentions: list[AmbiguousMention] = field(default_factory=list)
     # 块级置信度：被正文证据命中的实体占比（0~1）
@@ -132,12 +138,14 @@ class BackfillReport:
         report.chunk_id = chunk_id or str(data.get("chunk_id", ""))
         report.matched_literals = dict(data.get("matched_literals") or {})
         report.unmatched_aliases = list(data.get("unmatched_aliases") or [])
+        report.seen_literals = list(data.get("seen_literals") or [])
         report.ambiguous_mentions = [
             AmbiguousMention(
                 surface=x["surface"], start=x["start"], end=x["end"],
                 candidates=list(x.get("candidates") or []),
                 reason=x.get("reason", ""),
                 chunk_id=x.get("chunk_id", report.chunk_id),
+                chunk_ids=list(x.get("chunk_ids") or []),
             )
             for x in (data.get("ambiguous_mentions") or [])
         ]
@@ -167,6 +175,7 @@ class BackfillReport:
             "relations_with_evidence": self.relations_with_evidence,
             "matched_literals": self.matched_literals,
             "unmatched_aliases": self.unmatched_aliases,
+            "seen_literals": self.seen_literals,
             "ambiguous_mentions": [
                 {
                     "surface": am.surface,
@@ -175,6 +184,7 @@ class BackfillReport:
                     "candidates": am.candidates,
                     "reason": am.reason,
                     "chunk_id": am.chunk_id,
+                    "chunk_ids": am.chunk_ids,
                 }
                 for am in self.ambiguous_mentions
             ],
@@ -348,11 +358,17 @@ def backfill_provenance(
     # 该实体下累计的 mention，按出现位置排列
     mentions_by_entity: dict[int, list[EntityMention]] = {i: [] for i in range(len(logical))}
     matched_literals: dict[int, set[str]] = {i: set() for i in range(len(logical))}
+    seen_literals: set[str] = set()
 
     if patterns:
         ac = AhoCorasick(patterns)
         raw_hits = list(ac.scan(text))
-
+        # 一趟扫描的副产物：正文里真实出现过的全部字面（含随后被最长匹配
+        # 或歧义占位吸收的命中）。别名是否「正文不存在」只看这份集合，
+        # 不再对每个别名做一次 `literal in text` 全文扫描——那会让整体
+        # 复杂度随别名数×文本长度增长，违反验收 10 的单趟线性承诺。
+        seen_literals = {literal for _s, _e, literal in raw_hits}
+        report.seen_literals = sorted(seen_literals)
         # 最长匹配优先：长模式先占区间；同长按起点；起点相同同长 = 歧义
         # （同一起点、同一长度必然是同一字面，归属在下面按候选数判定）。
         raw_hits.sort(key=lambda h: (-(h[1] - h[0]), h[0]))
@@ -409,10 +425,11 @@ def backfill_provenance(
         # 标准名没出现是「实体未命中正文」，不是「别名幻觉」；只有模型给的
         # 别名（!= 标准名）在正文中【字面完全不存在】才计入 unmatched_aliases。
         # 不能只看它是否独立成为 hit：作为长名前缀/子串被吸收（阿里巴巴/阿里）
-        # 时别名明明出现了，报成幻觉是误报。
+        # 时别名明明出现了，报成幻觉是误报。这里比对一趟扫描收集的
+        # seen_literals，避免按别名逐个重扫全文。
         for literal in e.aliases:
             literal = literal.strip()
-            if literal and literal != e.name and literal not in text:
+            if literal and literal != e.name and literal not in seen_literals:
                 report.unmatched_aliases.append(
                     {"entity": e.name, "literal": literal}
                 )
@@ -450,10 +467,26 @@ def _backfill_relations(
     report: BackfillReport,
 ) -> list[Relation]:
     """按「头、尾同句共现」回填关系证据 span；不共现则留空。"""
-    name_to_idx = {e.name: i for i, e in enumerate(entities)}
+    # 关系端点按标准名或别名解析：模型有时会把别名写进 head/tail。
+    # 只有「唯一归属」才认（同一字面映射到多个逻辑实体时不猜），与
+    # backfill_provenance 的歧义口径一致。
+    literal_to_indices: dict[str, list[int]] = {}
+    for idx, ent in enumerate(entities):
+        for literal in [ent.name, *ent.aliases]:
+            literal = literal.strip()
+            if not literal:
+                continue
+            indices = literal_to_indices.setdefault(literal, [])
+            if idx not in indices:
+                indices.append(idx)
+
+    def _resolve(literal: str) -> int | None:
+        indices = literal_to_indices.get(literal) or []
+        return indices[0] if len(indices) == 1 else None
+
     # 关系证据必须认英文句号（"Alice met Bob. Carol met Bob." 是两句），
     # 中文句切保持原行为；返回的偏移仍可对原文直接切片。
-    sentences = split_sentences(text, ascii_period=True)
+    sentences = split_sentences(text, ascii_period=True, preserve_leading=True)
 
     def _sentence_of(pos: int) -> int | None:
         for k, (s, e) in enumerate(sentences):
@@ -463,8 +496,8 @@ def _backfill_relations(
 
     out: list[Relation] = []
     for r in relations:
-        hi = name_to_idx.get(r.head)
-        ti = name_to_idx.get(r.tail)
+        hi = _resolve(r.head)
+        ti = _resolve(r.tail)
         pairs: list[tuple[int, int, int, int, int]] = []
         # (head_start, tail_start, sent_start, sent_end, distance)
         if hi is not None and ti is not None:
@@ -535,11 +568,18 @@ def merge_backfill_reports(reports: list[BackfillReport]) -> BackfillReport:
     跨块语义：``ambiguous_mentions`` 与 ``relation_evidence_candidates`` 里的
     偏移在单块报告里是块内坐标；汇总时统一 + ``chunk_start`` 平移成文档全局
     坐标，并带上 ``chunk_id``，上层不会把 0..块长误当全局偏移。
+    重叠块里的同一处歧义按 ``(surface, start, end, candidates)`` 去重，
+    来源块收进 ``chunk_ids``，避免 overlap 把人工复核信号放大。
+    ``unmatched_aliases`` 以整篇文档为口径：先取各块 ``seen_literals`` 的并集，
+    只有所有块都没见过的别名才算幻觉，并按 ``(entity, literal)`` 去重。
     ``relations_without_evidence`` 按三元组去重（不同块重复命中同一关系时
     只保留一条，chunk_ids 记录来源块），避免按块堆叠把计数放大。
     """
     merged = BackfillReport()
     missing_index: dict[str, dict] = {}
+    ambiguous_index: dict[tuple, AmbiguousMention] = {}
+    unmatched_index: dict[tuple[str, str], dict] = {}
+    seen_literals: set[str] = set()
     for report in reports:
         offset = report.chunk_start
         merged.entities_total += report.entities_total
@@ -548,16 +588,32 @@ def merge_backfill_reports(reports: list[BackfillReport]) -> BackfillReport:
         merged.relations_with_evidence += report.relations_with_evidence
         for key, n in report.matched_literals.items():
             merged.matched_literals[key] = merged.matched_literals.get(key, 0) + n
-        merged.unmatched_aliases.extend(report.unmatched_aliases)
+        seen_literals.update(report.seen_literals)
+        for entry in report.unmatched_aliases:
+            key = (str(entry.get("entity", "")), str(entry.get("literal", "")))
+            unmatched_index.setdefault(key, dict(entry))
         for am in report.ambiguous_mentions:
-            merged.ambiguous_mentions.append(AmbiguousMention(
-                surface=am.surface,
-                start=am.start + offset,
-                end=am.end + offset,
-                candidates=list(am.candidates),
-                reason=am.reason,
-                chunk_id=am.chunk_id or report.chunk_id,
-            ))
+            start, end = am.start + offset, am.end + offset
+            key = (am.surface, start, end, tuple(am.candidates))
+            existing = ambiguous_index.get(key)
+            source_chunks = am.chunk_ids or (
+                [am.chunk_id] if am.chunk_id else [report.chunk_id])
+            if existing is None:
+                merged_am = AmbiguousMention(
+                    surface=am.surface,
+                    start=start,
+                    end=end,
+                    candidates=list(am.candidates),
+                    reason=am.reason,
+                    chunk_id=source_chunks[0] if source_chunks else "",
+                    chunk_ids=list(source_chunks),
+                )
+                ambiguous_index[key] = merged_am
+                merged.ambiguous_mentions.append(merged_am)
+            else:
+                for cid in source_chunks:
+                    if cid and cid not in existing.chunk_ids:
+                        existing.chunk_ids.append(cid)
         for entry in report.relations_without_evidence:
             item = dict(entry)
             item["chunk_id"] = report.chunk_id
@@ -583,4 +639,11 @@ def merge_backfill_reports(reports: list[BackfillReport]) -> BackfillReport:
                 item["chunk_id"] = report.chunk_id
                 shifted.append(item)
             merged.relation_evidence_candidates.setdefault(key, []).extend(shifted)
+    merged.seen_literals = sorted(seen_literals)
+    # 整篇口径：只有所有块都没出现过的别名才算幻觉；同一 (entity,literal)
+    # 只保留一条，不按块堆叠。
+    merged.unmatched_aliases = [
+        entry for key, entry in unmatched_index.items()
+        if key[1] not in seen_literals
+    ]
     return merged
