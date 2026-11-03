@@ -99,22 +99,33 @@
   长文/单块大文本的笛卡尔积，避免 05 结果缓存与内存被撑大；只有 API 响应/
   作业结果落盘边界用 `serialize_backfill_for_output` 按
   `MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES=20` 裁剪（selected 在首条）。
-  `to_dict()` 默认上限仍可用，但传 `None` 表示全量、`0` 表示空；负数直接
-  `ValueError`（r12 N10，旧版本曾把 `<=0` 静默当全量/空，语义反转过一次）。
-  `serialize_backfill_for_output` 返回完全独立的深层副本，消费方改嵌套容器
-  不会反向污染内部报告（r12 N8）。
-- 实体身份键（r10 N9、r11 N11、r12 S1）：回填与 slim 归并共用
+  `to_dict()` 默认上限仍可用，但传 `None` 表示全量、`0` 表示空；负数在
+  序列化边界 clamp 到默认 20 并记 WARNING（r13 N6，坏配置不能把整次响应打成
+  500；配置层应在启动时另行校验）。
+  `serialize_backfill_for_output` 返回完全独立的深层副本（含
+  `chunk_ids`），消费方改嵌套容器不会反向污染内部报告（r12 N8、r13 N1）。
+  **验收 5 的口径收窄**：块间/内存默认保留全量，但单条关系进程内软上限
+  2000 条、出网 20 条；极端单句（如 50×50 共现）下「保留全部候选」只到
+  2000 条为止，不再声称无条件成立（r13 N2）。
+- 实体身份键（r10 N9、r11 N11、r12 S1、r13 N3/N4）：回填与 slim 归并共用
   `entity_identity_key`（默认去首尾空白）；关闭态 `naive_merge` 保持 262319b
-  的精确键。SLIM 归并不仅用去空白后的键，**存值/落库值也同步规范化**
+  的精确键。回填的输出存值也规范化（实体标准名、关系 head/tail），
+  短文档/直连 `Extractor.extract` 路径不经 `naive_merge` 也同口径；
+  `entity_signal_key` 同样对 name 去空白，跨块不会把同一实体拆成两个信号键。
+  SLIM 归并不仅用去空白后的键，**存值/落库值也同步规范化**
   （实体标准名与关系 head/tail），否则入库 `_resolve` 按精确名匹配不到真实
   实体、会建 MISC 占位。`naive_merge` 合并关系时存 `model_copy`，不改写调用方
   传入的 partial（r10 N10）。四个归并口径由 `MergeMode.LEGACY|SLIM` 单一开关
-  表达，四个关键字参数作为兼容 shim 保留（r12 N9）。
+  表达；四个关键字参数是 **deprecated 兼容 shim**，显式传值即覆盖模式默认，
+  新代码不要与 `mode` 混用（r12 N9、r13 N5）。
 - 回填只扫一次（r10 N5、r11 N4、r12 N5）：质量中间件与抽取器共用
   `cached_backfill_provenance(cache, result, text)`；`cache` 由抽取器在本次
   reply 的 agent 上持有（`Extractor.extract` 显式 `setattr`），并显式传给
   中间件/回填函数；缓存函数内部不再往 owner 写私有属性。键为
-  `(原文, 结果内容指纹)`，不做全量 `model_dump_json`。中间件在没有可核对 span
+  `(原文, 实体(type,name,aliases,attributes,description,confidence),
+  关系(head,predicate,tail))`，不做全量 `model_dump_json`。缓存值是整个
+  filled 结果，所以 attributes/description/confidence 必须在键里：重试只改
+  这些字段时不能命中上一轮产物（r13 S1）。中间件在没有可核对 span
   时把 `span_ratio` 记 `None`（未测），不再写空转的 1.0。
 - 单块扫描口径（r11 N8、r12 N6）：仅当 `len(chunks)==1` **且该块
   `start==0`、`end==len(document_text)`（真正覆盖全文）** 时，

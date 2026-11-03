@@ -1,13 +1,21 @@
-===== 2026-11-03 r3 更新：验收 8 已在 02 压力语料闭环 =====
-本轮已把 dev 的 02 压力 loader/语料合入临时分支，并用真实 LLM 跑 full vs slim：
-  PYTHONPATH=src python tools/backfill_stress_ab.py \
-    --gold data/gold/stress --env-file ../moray/.env \
-    --max-units 1500 --overlap-units 200 --json-out docs/evidence/03-r3-stress-ab.json
-结果（3 篇 seeds，deepseek-flash）：实体 macro relaxed F1 0.8698→0.8791
-（+0.93pt，达标）；关系 F1 0.0→0.0133（不下降）；span 一致率 min 0.017→1.0；
-单块 output token 2074.69→520.40（−74.92%）；截断块 2→0。
-完整数字、逐篇波动与 token 消耗见 docs/evidence/03-r3-fix-evidence.md 与
-docs/evidence/03-r3-stress-ab.json。下面保留 r2 时的基线旁证，不再作为验收 8 证据。
+===== 2026-11-03 r13 更正：验收 8 的权威口径 =====
+本文件旧的 r3 段曾写「验收 8 已在 02 压力语料闭环」，并列出与
+docs/evidence/03-r3-stress-ab.json 的 delta 不一致的数字（0.8698→0.8791、
+关系 0.0→0.0133、token 2074.69→520.40、截断 2→0）；该结论已删除，避免
+放量评审时被当成绿灯。
+
+验收 8 当前结论：**未达成**（权威判定见 docs/evidence/03-local-backfill-summary.md
+的验收表与 docs/evidence/03-r13-fix-evidence.md）。权威快照 9f95ed4
+（docs/evidence/03-r3-stress-ab.json）的 delta 是：
+  实体 macro relaxed F1 0.8977→0.8984（mean-of-3 +0.0733pt）；
+  3 轮分别 +1.00 / −1.30 / +0.52pt，worst-of-N = −1.30pt，超过 ≤0.5pt 门槛；
+  关系 F1 0.3245→0.7195；单块 output token 2365.98→582.13（−75.32%）；
+  截断块 6→0。
+HEAD（0065885 + r13 修复）的真实 LLM 重放结果见
+docs/evidence/03-r13-stress-ab.json（同一脚本/语料/块预算，3 轮，同时报
+mean-of-N 与 worst-of-N）。默认开关保持关闭；翻默认前必须同时满足两者。
+
+下面保留 r2 时的基线旁证，不再作为验收 8 证据。
 
 ===== 真实 LLM A/B（仓库内基线语料 data/gold，6 篇，DeepSeek）=====
 命令：PYTHONPATH=src python tools/backfill_ab_eval.py --mode llm --json-out docs/evidence/03-ab-llm.json
@@ -24,8 +32,9 @@ span 一致率     before min/mean=0.2000/0.6778  after min/mean=1.0000/1.0000
 说明：
 - 这份文件原名 03-stress-corpus-eval.txt，但内容并不是压力集结果（评审 r2 finding 5）。
   现改名为 03-baseline-ab.txt，避免后续误判「压力集已测」。
-- 2026-11-03 评审 r2 环境核查：本 worktree 没有 ARK_API_KEY/.env，无法复跑真实 LLM。
-  因此验收 8 的「工单 02 扩展压力语料」**本轮未闭环**，阻塞原因与复跑命令如下。
+- 2026-11-03 评审 r2 环境核查（历史记录）：本 worktree 当时没有 ARK_API_KEY/.env，
+  无法复跑真实 LLM。因此验收 8 的「工单 02 扩展压力语料」**r2 时未闭环**；
+  最新状态以上方 r13 段与 `03-r13-stress-ab.json` 为准。
 - 复跑前置：工单 02 的 `moray.evaluation.stress` loader 需先合入 dev（本分支
   `load_gold_dir` 只认 *.tagged.txt，压力集是 *.md + *.answer.json）。
   合入后执行：

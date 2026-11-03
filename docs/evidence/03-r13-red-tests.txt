@@ -1,0 +1,243 @@
+FFFFFFFF.F                                                               [100%]
+=================================== FAILURES ===================================
+_ test_backfill_cache_key_includes_revised_fields[attributes-old_value0-new_value0] _
+
+field = 'attributes', old_value = {'code': 'WRONG'}
+new_value = {'code': 'RIGHT'}
+
+    @pytest.mark.parametrize(
+        "field, old_value, new_value",
+        [
+            ("attributes", {"code": "WRONG"}, {"code": "RIGHT"}),
+            ("description", "旧描述", "新描述"),
+            ("confidence", 0.1, 0.9),
+        ],
+    )
+    def test_backfill_cache_key_includes_revised_fields(
+            field, old_value, new_value):
+        cache: dict = {}
+        text = "华为在深圳。"
+    
+        first = ExtractionResult(entities=[
+            Entity(name="华为", type="ORG", **{field: old_value})])
+        revised = ExtractionResult(entities=[
+            Entity(name="华为", type="ORG", **{field: new_value})])
+    
+        _filled_first, _ = lb.cached_backfill_provenance(cache, first, text)
+        filled_revised, _ = lb.cached_backfill_provenance(cache, revised, text)
+    
+        # 重试只改了一个不参与 mention/span 定位的字段，但缓存值里它会被回灌。
+>       assert getattr(filled_revised.entities[0], field) == new_value
+E       AssertionError: assert {'code': 'WRONG'} == {'code': 'RIGHT'}
+E         
+E         Differing items:
+E         {'code': 'WRONG'} != {'code': 'RIGHT'}
+E         Use -v to get more diff
+
+tests/test_r13_review_fixes.py:48: AssertionError
+_ test_backfill_cache_key_includes_revised_fields[description-\u65e7\u63cf\u8ff0-\u65b0\u63cf\u8ff0] _
+
+field = 'description', old_value = '旧描述', new_value = '新描述'
+
+    @pytest.mark.parametrize(
+        "field, old_value, new_value",
+        [
+            ("attributes", {"code": "WRONG"}, {"code": "RIGHT"}),
+            ("description", "旧描述", "新描述"),
+            ("confidence", 0.1, 0.9),
+        ],
+    )
+    def test_backfill_cache_key_includes_revised_fields(
+            field, old_value, new_value):
+        cache: dict = {}
+        text = "华为在深圳。"
+    
+        first = ExtractionResult(entities=[
+            Entity(name="华为", type="ORG", **{field: old_value})])
+        revised = ExtractionResult(entities=[
+            Entity(name="华为", type="ORG", **{field: new_value})])
+    
+        _filled_first, _ = lb.cached_backfill_provenance(cache, first, text)
+        filled_revised, _ = lb.cached_backfill_provenance(cache, revised, text)
+    
+        # 重试只改了一个不参与 mention/span 定位的字段，但缓存值里它会被回灌。
+>       assert getattr(filled_revised.entities[0], field) == new_value
+E       AssertionError: assert '旧描述' == '新描述'
+E         
+E         - 新描述
+E         + 旧描述
+
+tests/test_r13_review_fixes.py:48: AssertionError
+_____ test_backfill_cache_key_includes_revised_fields[confidence-0.1-0.9] ______
+
+field = 'confidence', old_value = 0.1, new_value = 0.9
+
+    @pytest.mark.parametrize(
+        "field, old_value, new_value",
+        [
+            ("attributes", {"code": "WRONG"}, {"code": "RIGHT"}),
+            ("description", "旧描述", "新描述"),
+            ("confidence", 0.1, 0.9),
+        ],
+    )
+    def test_backfill_cache_key_includes_revised_fields(
+            field, old_value, new_value):
+        cache: dict = {}
+        text = "华为在深圳。"
+    
+        first = ExtractionResult(entities=[
+            Entity(name="华为", type="ORG", **{field: old_value})])
+        revised = ExtractionResult(entities=[
+            Entity(name="华为", type="ORG", **{field: new_value})])
+    
+        _filled_first, _ = lb.cached_backfill_provenance(cache, first, text)
+        filled_revised, _ = lb.cached_backfill_provenance(cache, revised, text)
+    
+        # 重试只改了一个不参与 mention/span 定位的字段，但缓存值里它会被回灌。
+>       assert getattr(filled_revised.entities[0], field) == new_value
+E       AssertionError: assert 0.1 == 0.9
+E        +  where 0.1 = getattr(Entity(name='华为', type='ORG', aliases=[], mentions=[EntityMention(surface='华为', span=Span(start=0, end=2, text='华为'))], confidence=0.1, attributes={}, description=''), 'confidence')
+
+tests/test_r13_review_fixes.py:48: AssertionError
+__________________ test_to_dict_deep_copies_nested_chunk_ids ___________________
+
+    def test_to_dict_deep_copies_nested_chunk_ids():
+        report = _report_with_nested_chunk_ids()
+        out = report.to_dict(max_relation_evidence_candidates=None)
+    
+        out["relations_without_evidence"][0]["chunk_ids"].append("MUTATED")
+        out["relation_evidence_candidates"]["k"][0]["chunk_ids"].append("MUTATED")
+    
+>       assert report.relations_without_evidence[0]["chunk_ids"] == ["c0"]
+E       AssertionError: assert ['c0', 'MUTATED'] == ['c0']
+E         
+E         Left contains one more item: 'MUTATED'
+E         Use -v to get more diff
+
+tests/test_r13_review_fixes.py:75: AssertionError
+_____________ test_serialize_backfill_deep_copies_nested_chunk_ids _____________
+
+    def test_serialize_backfill_deep_copies_nested_chunk_ids():
+        payload = _report_with_nested_chunk_ids().to_dict(
+            max_relation_evidence_candidates=None)
+        out = lb.serialize_backfill_for_output(payload)
+    
+        out["relations_without_evidence"][0]["chunk_ids"].append("MUTATED")
+        out["relation_evidence_candidates"]["k"][0]["chunk_ids"].append("MUTATED")
+    
+>       assert payload["relations_without_evidence"][0]["chunk_ids"] == ["c0"]
+E       AssertionError: assert ['c0', 'MUTATED'] == ['c0']
+E         
+E         Left contains one more item: 'MUTATED'
+E         Use -v to get more diff
+
+tests/test_r13_review_fixes.py:87: AssertionError
+_________ test_backfill_normalizes_entity_names_and_relation_endpoints _________
+
+    def test_backfill_normalizes_entity_names_and_relation_endpoints():
+        result = ExtractionResult(
+            entities=[
+                Entity(name=" 腾讯", type="ORG", aliases=[" 鹅厂 "]),
+                Entity(name="混元 ", type="PRODUCT"),
+            ],
+            relations=[Relation(head=" 腾讯 ", predicate="发布", tail="混元 ")],
+        )
+        filled, _report = lb.backfill_provenance(result, "腾讯发布混元。")
+    
+>       assert [e.name for e in filled.entities] == ["腾讯", "混元"]
+E       AssertionError: assert [' 腾讯', '混元 '] == ['腾讯', '混元']
+E         
+E         At index 0 diff: ' 腾讯' != '腾讯'
+E         Use -v to get more diff
+
+tests/test_r13_review_fixes.py:104: AssertionError
+______________________ test_entity_signal_key_strips_name ______________________
+
+    def test_entity_signal_key_strips_name():
+>       assert (lb.entity_signal_key(Entity(name=" 腾讯 ", type="ORG"))
+                == lb.entity_signal_key(Entity(name="腾讯", type="ORG")))
+E       assert '["ORG", " 腾讯 "]' == '["ORG", "腾讯"]'
+E         
+E         - ["ORG", "腾讯"]
+E         + ["ORG", " 腾讯 "]
+E         ?          +  +
+
+tests/test_r13_review_fixes.py:116: AssertionError
+_____________ test_merged_matched_literals_use_stripped_signal_key _____________
+
+    def test_merged_matched_literals_use_stripped_signal_key():
+        key_padded = lb.entity_signal_key(Entity(name=" 腾讯", type="ORG"))
+        key_clean = lb.entity_signal_key(Entity(name="腾讯", type="ORG"))
+    
+        merged = lb.merge_backfill_reports([
+            lb.BackfillReport(matched_literals={key_padded: 1}),
+            lb.BackfillReport(matched_literals={key_clean: 2}),
+        ])
+    
+>       assert merged.matched_literals == {key_clean: 3}
+E       assert {'["ORG", " 腾...G", "腾讯"]': 2} == {'["ORG", "腾讯"]': 3}
+E         
+E         Differing items:
+E         {'["ORG", "腾讯"]': 2} != {'["ORG", "腾讯"]': 3}
+E         Left contains 1 more item:
+E         {'["ORG", " 腾讯"]': 1}
+E         Use -v to get more diff
+
+tests/test_r13_review_fixes.py:129: AssertionError
+__________ test_negative_candidate_limit_clamps_to_default_and_warns ___________
+
+caplog = <_pytest.logging.LogCaptureFixture object at 0x70e51e3350d0>
+
+    def test_negative_candidate_limit_clamps_to_default_and_warns(caplog):
+        report = _dense_report()
+        key = next(iter(report.relation_evidence_candidates))
+        assert len(report.relation_evidence_candidates[key]) > (
+            lb.MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES)
+    
+        with caplog.at_level(logging.WARNING, logger=lb.__name__):
+>           data = report.to_dict(max_relation_evidence_candidates=-5)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_r13_review_fixes.py:185: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/moray/extraction/local_backfill.py:283: in to_dict
+    key: _cap_relation_candidates(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+cands = [{'head_start': 0, 'tail_start': 2, 'sent_start': 0, 'sent_end': 120, ...}, {'head_start': 4, 'tail_start': 2, 'sent_s...ent_start': 0, 'sent_end': 120, ...}, {'head_start': 12, 'tail_start': 10, 'sent_start': 0, 'sent_end': 120, ...}, ...]
+limit = -5
+
+    def _cap_relation_candidates(cands: list[dict], limit: int | None) -> list[dict]:
+        """序列化裁剪：``None`` = 全量，``0`` = 空，正数保留前 ``limit`` 条。
+    
+        负数没有合理语义（r10 曾表示全量、r11 又改成空，这种静默反转会让旧
+        工具/脚本把 0/负值当成「全量」而悄悄丢候选），因此直接 ``ValueError``
+        （r12 N10）。跨版本迁移：要全量传 ``None``，要空传 ``0``。
+    
+        两个生产方（``backfill_provenance`` 与 ``merge_backfill_reports``）都把
+        selected 放在首条，所以前 ``limit`` 条天然包含它；旧实现里「selected 不在
+        前 limit 就替换末条」的分支不可达，已删除（r11 N5）。
+    
+        返回的是候选 dict 的副本：``to_dict()`` 的消费方修改结果不得污染内存报告
+        或 ``cached_backfill_provenance`` 的共享产物（r11 N3/ST2）。
+        """
+        if limit is None:
+            return [dict(c) for c in cands]
+        if limit < 0:
+>           raise ValueError(
+                "max_relation_evidence_candidates 不能为负：None=全量、0=空、"
+                f"正数=保留前 N 条，收到 {limit}")
+E           ValueError: max_relation_evidence_candidates 不能为负：None=全量、0=空、正数=保留前 N 条，收到 -5
+
+src/moray/extraction/local_backfill.py:129: ValueError
+=========================== short test summary info ============================
+FAILED tests/test_r13_review_fixes.py::test_backfill_cache_key_includes_revised_fields[attributes-old_value0-new_value0]
+FAILED tests/test_r13_review_fixes.py::test_backfill_cache_key_includes_revised_fields[description-\u65e7\u63cf\u8ff0-\u65b0\u63cf\u8ff0]
+FAILED tests/test_r13_review_fixes.py::test_backfill_cache_key_includes_revised_fields[confidence-0.1-0.9]
+FAILED tests/test_r13_review_fixes.py::test_to_dict_deep_copies_nested_chunk_ids
+FAILED tests/test_r13_review_fixes.py::test_serialize_backfill_deep_copies_nested_chunk_ids
+FAILED tests/test_r13_review_fixes.py::test_backfill_normalizes_entity_names_and_relation_endpoints
+FAILED tests/test_r13_review_fixes.py::test_entity_signal_key_strips_name - a...
+FAILED tests/test_r13_review_fixes.py::test_merged_matched_literals_use_stripped_signal_key
+FAILED tests/test_r13_review_fixes.py::test_negative_candidate_limit_clamps_to_default_and_warns
+9 failed, 1 passed in 0.79s
