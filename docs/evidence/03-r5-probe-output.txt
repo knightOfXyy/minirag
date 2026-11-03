@@ -4,6 +4,7 @@
 [F2] accepted     : True
 [F2] review issues: []
 [F2] 歧义信号条数 : 1
+[F2] block_confidence: 0.0
 [F3] unmatched_aliases: [{'entity': '腾讯', 'literal': '鹅厂'}]
 [F3] seen_literals    : ['腾讯']
 [F5] aggregate.delta.span_ratio_min_before: 0.0099

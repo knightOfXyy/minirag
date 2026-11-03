@@ -162,7 +162,16 @@ def rule_review(
         total = int(backfill.get("entities_total") or 0)
         grounded = int(backfill.get("entities_grounded") or 0)
         confidence = backfill.get("block_confidence")
-        if confidence is not None and confidence < 1.0:
+        # 歧义命中的候选实体没有被归属（entities_grounded 少算），但它们
+        # 确实在正文里出现过，不能因此触发“未找到出处”的模型返工。
+        matched = backfill.get("matched_literals") or {}
+        grounded_keys = {key for key, n in matched.items() if n}
+        ambiguous = backfill.get("ambiguous_mentions") or []
+        ambiguous_only = {
+            key for am in ambiguous for key in (am.get("candidates") or [])
+        } - grounded_keys
+        covered = grounded + len(ambiguous_only)
+        if confidence is not None and covered < total:
             issues.append(
                 f"回填命中率 {grounded}/{total}"
                 f"（块级置信度 {confidence}）：有实体未在正文中找到出处")

@@ -4,7 +4,7 @@
 - 先红提交：`8419748`（只加/改回归用例，10 failed / 22 passed）。
 - 修复提交：见本轮 git log（先红之后）。
 - 全量离线：`ARK_API_KEY=dummy PYTHONPATH=src pytest -q -p no:cacheprovider`
-  → **328 passed, 65 skipped**（r5 前 319 passed / 65 skipped，新增 9 条用例）。
+  → **329 passed, 65 skipped**（r5 前 319 passed / 65 skipped，新增 10 条用例）。
 - 只改本分支，未动 `dev/yzd-feat-relation-202610` / `main`。
 
 ## 逐条处理
@@ -24,19 +24,30 @@
 
 ### F2（should）歧义未归属只做质量信号，不进返工 feedback
 
-- 改动：`src/moray/orchestration/specialists.py:157-171`。⑤ 不再把
+- 改动：`src/moray/orchestration/specialists.py:157-180`。⑤ 不再把
   `ambiguous_mentions` 写成 issue；歧义继续保留在
   `BackfillReport.ambiguous_mentions` 并随 `ReviewedExtraction.backfill` /
   `backfill_sink` 上行。
-- 证据：`tests/test_r5_review_fixes.py::test_ambiguous_mention_does_not_trigger_model_rework`；
-  探针：
-  ```
-  [F2] 模型调用次数: 1
-  [F2] accepted     : True
-  [F2] review issues: []
-  [F2] 歧义信号条数 : 1
-  ```
-  修复前同输入为 3 次调用 / `accepted=False`。
+- 额外收口：歧义候选实体天然 `entities_grounded=0`，若直接拿
+  `block_confidence<1` 报「未找到出处」，歧义-only 输入仍会触发返工。
+  现在用 `matched_literals` + `ambiguous_mentions.candidates` 计算
+  「已归属 + 仅歧义命中」的覆盖数，只有真正未出现的实体才报返工；
+  同时保留反向用例，避免一刀切放过真漏抽。
+- 证据：
+  - `tests/test_r5_review_fixes.py::test_ambiguous_mention_does_not_trigger_model_rework`
+    （歧义-only 输入；在 `d7dad32` 上先红 1 failed，见
+    `03-r5-red2-ambiguous-only.txt`）；
+  - `test_true_missing_entity_still_triggers_rework_alongside_ambiguity`
+    （真漏抽仍拦）；
+  - 探针（正文只有歧义字面、`block_confidence=0.0`）：
+    ```
+    [F2] 模型调用次数: 1
+    [F2] accepted     : True
+    [F2] review issues: []
+    [F2] 歧义信号条数 : 1
+    [F2] block_confidence: 0.0
+    ```
+    修复前同输入为 3 次调用 / `accepted=False`。
 
 ### F3（nit）整篇别名补扫用 `source_text`
 
@@ -127,3 +138,6 @@ ARK_API_KEY=dummy PYTHONPATH=src python /tmp/opencode/03-r5-probe.py
 先红：在 `8419748` 的独立 worktree 上跑
 `tests/test_r5_review_fixes.py tests/test_r4_review_fixes.py tests/test_llm_providers.py`
 → 10 failed / 22 passed（完整输出见 `03-r5-red-tests.txt`）。
+歧义-only 加固的先红：在 `d7dad32` 上覆盖最新测试文件后跑
+`tests/test_r5_review_fixes.py` → 1 failed / 9 passed
+（见 `03-r5-red2-ambiguous-only.txt`）。

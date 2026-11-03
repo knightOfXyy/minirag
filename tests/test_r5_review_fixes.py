@@ -71,7 +71,9 @@ def test_rule_review_accepts_unique_alias_endpoint_in_slim_mode():
 # F2：歧义未归属只做信号，不进返工 feedback
 # ---------------------------------------------------------------------------
 async def test_ambiguous_mention_does_not_trigger_model_rework():
-    text = "腾讯和网易都叫同名。"
+    # 最苛刻的输入：正文只有歧义字面，没有任何可归属的标准名。
+    # 此时 block_confidence 天然为 0，但歧义不是模型返工能解决的问题。
+    text = "同名发布了混元。"
     logical = ExtractionResult(entities=[
         Entity(name="腾讯", type="ORG", aliases=["同名"]),
         Entity(name="网易", type="ORG", aliases=["同名"]),
@@ -91,6 +93,22 @@ async def test_ambiguous_mention_does_not_trigger_model_rework():
     assert len(calls) == 1, "歧义不得触发模型补问/返工"
     assert reviewed.accepted is True
     assert reviewed.backfill["ambiguous_mentions"], "歧义仍须作为质量信号保留"
+
+
+def test_true_missing_entity_still_triggers_rework_alongside_ambiguity():
+    """不搞一刀切：歧义不返工，但真正未命中的实体仍要被规则审校拦下。"""
+    text = "同名发布了混元。"
+    result, report = backfill_provenance(
+        ExtractionResult(entities=[
+            Entity(name="腾讯", type="ORG", aliases=["同名"]),
+            Entity(name="网易", type="ORG", aliases=["同名"]),
+            Entity(name="幽灵公司", type="ORG"),
+        ]),
+        text,
+    )
+    review = rule_review(text, result, backfill=report.to_dict())
+    assert review.verdict == ReviewVerdict.NEEDS_FIX
+    assert any("回填命中率 0/3" in issue for issue in review.issues)
 
 
 # ---------------------------------------------------------------------------
