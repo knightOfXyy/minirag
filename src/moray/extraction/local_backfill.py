@@ -38,6 +38,7 @@
 from __future__ import annotations
 
 import json
+from bisect import bisect_right
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -298,17 +299,20 @@ def merge_entity_metadata(
 
 
 def _coalesce_entities(entities: list[Entity]) -> list[Entity]:
-    """把同一逻辑实体的重复输出合并为一个（逻辑身份 = (type, 标准名)）。
+    """把同一逻辑实体的重复输出合并为一个（逻辑身份 = (type, 标准名.strip())）。
 
     与 ``pipeline.naive_merge`` 使用同一套元数据合并规则，避免两处逻辑漂移：
     模型若没去重、把同一 (类型,标准名) 输出了多遍（常带互补的别名/属性），
     这里按首次出现顺序确定性地并成一个逻辑实体，别名取并集、属性首见优先。
     这样「重复」不会被误判成「同名歧义」。
+
+    身份键与 :func:`literal_index` 的 ``literal.strip()`` 口径对齐：模型只把
+    标准名多写了首尾空白时，不该被当成两个实体的别名冲突（r8 F5）。
     """
     merged: list[Entity] = []
     index: dict[tuple[str, str], int] = {}
     for e in entities:
-        key = (e.type, e.name)
+        key = (e.type, e.name.strip())
         if key in index:
             merged[index[key]] = merge_entity_metadata(merged[index[key]], e)
         else:
@@ -493,12 +497,26 @@ def _backfill_relations(
     # 关系证据必须认英文句号（"Alice met Bob. Carol met Bob." 是两句），
     # 中文句切保持原行为；返回的偏移仍可对原文直接切片。
     sentences = split_sentences(text, ascii_period=True, preserve_leading=True)
+    sent_starts = [s for s, _e in sentences]
 
     def _sentence_of(pos: int) -> int | None:
-        for k, (s, e) in enumerate(sentences):
-            if s <= pos < e:
-                return k
+        # 句表有序且互不重叠；二分定位后只需再核对右边界。
+        k = bisect_right(sent_starts, pos) - 1
+        if k >= 0 and pos < sentences[k][1]:
+            return k
         return None
+
+    # 每个 mention 的句下标只算一次（O(M log S)）。旧实现把它放在
+    # 「头 mention × 尾 mention」双层循环里，每次再线性扫句表，
+    # 整体 O(H·T·S)（r8 F4）。
+    mentions_with_sentence: dict[int, list[tuple[EntityMention, int]]] = {}
+    for ei, ms in mentions_by_entity.items():
+        annotated: list[tuple[EntityMention, int]] = []
+        for m in ms:
+            k = _sentence_of(m.span.start)
+            if k is not None:
+                annotated.append((m, k))
+        mentions_with_sentence[ei] = annotated
 
     out: list[Relation] = []
     for r in relations:
@@ -507,18 +525,17 @@ def _backfill_relations(
         pairs: list[tuple[int, int, int, int, int]] = []
         # (head_start, tail_start, sent_start, sent_end, distance)
         if hi is not None and ti is not None:
-            hms = mentions_by_entity.get(hi, [])
-            tms = mentions_by_entity.get(ti, [])
-            for hm in hms:
+            # 尾 mention 按句分桶：头 mention 只与自己所在句的尾比较，
+            # 不再对每个头扫一遍全部尾（单句一头的常见情形是 O(1)）。
+            tails_by_sentence: dict[int, list[EntityMention]] = {}
+            for tm, tsent in mentions_with_sentence.get(ti, ()):
+                tails_by_sentence.setdefault(tsent, []).append(tm)
+            for hm, hsent in mentions_with_sentence.get(hi, ()):
                 hs = hm.span.start
-                sh = _sentence_of(hs)
-                if sh is None:
-                    continue
-                for tm in tms:
+                for tm in tails_by_sentence.get(hsent, ()):
                     ts = tm.span.start
-                    if sh == _sentence_of(ts):
-                        ss, se = sentences[sh]
-                        pairs.append((hs, ts, ss, se, abs(hs - ts)))
+                    ss, se = sentences[hsent]
+                    pairs.append((hs, ts, ss, se, abs(hs - ts)))
 
         key = _relation_key(r)
         evidence: Span | None = None

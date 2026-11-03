@@ -121,10 +121,11 @@ def rule_review(
         if stripped in names or len(owners) == 1:
             return None
         if len(owners) > 1:
-            # 字面确实在实体列表里，只是归属不唯一；不要误导模型去“补实体”
-            # （r5 F4）。
-            return (f"关系{role}实体「{literal}」字面归属不唯一或未知"
-                    f"（疑似臆测）")
+            # 归属不唯一是工单定义的合法歧义，只作为质量信号保留在
+            # ``BackfillReport.ambiguous_mentions``。写进 issues 会让模型
+            # 带着无法靠返工消除的反馈重抽（r5 F2 的同一症状），而工单明文
+            # 「这版不做模型补问」（r8 F1）。
+            return None
         return f"关系{role}实体「{literal}」不在实体列表中（疑似臆测或漏抽实体）"
 
     for r in result.relations:
@@ -173,10 +174,17 @@ def rule_review(
             issues.append(
                 f"关系 {r.head}-[{r.predicate}]->{r.tail} 无原文证据"
                 f"（端点在正文中未命中）")
-        elif r.confidence is None or r.confidence >= 0.8:
+        elif r.confidence is None:
+            # 内核 confidence 默认值从 0.0 改为 None（未知）是刻意的语义
+            # 变更，不能把「未知」当成低置信放过。
             issues.append(
                 f"关系 {r.head}-[{r.predicate}]->{r.tail} 无原文证据"
-                f"（置信度{'未知' if r.confidence is None else r.confidence}）")
+                f"（置信度未知）")
+        elif r.confidence >= 0.8:
+            # 关闭态恢复 262319b 原文措辞（r8 F2）：verdict 不变，但返工
+            # 反馈必须与基线逐字节一致。
+            issues.append(
+                f"关系 {r.head}-[{r.predicate}]->{r.tail} 置信度高却无原文证据")
 
     # ⑤ 确定性回填信号：块级命中率 + 正文不存在的别名。
     #    歧义未归属（ambiguous_mentions）只作为质量信号保留在 backfill 里，
