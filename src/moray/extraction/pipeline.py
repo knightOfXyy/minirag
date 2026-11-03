@@ -214,7 +214,9 @@ class ChunkedExtractionPipeline:
             return await self.extractor.extract(mini_doc), False
 
         fingerprint = self._cached_domain_fingerprint
-        model_name = getattr(self.extractor, "model_name", "") or ""
+        # 进键的是完整模型身份（provider+base_url+model），不是裸 chat_model：
+        # 同模型名挂在不同网关下可能是不同权重，不能共用缓存（nit-1）。
+        model_name = self._cache_model_identity()
 
         async def _do_extract() -> ExtractionOutput:
             return await self.extractor.extract(mini_doc)
