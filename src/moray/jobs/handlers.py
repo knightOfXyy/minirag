@@ -37,6 +37,7 @@ async def build_document_handler(
     source: str = "batch",
     dashboard=None,
     model_name: str = "batch-pipeline",
+    result_cache=None,
 ):
     """构造一个符合 BatchRunner 要求的 async (JobRecord)->dict handler。
 
@@ -45,6 +46,9 @@ async def build_document_handler(
         domain_code 从 DB 配置中心取最新领域包（支持热更属性），优先于
         extractor_fn。
     dashboard: 可选 observability.Dashboard；每处理一篇写一行 pipeline_runs。
+    result_cache: 可选分块结果内容级缓存。应在 worker 进程内复用同一个实例，
+        断点续跑/失败重试/重复提交时相同分块命中缓存、不再调 LLM；命中用量只
+        记 cache_hits，不产生真实 token。None（默认）= 完全不缓存。
     """
     import time
 
@@ -83,7 +87,8 @@ async def build_document_handler(
             chunk_threshold_units=_cs["threshold_units"],
             chunk_max_units=_cs["max_units"],
             chunk_overlap_units=_cs["overlap_units"],
-            chunk_concurrency=_cs["concurrency"])
+            chunk_concurrency=_cs["concurrency"],
+            result_cache=result_cache)
 
         # ② 包成 ExtractionOutput 交给 L08/L09 入库（幂等）
         output = ExtractionOutput(

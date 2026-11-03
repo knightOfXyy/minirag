@@ -72,11 +72,18 @@ async def _build_runner(
             await resolver.store.seed_builtin()
             extractor_provider = DynamicExtractorProvider(resolver, max_retries=1)
 
+    # 分块结果内容级缓存：默认关闭；启用时在本 worker 进程内共享一个实例，
+    # 断点续跑/失败重试/重复提交的相同分块因此能命中（纯加速层）。
+    from ..config import build_result_cache
+
+    result_cache = await build_result_cache(pool=pool)
+
     handler = await build_document_handler(
         store=store, ingestor=ingestor,
         extractor_fn=extractor_fn, extractor_provider=extractor_provider,
         source="worker", dashboard=dashboard,
-        model_name="offline-fake" if offline else "ark-llm")
+        model_name="offline-fake" if offline else "ark-llm",
+        result_cache=result_cache)
 
     runner = BatchRunner(
         jobs, handler, worker_id=worker_id,

@@ -35,6 +35,10 @@ class Usage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     cached_input_tokens: int = 0
+    # 命中【分块结果内容级缓存】的次数：这些分块没有发起任何模型调用，因此
+    # 不产生 input/output token。与 cached_input_tokens（提示缓存命中的真实
+    # 计费 token）严格区分：成本/看板统计只汇总前三个真实计量字段。
+    cache_hits: int = 0
 
     @computed_field
     @property
@@ -53,6 +57,7 @@ class Usage(BaseModel):
         self.input_tokens += other.input_tokens
         self.output_tokens += other.output_tokens
         self.cached_input_tokens += other.cached_input_tokens
+        self.cache_hits += other.cache_hits
 
 
 class ExtractionOutput(BaseModel):

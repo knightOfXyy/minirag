@@ -23,6 +23,7 @@ from ..schema import (
     ExtractionResult,
     Relation,
     Span,
+    domain_fingerprint,
 )
 from .chunking import Chunk
 from .document import Document, ExtractionOutput, Usage
@@ -122,6 +123,7 @@ class ChunkedExtractionPipeline:
         *,
         concurrency: int = 4,
         warm_prefix: bool = False,
+        result_cache=None,
     ) -> None:
         self.extractor = extractor
         self.sem = asyncio.Semaphore(concurrency)
@@ -132,9 +134,29 @@ class ChunkedExtractionPipeline:
         # prefill + 思考输出。先跑 lessons/prompt_cache_probe.py --live 统计出
         # 命中率，再决定是否常开。
         self.warm_prefix = warm_prefix
+        # 分块结果内容级缓存（纯加速层，默认 None=行为与无缓存逐字节一致）。
+        # 键=领域配置指纹+模型名+块正文；命中不调模型，用量记 cache_hits 而非
+        # 真实 token；同键并发在缓存内部单飞去重。
+        self.result_cache = result_cache
+
+    def _domain_fingerprint(self) -> str:
+        """当前抽取器所用领域配置的版本指纹。
+
+        Extractor 持有完整 DomainSpec；测试注入的假抽取器可能只有 .domain.code，
+        此时回退到 code 本身（换 code 仍会失效；改 spec 的场景用真 Extractor）。
+        """
+        domain = getattr(self.extractor, "domain", None)
+        try:
+            return domain_fingerprint(domain)
+        except Exception:  # noqa: BLE001 假对象/非 DomainSpec：退回可用标识
+            return f"code:{getattr(domain, 'code', 'unknown')}"
 
     async def _extract_one_chunk(self, chunk: Chunk) -> tuple[ExtractionResult, Usage, str]:
-        """抽单个块（带限流）。返回换算后的结果、用量、块 id。"""
+        """抽单个块（带限流）。返回换算后的结果、用量、块 id。
+
+        有缓存时以 (领域指纹, 模型名, 块正文) 为键取【块内】产物：命中则不发起
+        模型调用，用量只记一次 cache_hits；偏移换算仍在缓存之外做，语义不变。
+        """
         async with self.sem:
             # 复用 Extractor：把一个 chunk 当成一篇微型文档
             mini_doc = Document(
@@ -143,7 +165,23 @@ class ChunkedExtractionPipeline:
                 source="chunk",
                 domain_code=self.extractor.domain.code,
             )
-            output = await self.extractor.extract(mini_doc)
+
+            if self.result_cache is None:
+                output = await self.extractor.extract(mini_doc)
+            else:
+                fingerprint = self._domain_fingerprint()
+                model_name = getattr(self.extractor, "model_name", "") or ""
+
+                async def _do_extract() -> ExtractionOutput:
+                    return await self.extractor.extract(mini_doc)
+
+                output, hit = await self.result_cache.get_or_extract(
+                    fingerprint, model_name, chunk.text, _do_extract)
+                if hit:
+                    # 命中：还原结果，但不计真实 token，只标记一次缓存来源。
+                    usage = Usage(cache_hits=1)
+                    return remap_spans(output.result, chunk), usage, chunk.id
+
             return remap_spans(output.result, chunk), output.usage, chunk.id
 
     async def run(
