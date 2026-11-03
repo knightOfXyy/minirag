@@ -60,8 +60,11 @@ def norm_name(s: str) -> str:
     return s
 
 
-def _predicate_norm(p: str) -> str:
-    """谓词归一：把近义谓词收敛到少数规范关系，便于跨抽取器比较。"""
+def predicate_norm(p: str) -> str:
+    """谓词归一：把近义谓词收敛到少数规范关系，便于跨抽取器比较。
+
+    公开 API：压力语料评测按谓词子集算召回时复用它，避免跨模块依赖私有名。
+    """
     p = norm_name(p)
     syn = {
         "坐落于": "总部位于", "位于": "总部位于", "总部在": "总部位于",
@@ -88,7 +91,7 @@ def entity_keys(result: ExtractionResult, *, strict: bool) -> set:
 def relation_keys(result: ExtractionResult, *, strict: bool) -> set:
     keys = set()
     for r in result.relations:
-        base = (norm_name(r.head), _predicate_norm(r.predicate),
+        base = (norm_name(r.head), predicate_norm(r.predicate),
                 norm_name(r.tail))
         if strict and r.evidence_span is not None:
             base = base + (r.evidence_span.start, r.evidence_span.end)

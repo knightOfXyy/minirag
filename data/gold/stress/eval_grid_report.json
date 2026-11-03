@@ -3,25 +3,27 @@
     "name": "StressRuleExtractor",
     "revision": 2
   },
-  "corpus_version": 2,
+  "corpus_version": 3,
+  "overlap_note": "overlap 目前是记录维度：当前语料没有只在重叠窗口下才可恢复的构造，因此同一块预算下不同 overlap 的指标相同；它不构成判别力，调 overlap 的工单请先补可观测构造。",
+  "entity_axis_note": "实体轴只证明分块/回填接线：被评规则抽取器与语料共用词典，实体召回恒为 1.0 属预期；块预算判据看关系轴。",
   "grids": {
     "1500:0": {
       "documents": 3,
       "entity_strict": {
-        "tp": 2367,
+        "tp": 2385,
         "fp": 4,
         "fn": 30,
         "precision": 0.9983,
-        "recall": 0.9875,
+        "recall": 0.9876,
         "f1": 0.9929
       },
       "entity_relaxed": {
-        "tp": 268,
+        "tp": 271,
         "fp": 4,
         "fn": 0,
-        "precision": 0.9853,
+        "precision": 0.9855,
         "recall": 1.0,
-        "f1": 0.9926
+        "f1": 0.9927
       },
       "entity_by_type": {
         "EVENT": {
@@ -41,7 +43,7 @@
           "f1": 1.0
         },
         "MISC": {
-          "tp": 25,
+          "tp": 28,
           "fp": 0,
           "fn": 0,
           "precision": 1.0,
@@ -68,10 +70,10 @@
       "relation": {
         "tp": 330,
         "fp": 0,
-        "fn": 3,
+        "fn": 12,
         "precision": 1.0,
-        "recall": 0.991,
-        "f1": 0.9955
+        "recall": 0.9649,
+        "f1": 0.9821
       },
       "max_units": 1500,
       "overlap_units": 0
@@ -79,20 +81,20 @@
     "1500:200": {
       "documents": 3,
       "entity_strict": {
-        "tp": 2367,
+        "tp": 2385,
         "fp": 4,
         "fn": 30,
         "precision": 0.9983,
-        "recall": 0.9875,
+        "recall": 0.9876,
         "f1": 0.9929
       },
       "entity_relaxed": {
-        "tp": 268,
+        "tp": 271,
         "fp": 4,
         "fn": 0,
-        "precision": 0.9853,
+        "precision": 0.9855,
         "recall": 1.0,
-        "f1": 0.9926
+        "f1": 0.9927
       },
       "entity_by_type": {
         "EVENT": {
@@ -112,7 +114,7 @@
           "f1": 1.0
         },
         "MISC": {
-          "tp": 25,
+          "tp": 28,
           "fp": 0,
           "fn": 0,
           "precision": 1.0,
@@ -139,10 +141,10 @@
       "relation": {
         "tp": 330,
         "fp": 0,
-        "fn": 3,
+        "fn": 12,
         "precision": 1.0,
-        "recall": 0.991,
-        "f1": 0.9955
+        "recall": 0.9649,
+        "f1": 0.9821
       },
       "max_units": 1500,
       "overlap_units": 200
@@ -150,18 +152,18 @@
     "2500:200": {
       "documents": 3,
       "entity_strict": {
-        "tp": 2371,
+        "tp": 2389,
         "fp": 2,
         "fn": 26,
         "precision": 0.9992,
         "recall": 0.9892,
-        "f1": 0.9941
+        "f1": 0.9942
       },
       "entity_relaxed": {
-        "tp": 268,
+        "tp": 271,
         "fp": 2,
         "fn": 0,
-        "precision": 0.9926,
+        "precision": 0.9927,
         "recall": 1.0,
         "f1": 0.9963
       },
@@ -183,7 +185,7 @@
           "f1": 1.0
         },
         "MISC": {
-          "tp": 25,
+          "tp": 28,
           "fp": 0,
           "fn": 0,
           "precision": 1.0,
@@ -208,7 +210,7 @@
         }
       },
       "relation": {
-        "tp": 333,
+        "tp": 342,
         "fp": 0,
         "fn": 0,
         "precision": 1.0,
@@ -221,15 +223,15 @@
     "3500:200": {
       "documents": 3,
       "entity_strict": {
-        "tp": 2373,
+        "tp": 2391,
         "fp": 0,
         "fn": 24,
         "precision": 1.0,
-        "recall": 0.99,
+        "recall": 0.9901,
         "f1": 0.995
       },
       "entity_relaxed": {
-        "tp": 268,
+        "tp": 271,
         "fp": 0,
         "fn": 0,
         "precision": 1.0,
@@ -254,7 +256,7 @@
           "f1": 1.0
         },
         "MISC": {
-          "tp": 25,
+          "tp": 28,
           "fp": 0,
           "fn": 0,
           "precision": 1.0,
@@ -279,7 +281,7 @@
         }
       },
       "relation": {
-        "tp": 333,
+        "tp": 342,
         "fp": 0,
         "fn": 0,
         "precision": 1.0,

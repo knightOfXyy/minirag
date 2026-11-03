@@ -22,9 +22,11 @@ from moray.evaluation.stress import (
     StressEntity,
     StressRelation,
     StressRuleExtractor,
+    aggregate_cases,
     aggregate_grid,
     build_report,
     build_text,
+    evaluate_case,
     extract_chunk,
     generate_case,
     load_stress_dir,
@@ -71,24 +73,63 @@ def test_generated_case_is_large_and_answers_are_text_backed(seed):
     assert not missing_e and not missing_r
 
 
-# 谓词 -> 「正文里必须能指到的那句话」的校验。只查"头尾可定位"查不出
-# 「马秀兰-供职于-锦江华诚机械制造有限公司」这类语义假答案。
-_PREDICATE_SUPPORT = {
-    "供职于": lambda line, r: (
-        line.startswith(r.head + "，") and f"曾在{r.tail}任职" in line),
-    "户籍在": lambda line, r: (
-        line.startswith(r.head + "，") and f"户籍地{r.tail}" in line),
-    "注册地位于": lambda line, r: (
-        line.startswith(r.head + "，") and f"注册地位于{r.tail}" in line),
-    "涉案关联": lambda line, r: (
-        f"案件编号 {r.tail}" in line and r.head in line),
-    "关联物证": lambda line, r: (
-        r.head in line and r.tail in line and "关联到关键物证" in line),
-    "办案地位于": lambda line, r: (
-        r.head in line and r.tail in line and "办案地位于" in line),
-    "追赃方向指向": lambda line, r: (
-        r.head in line and r.tail in line and "追赃方向指向" in line),
+# 谓词 -> 正文里真正的触发词（gold 的规范谓词不一定逐字出现）。
+_TRIGGER = {
+    "供职于": "曾在",
+    "户籍在": "户籍地",
+    "注册地位于": "注册地位于",
+    "涉案关联": "案件编号",
+    "关联物证": "关联到关键物证",
+    "办案地位于": "办案地位于",
+    "追赃方向指向": "追赃方向指向",
 }
+
+
+def _relation_supported(case, r) -> bool:
+    """句面语义校验：头是触发词前最近的同类实体，尾是触发词后最近的同类实体。
+
+    只查"头尾可定位"查不出「马秀兰-供职于-锦江华诚机械制造有限公司」这类
+    假答案；只查"同一行出现"又会放过长句里尾放错位置的松校验。这里的
+    "最近同类实体"同时锁死两边：头与触发词之间、触发词与尾之间都不能插进
+    另一个同类型实体名。
+    """
+    trigger = _TRIGGER[r.predicate]
+    type_of = {e.name: e.type for e in case.entities}
+    by_type: dict[str, set[str]] = {}
+    for e in case.entities:
+        by_type.setdefault(e.type, set()).add(e.name)
+    head_type, tail_type = type_of[r.head], type_of[r.tail]
+
+    for line in case.text.splitlines():
+        ti = line.find(trigger)
+        if ti < 0 or r.head not in line or r.tail not in line:
+            continue
+        if r.predicate == "涉案关联":
+            # "案件编号 A-… 涉及 头名、… 等人员"：头在触发词之后。
+            case_pos = line.find(r.tail, ti)
+            hi = line.find(r.head, case_pos + len(r.tail))
+            if case_pos < 0 or hi < 0:
+                continue
+            between = [n for n in by_type.get(head_type, ())
+                       if n != r.head and n in line[case_pos:hi]]
+            if not between:
+                return True
+            continue
+        hi = line.rfind(r.head, 0, ti)
+        if hi < 0:
+            continue
+        between_head = [n for n in by_type.get(head_type, ())
+                        if n != r.head
+                        and n in line[hi + len(r.head):ti]]
+        ti_end = ti + len(trigger)
+        tail_pos = line.find(r.tail, ti_end)
+        if tail_pos < 0:
+            continue
+        between_tail = [n for n in by_type.get(tail_type, ())
+                        if n != r.tail and n in line[ti_end:tail_pos]]
+        if not between_head and not between_tail:
+            return True
+    return False
 
 
 @pytest.mark.parametrize("seed", STRESS_SEEDS)
@@ -100,13 +141,11 @@ def test_gold_relations_are_semantically_backed_by_text(seed):
     这里按谓词逐条核对句面，锁死这一类语义假答案。
     """
     case = generate_case(seed=seed)
-    lines = case.text.splitlines()
     predicates = {r.predicate for r in case.relations}
-    assert predicates == set(_PREDICATE_SUPPORT)
+    assert predicates == set(_TRIGGER)
     for r in case.relations:
-        support = _PREDICATE_SUPPORT[r.predicate]
-        assert any(support(line, r) for line in lines), (
-            f"{r.head}-{r.predicate}->{r.tail} 正文没有任何一句支撑")
+        assert _relation_supported(case, r), (
+            f"{r.head}-{r.predicate}->{r.tail} 正文没有任何一句语义支撑")
 
 
 @pytest.mark.parametrize("seed", STRESS_SEEDS)
@@ -251,12 +290,36 @@ def _long_relation_pairs(case) -> set[tuple[str, str, str]]:
     """找出正文里由一条 >1500 units 的长句承载的关系三元组。"""
     pairs: set[tuple[str, str, str]] = set()
     for r in case.relations:
+        trigger = _TRIGGER[r.predicate]
         for line in case.text.splitlines():
             if (estimate_tokens(line) > PROD_MAX_UNITS
                     and r.head in line and r.tail in line
-                    and r.predicate in line):
+                    and trigger in line):
                 pairs.add((r.head, r.predicate, r.tail))
     return pairs
+
+
+@pytest.mark.parametrize("seed", STRESS_SEEDS)
+def test_each_case_has_multiple_budget_sensitive_long_relations(seed):
+    """每篇至少 4 条 >1500 units 的含头尾长句，且谓词不止一种。
+
+    只有 1 条时，工单 04 的「关系 F1 不降」门槛只剩 1% 余量，一个 FP
+    就可能吃掉信号。
+    """
+    case = generate_case(seed=seed)
+    long_pairs = _long_relation_pairs(case)
+    assert len(long_pairs) >= 4
+    assert len({p for _, p, _ in long_pairs}) >= 2
+
+
+async def test_relation_budget_gap_is_double_digit():
+    """1500→3500 的关系召回差异必须来自两位数条关系，而不是 3 条巧合。"""
+    cases = load_stress_dir(STRESS_DIR)
+    grids = await run_grid_async(cases, grids=[(1500, 200), (3500, 200)])
+    small = aggregate_grid(grids[(1500, 200)])["relation"]
+    big = aggregate_grid(grids[(3500, 200)])["relation"]
+    assert big["fn"] == 0
+    assert small["fn"] - big["fn"] >= 10
 
 
 async def test_long_relation_sentence_is_lost_at_production_budget():
@@ -290,6 +353,56 @@ def test_load_committed_stress_corpus_validates():
                 m.span is not None
                 and c.text[m.span.start:m.span.end] == m.surface
                 for m in e.mentions)
+
+
+def test_per_type_breakdown_reconciles_with_totals():
+    """按类型表必须与顶层实体计数对账，包括金标里没有的预测类型。
+
+    历史 bug：``types`` 只从 gold 取，抽取器吐出金标外类型（如 DATE）时，
+    该实体的 FP 进了顶层 ``entity_relaxed`` 却被按类型表静默丢掉。
+    """
+    from moray.schema import Entity, ExtractionResult
+
+    gold = ExtractionResult(entities=[Entity(name="张三", type="PER")])
+    pred = ExtractionResult(entities=[
+        Entity(name="张三", type="PER"),      # TP
+        Entity(name="2024年3月", type="DATE"),  # FP，gold 里没有 DATE
+    ])
+    agg = aggregate_cases([evaluate_case("synthetic", 1, pred, gold)])
+    assert agg["entity_relaxed"]["fp"] == 1
+    assert "DATE" in agg["entity_by_type"]
+    assert sum(p["fp"] for p in agg["entity_by_type"].values()) == 1
+    # fn 同理：预测漏掉的类型（此处无）也必须能被对账
+    assert sum(p["fn"] for p in agg["entity_by_type"].values()) == (
+        agg["entity_relaxed"]["fn"])
+
+
+def test_committed_corpus_matches_generator_output_byte_for_byte():
+    """仓内 6 个语料产物必须等于生成器输出，防止数据悄悄过期。
+
+    ``test_generator_is_deterministic_byte_for_byte`` 只比较同进程两次生成；
+    改了 ``corpus.py`` 却忘记重新生成时，那种测试仍然全绿。这里用与
+    ``gen_stress_gold.py`` 相同的序列化口径（indent=2 + 结尾换行）把仓内
+    文件钉到 ``generate_case(seed)`` 上。
+    """
+    cases = load_stress_dir(STRESS_DIR)
+    assert {c.seed for c in cases} == set(STRESS_SEEDS)
+    for c in cases:
+        fresh = generate_case(seed=c.seed)
+        assert fresh.text == c.text, f"{c.name}.md 与生成器输出不一致"
+        answer_path = STRESS_DIR / f"{c.name}.answer.json"
+        expected = json.dumps(
+            serialize_case(fresh), ensure_ascii=False, indent=2) + "\n"
+        assert answer_path.read_text(encoding="utf-8") == expected, (
+            f"{c.name}.answer.json 与生成器输出不一致")
+
+
+def test_predicate_normalization_is_public_api():
+    """谓词归一必须是公开 API，压力评测不再 import 私有 ``_predicate_norm``。"""
+    from moray.evaluation.metrics import predicate_norm
+
+    assert predicate_norm("位于") == "总部位于"
+    assert predicate_norm("办案地位于") == "办案地位于"
 
 
 async def test_grid_baseline_metrics_and_per_type_breakdown():
@@ -331,12 +444,34 @@ async def test_larger_chunk_budget_strictly_improves_relation_recall():
     assert r_big > 0.0
 
 
+async def test_grid_runner_uses_injected_extractor_factory():
+    """网格复跑必须能注入别的被评对象（工单 04 要扫真实抽取路径）。"""
+    cases = load_stress_dir(STRESS_DIR)
+
+    class TrackingExtractor(StressRuleExtractor):
+        identity = {"name": "TrackingExtractor", "revision": 11}
+        calls = 0
+
+        async def extract(self, doc):
+            type(self).calls += 1
+            return await super().extract(doc)
+
+    grids = await run_grid_async(
+        cases, grids=[(1500, 200)], extractor_factory=TrackingExtractor)
+    assert TrackingExtractor.calls == len(cases)
+    report = build_report(grids, extractor_factory=TrackingExtractor)
+    assert report["extractor"] == {"name": "TrackingExtractor", "revision": 11}
+
+
 def test_grid_report_records_extractor_identity():
     """留存报告必须写明是哪个抽取器/哪版规则跑出来的，否则几个月后无法比对。"""
     payload = build_report({(1500, 200): []})
     assert payload["extractor"]["name"] == "StressRuleExtractor"
     assert isinstance(payload["extractor"]["revision"], int)
     assert payload["corpus_version"] >= 2
+    # 没有判别力的维度必须写明，否则后续工单会把"恒等"误当 A/B 证据。
+    assert "overlap" in payload["overlap_note"]
+    assert payload["entity_axis_note"]
 
 
 def test_default_grids_cover_production_and_candidate_budgets():

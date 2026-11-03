@@ -251,6 +251,11 @@ class StressRuleExtractor:
     """生产同款分块 + 块内规则抽取 + 全局偏移归并的确定性被评对象。"""
 
     domain_code = "general"
+    # 报告身份：注入别的被评对象时各自声明，默认值即本演示抽取器。
+    identity: dict[str, object] = {
+        "name": "StressRuleExtractor",
+        "revision": 2,
+    }
 
     def __init__(self, *, max_units: int = 1500,
                  overlap_units: int = 200) -> None:
