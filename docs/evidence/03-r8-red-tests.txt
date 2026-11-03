@@ -1,0 +1,168 @@
+# 工单 03 r8 先红证据
+# 提交前状态：HEAD=017afa7（r7 证据），仅改测试、未改实现
+# 命令：ARK_API_KEY=dummy PYTHONPATH=src /tmp/opencode/review-venv/bin/python \
+#       -m pytest -q -p no:cacheprovider tests/test_r8_review_fixes.py \
+#       tests/test_r7_review_fixes.py tests/test_r6_review_fixes.py tests/test_r4_review_fixes.py
+# 结果：7 failed, 17 passed（r8 F1×2 / F2 / F4 / F5 / r6 N1 旧期望 / r4 N1 旧期望）
+/tmp/opencode/review-venv/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+FFFFF......F.........F..                                                 [100%]
+=================================== FAILURES ===================================
+______ test_ambiguous_alias_relation_endpoint_is_signal_not_rework_issue _______
+
+    def test_ambiguous_alias_relation_endpoint_is_signal_not_rework_issue():
+        """歧义端点不再报『归属不唯一（疑似臆测）』，信号留在 report 里。"""
+        text = "同名发布了X公司。"
+        result, report = backfill_provenance(_ambiguous_alias_result(), text)
+    
+        review = rule_review(text, result, backfill=report.to_dict())
+    
+>       assert review.verdict == ReviewVerdict.PASS, review.issues
+E       AssertionError: ['关系头实体「同名」字面归属不唯一或未知（疑似臆测）']
+E       assert 'needs_fix' == 'pass'
+E         
+E         - pass
+E         + needs_fix
+
+tests/test_r8_review_fixes.py:49: AssertionError
+_______ test_ambiguous_alias_relation_endpoint_passes_in_one_model_call ________
+
+    async def test_ambiguous_alias_relation_endpoint_passes_in_one_model_call():
+        """端到端：歧义端点不得把合法歧义升级成 3 次调用 / accepted=False。"""
+        text = "同名发布了X公司。"
+        logical = _ambiguous_alias_result()
+        sink: dict = {}
+        calls: list[str | None] = []
+    
+        async def extractor(body: str, feedback: str | None):
+            calls.append(feedback)
+            result, report = backfill_provenance(logical, body)
+            sink["backfill"] = report.to_dict()
+            return result
+    
+        reviewed = await run_extraction_team(
+            text, extractor=extractor, backfill_sink=sink)
+    
+>       assert len(calls) == 1, f"歧义不是模型能靠返工解决的问题：{reviewed.review.issues}"
+E       AssertionError: 歧义不是模型能靠返工解决的问题：['关系头实体「同名」字面归属不唯一或未知（疑似臆测）']
+E       assert 3 == 1
+E        +  where 3 = len([None, '请修正以下问题后重新输出完整结果：\n- 关系头实体「同名」字面归属不唯一或未知（疑似臆测）', '请修正以下问题后重新输出完整结果：\n- 关系头实体「同名」字面归属不唯一或未知（疑似臆测）'])
+
+tests/test_r8_review_fixes.py:70: AssertionError
+_________________ test_relation_evidence_pairing_is_linearish __________________
+
+    def test_relation_evidence_pairing_is_linearish():
+        """5600 字 / 800 句 / 1600 mention：先红时 O(H·T·S) 约 5.2s。"""
+        text = "腾讯见了混元。" * 800
+        result = ExtractionResult(
+            entities=[Entity(name="腾讯", type="ORG"), Entity(name="混元", type="MISC")],
+            relations=[Relation(head="腾讯", predicate="见", tail="混元")],
+        )
+    
+        started = time.perf_counter()
+        _result, report = backfill_provenance(result, text)
+        elapsed = time.perf_counter() - started
+    
+        assert report.relations_with_evidence == 1
+>       assert elapsed < 1.0, f"关系证据配对耗时 {elapsed:.3f}s，疑似仍是 O(H·T·S)"
+E       AssertionError: 关系证据配对耗时 5.158s，疑似仍是 O(H·T·S)
+E       assert 5.1581387768965214 < 1.0
+
+tests/test_r8_review_fixes.py:91: AssertionError
+_________ test_whitespace_variant_duplicate_is_coalesced_not_ambiguous _________
+
+    def test_whitespace_variant_duplicate_is_coalesced_not_ambiguous():
+        """``腾讯`` 与 `` 腾讯`` 是同一逻辑实体；正文只出现一次 -> 1 mention。"""
+        text = "腾讯发布了混元。"
+        result, report = backfill_provenance(
+            ExtractionResult(entities=[
+                Entity(name="腾讯", type="ORG"),
+                Entity(name=" 腾讯", type="ORG"),
+                Entity(name="混元", type="MISC"),
+            ]),
+            text,
+        )
+    
+>       assert report.entities_total == 2
+E       assert 3 == 2
+E        +  where 3 = BackfillReport(matched_literals={'["ORG", "腾讯"]': 0, '["ORG", " 腾讯"]': 0, '["MISC", "混元"]': 1}, unmatched_aliases=[], ... relations_with_evidence=0, relations_without_evidence=[], relation_evidence_candidates={}, chunk_id='', chunk_start=0).entities_total
+
+tests/test_r8_review_fixes.py:109: AssertionError
+__________ test_off_mode_rule_review_matches_262319b_on_all_fixtures ___________
+
+    def test_off_mode_rule_review_matches_262319b_on_all_fixtures():
+        """关闭态 ①②③④ 与归档基线逐条一致（verdict + issues 原文）。"""
+        for name, text, result in _review_fixtures():
+            expected_verdict, expected_issues = _rule_review_262319b(text, result)
+            review = rule_review(text, result, backfill=None)
+            assert review.verdict == expected_verdict, (name, review.issues)
+>           assert review.issues == expected_issues, name
+E           AssertionError: high_conf_no_evidence
+E           assert ['关系 腾讯-[发布]-...原文证据（置信度0.9）'] == ['关系 腾讯-[发布]->混元 置信度高却无原文证据']
+E             
+E             At index 0 diff: '关系 腾讯-[发布]->混元 无原文证据（置信度0.9）' != '关系 腾讯-[发布]->混元 置信度高却无原文证据'
+E             Use -v to get more diff
+
+tests/test_r7_review_fixes.py:154: AssertionError
+________ test_ambiguous_endpoint_does_not_emit_false_not_grounded_issue ________
+
+    def test_ambiguous_endpoint_does_not_emit_false_not_grounded_issue():
+        text = "同名发布了X公司。"
+        result, report = backfill_provenance(
+            ExtractionResult(
+                entities=[
+                    Entity(name="腾讯", type="ORG", aliases=["同名"]),
+                    Entity(name="网易", type="ORG", aliases=["同名"]),
+                    Entity(name="X公司", type="ORG"),
+                ],
+                relations=[Relation(head="同名", predicate="发布", tail="X公司")],
+            ),
+            text,
+        )
+        review = rule_review(text, result, backfill=report.to_dict())
+    
+        # 歧义不是模型靠返工能解决的问题（工单：这版不做模型补问）。
+>       assert review.verdict == ReviewVerdict.PASS, review.issues
+E       AssertionError: ['关系头实体「同名」字面归属不唯一或未知（疑似臆测）']
+E       assert 'needs_fix' == 'pass'
+E         
+E         - pass
+E         + needs_fix
+
+tests/test_r6_review_fixes.py:151: AssertionError
+_____ test_rule_review_treats_ambiguous_alias_relation_endpoint_as_signal ______
+
+    def test_rule_review_treats_ambiguous_alias_relation_endpoint_as_signal():
+        text = "同名发布了混元。"
+        result, report = backfill_provenance(
+            ExtractionResult(
+                entities=[
+                    Entity(name="腾讯", type="ORG", aliases=["同名"]),
+                    Entity(name="网易", type="ORG", aliases=["同名"]),
+                    Entity(name="混元", type="MISC"),
+                ],
+                relations=[Relation(head="同名", predicate="发布", tail="混元")],
+            ),
+            text,
+        )
+        review = rule_review(text, result, backfill=report.to_dict())
+        # r8 F1：工单明文「这版不做模型补问」，歧义只作为信号保留。
+>       assert review.verdict == ReviewVerdict.PASS, review.issues
+E       AssertionError: ['关系头实体「同名」字面归属不唯一或未知（疑似臆测）']
+E       assert 'needs_fix' == 'pass'
+E         
+E         - pass
+E         + needs_fix
+
+tests/test_r4_review_fixes.py:231: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_r8_review_fixes.py::test_ambiguous_alias_relation_endpoint_is_signal_not_rework_issue
+FAILED tests/test_r8_review_fixes.py::test_ambiguous_alias_relation_endpoint_passes_in_one_model_call
+FAILED tests/test_r8_review_fixes.py::test_relation_evidence_pairing_is_linearish
+FAILED tests/test_r8_review_fixes.py::test_whitespace_variant_duplicate_is_coalesced_not_ambiguous
+FAILED tests/test_r7_review_fixes.py::test_off_mode_rule_review_matches_262319b_on_all_fixtures
+FAILED tests/test_r6_review_fixes.py::test_ambiguous_endpoint_does_not_emit_false_not_grounded_issue
+FAILED tests/test_r4_review_fixes.py::test_rule_review_treats_ambiguous_alias_relation_endpoint_as_signal
+7 failed, 17 passed in 5.90s

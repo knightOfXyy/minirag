@@ -97,7 +97,7 @@
 | 5 | 达成 | 同句整句证据；跨句/跨块 `evidence_span=None` 不臆造 | `tests/test_r3_review_fixes.py` / `test_local_backfill.py`；r7 全量 |
 | 6 | 达成 | 同名歧义 → 0 归属 + `ambiguous_mentions`（候选带 type） | `tests/test_local_backfill.py` / `test_r6_review_fixes.py`；r7 红/绿 |
 | 7 | 达成 | 开关默认关；关闭态抽取 golden + `rule_review` 差分均与 262319b 一致 | `tests/test_backfill_extractor.py`；`03-r7-offmode-diff.txt`；`03-r7-diff-probe-output.txt` |
-| 8 | 达成（mean-of-3） | 3 轮均值 +0.0733pt ≤ 0.5pt；worst-of-N 未达标并列披露 | `docs/evidence/03-r3-stress-ab.json`；`03-r4-fix-evidence.md`「r7 F2 口径裁定」 |
+| 8 | 达成（mean-of-3；证据快照 9f95ed4，HEAD 未重放） | 3 轮均值 +0.0733pt ≤ 0.5pt；worst-of-N −1.30pt 未达标并列披露并进工单 04 gate | `docs/evidence/03-r3-stress-ab.json`；`03-r4-fix-evidence.md`「r7 F2 口径裁定」（r8 F3 补齐决策人/时间/快照版本） |
 | 9 | 达成（证据早于 r5/r6/r7） | 单块 output token 2365.98→582.13（−75.32%），截断块 6→0 | `docs/evidence/03-r3-stress-ab.json`；差异面见 F2 |
 | 10 | 达成 | 纯本地确定性；每块正文只扫一次（模式数 2/50/200 迭代恒 1 次） | `tests/test_local_backfill.py::test_scan_is_single_linear_pass_independent_of_pattern_count`；r7 全量 |
 

@@ -1,0 +1,19 @@
+# 工单 03 r8 修复后探针输出
+# HEAD=01e2316
+# 命令：PYTHONPATH=src /tmp/opencode/review-venv/bin/python /tmp/opencode/r8-probe.py
+
+[F1] ambiguous alias relation endpoint
+  calls=1 accepted=True issues=[]
+  ambiguous_mentions=1
+[F2] closed-state ④ high-confidence no evidence
+  verdict=needs_fix issues=['关系 腾讯-[发布]->混元 置信度高却无原文证据']
+  matches_262319b=True
+[F4] relation evidence pairing timing
+  chars= 1400 mentions=  400 sents= 200 time=0.0022s pairs=200 evidence=1
+  chars= 2800 mentions=  800 sents= 400 time=0.0036s pairs=400 evidence=1
+  chars= 5600 mentions= 1600 sents= 800 time=0.0075s pairs=800 evidence=1
+  chars= 7000 mentions= 2000 sents=1000 time=0.0393s pairs=1000 evidence=1
+  chars=17500 mentions= 5000 sents=2500 time=0.0146s pairs=2500 evidence=1
+[F5] whitespace variant standard names
+  entities_total=2 ambiguous=0 mentions=[('腾讯', 1), ('混元', 1)]
+  review=pass issues=[]
