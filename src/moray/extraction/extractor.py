@@ -94,7 +94,14 @@ class Extractor:
         # 该领域对应的动态结构化模型与系统提示词（构造一次即可复用）
         self._schema_model: Type[BaseModel] = build_extraction_model(self.domain)
         self._system_prompt: str = build_system_prompt(self.domain)
-        self.model_name: str = get_settings()["chat_model"]
+        settings = get_settings()
+        self.model_name: str = settings["chat_model"]
+        # 缓存键用的完整模型身份：同一个 chat_model 挂在不同 provider/base_url
+        # 网关下可能是不同权重/版本，不能共用缓存（nit-1）。model_name 仍保持
+        # 裸模型名，API/结果序列化口径不变。
+        self.model_identity: str = (
+            f"{settings.get('provider', '')}|{settings.get('base_url', '')}|"
+            f"{self.model_name}")
         # 前缀预热去重：一个实例（= 一个领域版本）只探一次，别每次都烧钱
         self._prefix_warmed = False
 

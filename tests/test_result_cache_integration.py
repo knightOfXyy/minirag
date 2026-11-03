@@ -166,13 +166,18 @@ async def test_failed_then_retry_mixes_uncached_and_cached(env):
     """首轮处理到一半失败（缓存里已有部分块）→ 重试：已完成块命中、其余真抽。"""
     _pool, store, jobs, ingestor, doc_path = env
 
-    from moray.schema import domain_fingerprint, get_domain
+    from moray.schema import get_domain
+    from moray.extraction.pipeline import ChunkedExtractionPipeline
 
     domain = get_domain("general")
     real = _CountingExtractor(domain)
     real.model_name = "fake-model"      # 与预热键一致（生产里模型名本就固定）
     provider = _StaticProvider(real)
     cache = ContentResultCache(InMemoryCacheBackend())
+    # 预热键必须与 pipeline 实际使用的键一致：领域指纹里还包含 user 消息模板
+    # 的 hash（nit-2），不能再直接用 schema.domain_fingerprint。
+    cache_fp = ChunkedExtractionPipeline(real)._domain_fingerprint()
+    cache_model = ChunkedExtractionPipeline(real)._cache_model_identity()
 
     # 用“上一轮”的独立抽取器预热一半的块，模拟失败前已完成并写缓存的分块。
     # 分块参数必须与 handler 实际从 env 读取的一致（见 env fixture），否则块正文
@@ -188,7 +193,7 @@ async def test_failed_then_retry_mixes_uncached_and_cached(env):
     half = len(chunks) // 2
     for c in chunks[:half]:
         await cache.get_or_extract(
-            domain_fingerprint(domain), "fake-model", c.text,
+            cache_fp, cache_model, c.text,
             lambda c=c: _uncached_call(prior, c))
     assert prior.calls == half
 

@@ -53,11 +53,10 @@ async def build_deps(*, enable_llm: bool = False,
 
     # 分块结果内容级缓存：默认关闭；启用时在本 API 进程内共享一个实例，
     # backend=postgres 时复用作业库连接池，跨 worker/重启共享。
-    from ..config import build_result_cache
+    from ..config import build_result_cache_safe
 
-    result_cache = await build_result_cache(pool=pool)
-    if result_cache is not None:
-        await result_cache.init_schema()   # postgres 后端建表（memory 为 no-op）
+    # 建表失败只降级为不缓存，不让 API 起不来（nit-6）。
+    result_cache = await build_result_cache_safe(pool=pool)
 
     return AppDeps(
         pool=pool, store=store, kb=kb, ingestor=ingestor,
