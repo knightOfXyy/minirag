@@ -35,7 +35,7 @@ from .chunk_metrics import (
     DocumentMetrics,
 )
 from .chunking import Chunk
-from .document import Document, ExtractionOutput, Usage
+from .document import CacheSavings, Document, ExtractionOutput, Usage
 from .extractor import ExtractionError, Extractor
 from .local_backfill import (
     BackfillReport,
@@ -204,7 +204,7 @@ class ChunkedExtractionPipeline:
         是否容忍。
 
         缓存（05）× 度量（01）× 回填（03）的交叉语义：命中缓存不发起模型调用、
-        不计真实 token（用量只记一次 cache_hits，被省下的 token 进 reused_*），
+        不计真实 token（用量只记一次 cache_hits，被省下的 token 进 cache_savings），
         但仍为该块落一条
         ChunkCallMetrics（finish_reason=cache_hit、attempts=0、token 全 0）——
         文档级"每块一条"的口径不能被缓存打破，否则 chunk_calls 会随缓存命中率
@@ -255,7 +255,7 @@ class ChunkedExtractionPipeline:
 
             if hit:
                 # 命中：还原结果但不计真实 token，只标记一次缓存来源；
-                # 被省下的 input/output 记到独立的 reused_* 字段（S4），
+                # 被省下的 input/output 记到独立的 cache_savings 命名空间（S4/N2），
                 # 成本/看板只汇总真实计量字段。
                 # 度量仍要为该块落一条（见方法 docstring 的口径说明）。
                 m = ChunkCallMetrics(
@@ -273,8 +273,11 @@ class ChunkedExtractionPipeline:
                 return (remap_spans(output.result, chunk),
                         Usage(
                             cache_hits=1,
-                            reused_input_tokens=output.usage.input_tokens,
-                            reused_output_tokens=output.usage.output_tokens,
+                            # 05 r2：省下的量收进独立命名空间（N2），不污染真实 token
+                            cache_savings=CacheSavings(
+                                input_tokens=output.usage.input_tokens,
+                                output_tokens=output.usage.output_tokens,
+                            ),
                         ), chunk.id, m, output.backfill)
 
             m = output.call_metrics
@@ -314,10 +317,21 @@ class ChunkedExtractionPipeline:
 
         # 只有多块才值得预热（单块文档预热等于白烧一次前缀）。
         # 探测请求本身的开销记在触发它这篇文档上：宁可多记，不要漏记成本。
+        # 但若所有块都已命中缓存，预热会凭空造出一次真实模型调用，与“第二次
+        # 零调用”冲突（N3）：先只读探测一遍，全命中就跳过预热。
         if self.warm_prefix and total >= 2:
-            warm_usage = await self.extractor.warm_prefix()
-            usage.add(warm_usage)
-            metrics.warmup = warm_usage.model_dump()
+            all_cached = False
+            if self.result_cache is not None:
+                model_name = getattr(self.extractor, "model_name", "") or ""
+                all_cached = all([
+                    await self.result_cache.has_cached(
+                        self._cached_domain_fingerprint, model_name, c.text)
+                    for c in chunks
+                ])
+            if not all_cached:
+                warm_usage = await self.extractor.warm_prefix()
+                usage.add(warm_usage)
+                metrics.warmup = warm_usage.model_dump()
 
         async def worker(chunk: Chunk):
             result = await self._extract_one_chunk(chunk, metrics)
@@ -364,7 +378,10 @@ class ChunkedExtractionPipeline:
             result=merged,
             model_name=self.extractor.model_name,
             usage=usage,
-            attempts=total,
+            # 实际模型尝试次数：命中块计 0，真实抽取块按提取器上报的次数累加。
+            # 全命中时是 0 而不是块数（N4）。五元组里尝试次数挂在分块度量上。
+            attempts=sum(
+                item[3].attempts for item in settled if item[3] is not None),
             document_metrics=metrics,
             backfill=backfill,
         )

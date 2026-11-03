@@ -7,6 +7,7 @@ LLM；命中用量只记 cache_hits，不产生真实 token。
     RUN_DB_TESTS=1 .venv/bin/python -m pytest tests/test_result_cache_integration.py -q
 """
 
+import asyncio
 import os
 from pathlib import Path
 
@@ -243,8 +244,9 @@ async def test_postgres_backend_roundtrip_and_corruption_degrades(env):
 
     pool, _store, _jobs, _ingestor, _doc = env
     backend = PostgresCacheBackend(pool)
-    await pool.execute("DROP TABLE IF EXISTS extraction_result_cache")
+    # 只清数据、不删表：DROP TABLE 会破坏同库其它使用者（N8）。
     await backend.init_schema()
+    await pool.execute("TRUNCATE extraction_result_cache")
     cache = ContentResultCache(backend)
     calls = {"n": 0}
 
@@ -286,8 +288,8 @@ async def test_postgres_two_cache_instances_singleflight_one_real_call(env):
     pool, *_ = env
     backend_a = PostgresCacheBackend(pool)
     backend_b = PostgresCacheBackend(pool)
-    await pool.execute("DROP TABLE IF EXISTS extraction_result_cache")
     await backend_a.init_schema()
+    await pool.execute("TRUNCATE extraction_result_cache")
     # 两个实例各有自己的进程内 _inflight；只共享后端。
     cache_a = ContentResultCache(backend_a)
     cache_b = ContentResultCache(backend_b)
@@ -305,6 +307,76 @@ async def test_postgres_two_cache_instances_singleflight_one_real_call(env):
     assert calls["n"] == 1
     assert sorted(hit for _, hit in results) == [False, True]
     assert results[0][0].result.model_dump() == results[1][0].result.model_dump()
+
+
+@pytest.mark.asyncio
+async def test_postgres_stale_claim_taken_over_after_lease(env):
+    """PG 占位行租约过期后等待方可接管；未过期时抢不到（S2）。"""
+    from moray.extraction.cache import (
+        ContentResultCache,
+        PostgresCacheBackend,
+        build_cache_key,
+    )
+
+    pool, *_ = env
+    backend = PostgresCacheBackend(pool)
+    await backend.init_schema()
+    await pool.execute("TRUNCATE extraction_result_cache")
+    key = build_cache_key("fp", "m", "PG 占位残留")
+    assert await backend.try_claim(key, 0.05) is True
+    assert await backend.try_claim(key, 0.05) is False   # 租约有效，不能被抢
+    await asyncio.sleep(0.1)                              # 等租约过期
+
+    cache = ContentResultCache(
+        backend, remote_wait_seconds=5.0,
+        poll_seconds=0.02, claim_lease_seconds=0.05)
+    calls = {"n": 0}
+
+    async def extract():
+        calls["n"] += 1
+        return await _sample_output()
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    out, hit = await cache.get_or_extract("fp", "m", "PG 占位残留", extract)
+    elapsed = loop.time() - started
+    assert hit is False
+    assert calls["n"] == 1                 # 只多一次真实调用
+    assert elapsed < 1.0                   # 一个租约内接管，不等满 5s
+    assert out.result.model_dump() == (await _sample_output()).result.model_dump()
+
+
+@pytest.mark.asyncio
+async def test_postgres_slow_healthy_leader_renews_lease_not_stolen(env):
+    """健康但慢的 PG leader 持续续租：等待方不抢占、只一次真调（S2）。"""
+    from moray.extraction.cache import (
+        ContentResultCache,
+        PostgresCacheBackend,
+    )
+
+    pool, *_ = env
+    backend = PostgresCacheBackend(pool)
+    await backend.init_schema()
+    await pool.execute("TRUNCATE extraction_result_cache")
+    cache_a = ContentResultCache(backend, claim_lease_seconds=0.2)
+    cache_b = ContentResultCache(
+        backend, claim_lease_seconds=0.2,
+        poll_seconds=0.02, remote_wait_seconds=5.0)
+    calls = {"n": 0}
+
+    async def slow():
+        calls["n"] += 1
+        await asyncio.sleep(0.6)           # 超过两个租约
+        return await _sample_output()
+
+    leader = asyncio.create_task(
+        cache_a.get_or_extract("fp", "m", "PG 慢 leader", slow))
+    await asyncio.sleep(0.02)
+    out, hit = await cache_b.get_or_extract("fp", "m", "PG 慢 leader", slow)
+    leader_out, _ = await leader
+    assert calls["n"] == 1
+    assert hit is True
+    assert out.result.model_dump() == leader_out.result.model_dump()
 
 
 class _FailAfter:
@@ -356,8 +428,8 @@ async def test_job_fails_midway_then_restarts_with_new_pg_cache_hits_done_chunks
     assert len(chunks) >= 4
 
     pg = PostgresCacheBackend(pool)
-    await pool.execute("DROP TABLE IF EXISTS extraction_result_cache")
     await pg.init_schema()
+    await pool.execute("TRUNCATE extraction_result_cache")
     cache1 = ContentResultCache(pg)
     done_chunks = 2
 
@@ -388,9 +460,11 @@ async def test_postgres_ttl_purges_expired_rows(env):
     from moray.extraction.cache import PostgresCacheBackend
 
     pool, *_ = env
-    backend = PostgresCacheBackend(pool, ttl_hours=1)
-    await pool.execute("DROP TABLE IF EXISTS extraction_result_cache")
+    # purge_interval_seconds=0 让每次写入都清理，便于验证 TTL 语义本身（N7）。
+    backend = PostgresCacheBackend(
+        pool, ttl_hours=1, purge_interval_seconds=0)
     await backend.init_schema()
+    await pool.execute("TRUNCATE extraction_result_cache")
     await backend.set("k-old", '{"v":1}')
     await pool.execute(
         "UPDATE extraction_result_cache SET created_at = now() - interval '2 hours' "
