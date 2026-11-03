@@ -212,6 +212,24 @@ def _int_env(name: str, default: int) -> int:
     return int(raw) if raw.isdigit() and int(raw) > 0 else default
 
 
+def _bool_env(name: str, default: bool = False) -> bool:
+    """读布尔开关：1/true/yes/on 视为开，其余（含未设置）为关。"""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def local_backfill_enabled() -> bool:
+    """结构化输出瘦身 + mention/span/关系证据本地确定性回填开关（默认关）。
+
+    MORAY_LOCAL_BACKFILL=1 打开后：模型只输出逻辑实体/关系（无字符偏移、无
+    自报置信度），出现位置由本地多模式自动机回填。放量门槛（macro-F1 跌
+    ≤0.5pt、关系 F1 不降、输出 token -≥30%、截断不增）达成前保持默认关闭。
+    """
+    return _bool_env("MORAY_LOCAL_BACKFILL", False)
+
+
 def chunk_settings() -> dict:
     """长文分块阈值与并发（波次 4 双路接线用）。env 可覆盖，缺省走保守值。
 

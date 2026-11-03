@@ -38,13 +38,38 @@ TASK_PROTOCOL = (
 )
 
 
-def build_system_prompt(domain: DomainSpec) -> str:
+TASK_PROTOCOL_SLIM = (
+    "输出协议：只输出结构化结果，不输出任何解释性文字。"
+    "只输出逻辑实体（标准名、类型、别名、专有属性）与逻辑关系（头、谓词、尾），"
+    "不要输出出现位置、字符偏移或置信度——出现位置由本地确定性回填完成。"
+    "只抽取有明确文本证据的内容；没有任何实体时返回空列表，禁止臆测。"
+)
+
+
+def build_system_prompt(domain: DomainSpec, *, slim: bool = False) -> str:
     """根据领域配置拼出抽取 Agent 的系统提示词。
 
     前缀稳定性 = 提示缓存命中率：这里刻意【不含时间戳/随机 id/文档相关内容】，
     同领域内每次请求逐字节一致；领域配置变更（DB updated_at 变化）才会换前缀。
+
+    slim=True（结构化输出瘦身）：不再要求模型输出 mentions/字符偏移/置信度，
+    这些由本地确定性回填；提示词因此明显更短、解码更快、无偏移幻觉。
     """
     predicates = "、".join(f"「{p}」" for p in domain.relation_predicates) or "（按文本自行概括规范动词）"
+    if slim:
+        return (
+            "你是严谨的实体与关系抽取专家。只抽取文本中明确出现、且属于下列类型的"
+            "命名实体，并判断实体之间有明确文本证据的关系。\n"
+            f"当前领域：{domain.name}（{domain.code}）\n"
+            "实体类型只能使用以下枚举：\n"
+            f"{domain.type_guide_text()}\n"
+            f"关系谓词尽量使用规范动词：{predicates}。\n"
+            "要求：标准名取最完整正式的叫法，其他叫法放进 aliases；专有字段放入 "
+            "attributes。不要输出出现位置、字符偏移或置信度。\n"
+            f"{domain.extra_instruction}\n"
+            "没有任何实体时返回空列表，禁止臆测。\n"
+            f"{TASK_PROTOCOL_SLIM}"
+        )
     return (
         "你是严谨的实体与关系抽取专家。只抽取文本中明确出现、且属于下列类型的"
         "命名实体，并判断实体之间有明确文本证据的关系。\n"
@@ -60,33 +85,29 @@ def build_system_prompt(domain: DomainSpec) -> str:
     )
 
 
-def build_extraction_model(domain: DomainSpec) -> Type[BaseModel]:
+def build_extraction_model(domain: DomainSpec, *, slim: bool = False) -> Type[BaseModel]:
     """为指定领域动态生成结构化输出模型。
 
     和写死 `type: Literal[...]` 的效果完全一样，只是枚举值来自配置，
     因此可以在不修改本文件的前提下支持新领域。
+
+    slim=True（结构化输出瘦身）：模型只输出逻辑实体（name/type/aliases/
+    attributes）与逻辑关系（head/predicate/tail），不再输出 mentions、字符
+    偏移、证据 span 与自报置信度——这些由本地确定性回填与确定性信号替代，
+    显著缩短解码输出、消除偏移幻觉。
     """
     # ① 动态枚举：Literal['PER', 'ORG', ...]，值来自领域配置
     type_literal = Literal[tuple(domain.type_codes())]  # type: ignore[valid-type]
 
     # ② 动态实体模型：公共字段对齐内核，type 用动态枚举约束
     attr_guide = domain.attribute_guide_text()
-    dyn_entity = create_model(
-        f"{domain.code.title()}Entity",
+    entity_fields = dict(
         name=(str, Field(description="实体标准名称，取最正式完整的叫法")),
         type=(
             type_literal,
             Field(description="实体类型，只能取本领域枚举值之一"),
         ),
         aliases=(list[str], Field(default_factory=list, description="其他叫法/简称")),
-        mentions=(
-            list[EntityMention],
-            Field(default_factory=list, description="每次原文出现及字符偏移"),
-        ),
-        confidence=(
-            float,
-            Field(default=0.0, ge=0.0, le=1.0, description="置信度0~1"),
-        ),
         attributes=(
             dict,
             Field(
@@ -96,18 +117,42 @@ def build_extraction_model(domain: DomainSpec) -> Type[BaseModel]:
                 ).strip(),
             ),
         ),
-        __base__=BaseModel,
+    )
+    if not slim:
+        entity_fields["mentions"] = (
+            list[EntityMention],
+            Field(default_factory=list, description="每次原文出现及字符偏移"),
+        )
+        entity_fields["confidence"] = (
+            float,
+            Field(default=0.0, ge=0.0, le=1.0, description="置信度0~1"),
+        )
+    dyn_entity = create_model(
+        f"{domain.code.title()}Entity", __base__=BaseModel, **entity_fields
     )
 
-    # ③ 顶层结果模型：实体 + 关系
+    # ③ 关系模型：瘦身时只保留 头/谓词/尾，去掉证据偏移与置信度
+    if slim:
+        dyn_relation = create_model(
+            f"{domain.code.title()}Relation",
+            head=(str, Field(description="头实体的标准名称")),
+            predicate=(str, Field(description="关系类型，规范动词短语")),
+            tail=(str, Field(description="尾实体的标准名称")),
+            __base__=BaseModel,
+        )
+    else:
+        dyn_relation = Relation
+
+    # ④ 顶层结果模型：实体 + 关系
+    suffix = "Slim" if slim else ""
     dyn_result = create_model(
-        f"{domain.code.title()}ExtractionResult",
+        f"{domain.code.title()}ExtractionResult{suffix}",
         entities=(
             list[dyn_entity],
             Field(default_factory=list, description="抽取出的去重实体"),
         ),
         relations=(
-            list[Relation],
+            list[dyn_relation],
             Field(default_factory=list, description="有明确证据的关系三元组"),
         ),
         __base__=BaseModel,

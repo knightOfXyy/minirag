@@ -64,3 +64,9 @@ class ExtractionOutput(BaseModel):
     model_name: str = ""
     usage: Usage = Field(default_factory=Usage)
     attempts: int = Field(default=1, description="实际模型尝试次数（含校验重试）")
+    # 瘦身回填模式下的确定性质量信号（块级置信度/命中/歧义/幻觉别名/关系证据）。
+    # 关闭模式恒为 None；它是旁路可观测信息，不属于稳定内核 Entity/Relation。
+    backfill: dict | None = Field(
+        default=None,
+        description="本地确定性回填信号（仅 MORAY_LOCAL_BACKFILL 打开时有值）",
+    )
