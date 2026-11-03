@@ -14,18 +14,21 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 
 from ...extraction.document import Document
+from . import corpus as _corpus_module
 from .extractor import StressRuleExtractor
 from .loader import StressGoldCase
 from .metrics import CaseEvaluation, aggregate_cases, evaluate_case
 
 # 报告自带身份信息：几个月后拿到一份 eval_grid_report.json 也能知道是哪个
-# 抽取器、哪版规则跑出来的。身份从被评对象类上取（``identity`` 类属性），
-# 注入自定义抽取器时报告会自动跟着换，不会永远写着演示用规则抽取器。
-_CORPUS_VERSION = 3
+# 抽取器、哪版规则/哪版语料跑出来的。语料版本由 ``corpus.py`` 源码内容
+# 推导（sha256），改模板/种子/过滤闸门都会自动换版本，不再是手写常量。
+_CORPUS_VERSION = "sha256:" + hashlib.sha256(
+    Path(_corpus_module.__file__).read_bytes()).hexdigest()[:16]
 
 # 默认参数网格：生产档 + overlap 档位 + 候选更大预算（含 04 单目标 3500）
 DEFAULT_GRIDS: tuple[tuple[int, int], ...] = (
@@ -114,6 +117,13 @@ def build_report(
         "entity_axis_note": (
             "实体轴只证明分块/回填接线：被评规则抽取器与语料共用词典，"
             "实体召回恒为 1.0 属预期；块预算判据看关系轴。"),
+        "gold_scope_note": (
+            "gold 是刻意子集：正文里还有未写进答案的关系（每篇 18 句"
+            "「法定代表人{PER}」、卷四每案 5 名涉案人只记 1 条涉案关联）。"
+            "确定性规则抽取器不建模这些谓词，故当前无 FP；注入真实 LLM 路径"
+            "做 A/B 时，模型读出的这些句面会被记 FP，绝对 P 会被低估。"
+            "A/B 只比较同一被评对象在不同块预算下的增量，"
+            "不要跨抽取器横比绝对 P。"),
         "grids": {},
     }
     for (max_units, overlap_units), evals in sorted(grid_results.items()):

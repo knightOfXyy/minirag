@@ -2,14 +2,17 @@
 
 from .corpus import (
     DECOY_PREFIX,
+    PREDICATE_TRIGGERS,
     STRESS_SEEDS,
     StressCase,
     StressEntity,
     StressRelation,
     build_text,
     generate_case,
+    relation_semantically_supported,
     serialize_case,
     validate_case,
+    validate_case_semantics,
 )
 from .extractor import StressRuleExtractor, extract_chunk
 from .loader import (
@@ -36,14 +39,17 @@ from .runner import (
 
 __all__ = [
     "DECOY_PREFIX",
+    "PREDICATE_TRIGGERS",
     "STRESS_SEEDS",
     "StressCase",
     "StressEntity",
     "StressRelation",
     "build_text",
     "generate_case",
+    "relation_semantically_supported",
     "serialize_case",
     "validate_case",
+    "validate_case_semantics",
     "StressRuleExtractor",
     "extract_chunk",
     "StressGoldCase",

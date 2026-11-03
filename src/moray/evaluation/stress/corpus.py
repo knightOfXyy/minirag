@@ -16,13 +16,23 @@
 4. 人名/地名用集合去重 + 固定顺序产出，消除 hash-seed 导致的跨进程不确定性，
    保证同一种子两次生成的正文与答案逐字节一致。
 
+**gold 是刻意子集（绝对 P 不可跨抽取器横比）**：为控制规模，正文里还有
+若干「句面陈述但未写进答案」的关系，例如每篇 18 句「法定代表人{PER}」、
+卷四每个案子列出 5 名涉案人却只记第一个人的「涉案关联」。确定性规则抽取器
+不建模这些谓词，所以当前无 FP；但工单 04 注入真实 LLM 路径做 A/B 时，模型
+读出的这些句面会被记 FP，绝对 precision 会被低估。A/B 只应比较同一被评对象
+在不同块预算下的**增量**，不要跨抽取器比较绝对 P。该限制也写入
+``runner.build_report`` 的 ``gold_scope_note``。
+
 刻意埋入的三类边界压力（与 chunk_boundary_probe 的设计一致）
 ----------------------------------------------------------
 · 远距关系：头在卷一、尾首次出现在数千字之后的卷五（办案地位于 / 追赃方向
   指向），卷五句面重复头名，供句内规则抽取；
 · 超长无句号句：逼 Chunker 走 _hard_split，并在硬切点附近密集堆实体名；
 · 高密度列举：同一句并列多个公司/人名，压召回随块预算的变化；
-· **块预算敏感关系长句**：每条 >1500 units 的句子里同时含关系头/尾，
+· **块预算敏感关系长句**：每条 >1500 units 的合语句里同时含关系头/尾，
+  句面是「头，……叙述……，相关材料显示其<触发词><尾>，现予确认。」——
+  头在句首、触发词与尾在句末紧邻，正文真正陈述该三元组；
   1500 档必被硬切拆开、3500 档可整句保留；每篇 4 条不同头名/谓词
   （办案地位于 / 追赃方向指向 / 关联物证）——给「调大块预算→关系召回
   提升」一个两位数条关系的真实信号（而不是 1% 余量或指标恒定）。
@@ -60,6 +70,19 @@ LOC_POOL = ["临江区", "桥南区", "云岭市", "东港新区", "西江县城
 # decoy 实体统一带这个前缀：结构上不可能与正文真实名称撞名，
 # 避免"刻意不可定位"的候选被真实同名实体"救活"、混进黄金答案。
 DECOY_PREFIX = "未入卷"
+
+# gold 规范谓词 -> 正文里的触发词。生成器写句、抽取器找左触发词、
+# 语义闸门校验句面都只认这一张表（单一来源，防止三处文案漂移）。
+PREDICATE_TRIGGERS: dict[str, str] = {
+    "供职于": "曾在",
+    "户籍在": "户籍地",
+    "注册地位于": "注册地位于",
+    "涉案关联": "案件编号",
+    "关联物证": "关联到关键物证",
+    "办案地位于": "办案地位于",
+    "追赃方向指向": "追赃方向指向",
+}
+
 
 CASE_KINDS = ["系列盗窃案", "合同诈骗案", "寻衅滋事案", "故意损毁财物案",
               "非法经营案", "聚众斗殴案"]
@@ -169,26 +192,27 @@ def long_runon(rng: random.Random, orgs: list[str], people: list[str],
 
 def long_relation_sentence(rng: random.Random, head: str, tail: str,
                            target_units: int, *,
-                           trigger: str = "办案地位于",
-                           joiner: str = "的") -> str:
-    """一条 >生产块预算、含关系头/尾且中间无句末标点的长句。
+                           trigger: str) -> str:
+    """一条 >生产块预算、含关系头/尾且中间无句末标点的合语句。
 
-    头与触发词在句首、尾在句尾，中间填满不含实体名/句末标点的叙述：
+    句面结构固定为「头，……（不含实体的叙述）……，相关材料显示其<触发词><尾>，
+    现予确认。」：头在句首、触发词与尾在句末**紧邻**，因此正文确实陈述了
+    gold 三元组（而不是旧实现里「头+触发词被逗号截断、尾在 1900 units 之后」
+    那种只有位置巧合的写法）。
+
     1500 档 Chunker 会 hard_split 把它拆成两半（头尾分居两块，关系必丢），
-    3500 档整句留在同一块（关系可抽到）。
-
-    ``trigger`` 是正文里的触发词；``joiner`` 是头名与触发词之间的连接
-    （组织用「的」，人后接逗号）。不同谓词共用这一种结构，保证长句语义
-    仍是「头-谓词-尾」的直接陈述，而不是靠头尾同现的松校验。
+    3500 档整句留在同一块（句内回退到最近的句首主语，关系可抽到）。
     """
-    parts: list[str] = [f"{head}{joiner}{trigger}"]
-    total = len(parts[0])
+    prefix = f"{head}，"
+    ending = f"相关材料显示其{trigger}{tail}，现予确认。"
+    parts: list[str] = []
+    total = len(prefix) + len(ending)
     while total < target_units:
         token = rng.choice(FILLER_VERB)
         parts.append(token)
         total += len(token) + 1
-    parts.append(tail)
-    return "，".join(parts) + "，现予确认。"
+    middle = "，".join(parts)
+    return prefix + (middle + "，" if middle else "") + ending
 
 
 def build_text(rng: random.Random, *, target_chars: int,
@@ -350,16 +374,16 @@ def build_text(rng: random.Random, *, target_chars: int,
     transition = ("办案人员对异地协作与追赃事项逐项复核后，未发现新的涉案单位线索，"
                   "相关材料已按程序归档备查，手续齐全，不存在遗漏。")
     long_relations = [
-        (orgs[4], tail_locs[0], "办案地位于", "办案地位于", "的"),
-        (orgs[5], tail_locs[1], "追赃方向指向", "追赃方向指向", "的"),
-        (people[0], CLUE_ITEMS[5], "关联物证", "关联到关键物证", "，"),
-        (people[1], CLUE_ITEMS[0], "关联物证", "关联到关键物证", "，"),
+        (orgs[4], tail_locs[0], "办案地位于", "办案地位于"),
+        (orgs[5], tail_locs[1], "追赃方向指向", "追赃方向指向"),
+        (people[0], CLUE_ITEMS[5], "关联物证", "关联到关键物证"),
+        (people[1], CLUE_ITEMS[0], "关联物证", "关联到关键物证"),
     ]
-    for head, tail, predicate, trigger, joiner in long_relations:
+    for head, tail, predicate, trigger in long_relations:
         md.append(transition)
         md.append(long_relation_sentence(
             rng, head, tail, target_units=max_units + 400,
-            trigger=trigger, joiner=joiner))
+            trigger=trigger))
         md.append("")
         relations.append(StressRelation(head, predicate, tail))
 
@@ -384,12 +408,77 @@ def build_text(rng: random.Random, *, target_chars: int,
     return text, planted, relations
 
 
+def relation_semantically_supported(
+    text: str, entities: list[StressEntity], relation: StressRelation
+) -> bool:
+    """正文是否有一句**语义上直接陈述**该三元组（而不只是头尾都能定位）。
+
+    判据（r3 评审修正）：
+    · 头名出现在触发词之前（涉案关联例外：头在案号之后）；
+    · 触发词与尾名**相邻**（只容忍空格/制表符，不容忍夹进别的词或标点）；
+    · 涉案关联还要求尾（案号）与头之间没有插入另一个 PER。
+
+    旧版只要求「触发词与尾之间没有同类型实体」——块预算长句里同类型实体
+    只有尾名一个，断言恒真。现在尾必须紧跟触发词，换成另一个同样可定位的
+    实体就会被拒绝。
+    """
+    trigger = PREDICATE_TRIGGERS.get(relation.predicate)
+    if trigger is None:
+        return False
+    type_of = {e.name: e.type for e in entities}
+    by_type: dict[str, set[str]] = {}
+    for e in entities:
+        by_type.setdefault(e.type, set()).add(e.name)
+    head_type = type_of.get(relation.head)
+
+    for line in text.splitlines():
+        ti = line.find(trigger)
+        if ti < 0 or relation.head not in line or relation.tail not in line:
+            continue
+        ti_end = ti + len(trigger)
+        if relation.predicate == "涉案关联":
+            tail_pos = line.find(relation.tail, ti_end)
+            if tail_pos < 0:
+                continue
+            hi = line.find(relation.head, tail_pos + len(relation.tail))
+            if hi < 0:
+                continue
+            between = [n for n in by_type.get(head_type or "", ())
+                       if n != relation.head
+                       and n in line[tail_pos + len(relation.tail):hi]]
+            if not between:
+                return True
+            continue
+        if line.rfind(relation.head, 0, ti) < 0:
+            continue
+        rest = line[ti_end:]
+        if rest.startswith(relation.tail) or rest.lstrip(" \t").startswith(
+                relation.tail):
+            return True
+    return False
+
+
+def validate_case_semantics(case: StressCase) -> list[str]:
+    """语义闸门：返回正文没有直接陈述的关系三元组（空列表才通过）。
+
+    与 :func:`validate_case` 的可定位闸门互补；落盘（gen_stress_gold.py）与
+    装载（loader.load_stress_case）都经由 ``validate_case`` 调到它。
+    """
+    return [
+        f"{r.head}-{r.predicate}->{r.tail}"
+        for r in case.relations
+        if not relation_semantically_supported(case.text, case.entities, r)
+    ]
+
+
 def validate_case(case: StressCase) -> tuple[list[str], list[str]]:
     """答案可信闸门（与 generate_case 内的落盘前过滤同一口径）。
 
-    返回 (缺失实体名, 无法定位的关系三元组列表)；两者皆空才算通过。
+    返回 (缺失实体名, 不可信关系三元组列表)；两者皆空才算通过。
     实体：规范名必须在干净正文中字面出现。
-    关系：头/尾都必须在正文中可定位，且都指向实体答案中的规范名。
+    关系：先查头/尾可定位且都指向实体答案的规范名（可定位闸门），再查正文
+    是否有一句在语义上直接陈述它（:func:`validate_case_semantics`）。
+    两道闸门合并返回，调用方无需分别记两套返回值。
     """
     ent_names = {e.name for e in case.entities}
     missing_entities = [
@@ -399,6 +488,7 @@ def validate_case(case: StressCase) -> tuple[list[str], list[str]]:
         if (r.head not in case.text or r.tail not in case.text
                 or r.head not in ent_names or r.tail not in ent_names):
             missing_relations.append(f"{r.head}-{r.predicate}->{r.tail}")
+    missing_relations.extend(validate_case_semantics(case))
     return missing_entities, missing_relations
 
 

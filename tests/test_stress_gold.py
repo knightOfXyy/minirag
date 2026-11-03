@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import random
 from pathlib import Path
@@ -18,7 +19,9 @@ from moray.evaluation import load_gold_dir, run_evaluation
 from moray.evaluation.stress import (
     DECOY_PREFIX,
     DEFAULT_GRIDS,
+    PREDICATE_TRIGGERS,
     STRESS_SEEDS,
+    StressCase,
     StressEntity,
     StressRelation,
     StressRuleExtractor,
@@ -31,9 +34,12 @@ from moray.evaluation.stress import (
     generate_case,
     load_stress_dir,
     relation_recall_for_predicates,
+    relation_semantically_supported,
     run_grid_async,
+    save_grid_report,
     serialize_case,
     validate_case,
+    validate_case_semantics,
 )
 from moray.extraction.baseline import ImprovedExtractor
 from moray.extraction.chunking import Chunker, estimate_tokens
@@ -74,62 +80,19 @@ def test_generated_case_is_large_and_answers_are_text_backed(seed):
 
 
 # 谓词 -> 正文里真正的触发词（gold 的规范谓词不一定逐字出现）。
-_TRIGGER = {
-    "供职于": "曾在",
-    "户籍在": "户籍地",
-    "注册地位于": "注册地位于",
-    "涉案关联": "案件编号",
-    "关联物证": "关联到关键物证",
-    "办案地位于": "办案地位于",
-    "追赃方向指向": "追赃方向指向",
-}
+# 单一来源在 ``corpus.PREDICATE_TRIGGERS``（extractor 也从这里取左触发词），
+# 测试不再自己维护一份副本——否则触发词文案漂移时测试仍然全绿。
+_TRIGGER = PREDICATE_TRIGGERS
 
 
 def _relation_supported(case, r) -> bool:
-    """句面语义校验：头是触发词前最近的同类实体，尾是触发词后最近的同类实体。
+    """句面语义校验：委托给生产闸门 ``relation_semantically_supported``。
 
-    只查"头尾可定位"查不出「马秀兰-供职于-锦江华诚机械制造有限公司」这类
-    假答案；只查"同一行出现"又会放过长句里尾放错位置的松校验。这里的
-    "最近同类实体"同时锁死两边：头与触发词之间、触发词与尾之间都不能插进
-    另一个同类型实体名。
+    r3 评审指出旧测试版只查「触发词与尾之间没有同类型实体」，而块预算长句
+    里同类型实体只有尾名一个，断言恒真。生产口径已改为「触发词与尾相邻」，
+    测试直接调用同一函数，不再有第二套松校验。
     """
-    trigger = _TRIGGER[r.predicate]
-    type_of = {e.name: e.type for e in case.entities}
-    by_type: dict[str, set[str]] = {}
-    for e in case.entities:
-        by_type.setdefault(e.type, set()).add(e.name)
-    head_type, tail_type = type_of[r.head], type_of[r.tail]
-
-    for line in case.text.splitlines():
-        ti = line.find(trigger)
-        if ti < 0 or r.head not in line or r.tail not in line:
-            continue
-        if r.predicate == "涉案关联":
-            # "案件编号 A-… 涉及 头名、… 等人员"：头在触发词之后。
-            case_pos = line.find(r.tail, ti)
-            hi = line.find(r.head, case_pos + len(r.tail))
-            if case_pos < 0 or hi < 0:
-                continue
-            between = [n for n in by_type.get(head_type, ())
-                       if n != r.head and n in line[case_pos:hi]]
-            if not between:
-                return True
-            continue
-        hi = line.rfind(r.head, 0, ti)
-        if hi < 0:
-            continue
-        between_head = [n for n in by_type.get(head_type, ())
-                        if n != r.head
-                        and n in line[hi + len(r.head):ti]]
-        ti_end = ti + len(trigger)
-        tail_pos = line.find(r.tail, ti_end)
-        if tail_pos < 0:
-            continue
-        between_tail = [n for n in by_type.get(tail_type, ())
-                        if n != r.tail and n in line[ti_end:tail_pos]]
-        if not between_head and not between_tail:
-            return True
-    return False
+    return relation_semantically_supported(case.text, case.entities, r)
 
 
 @pytest.mark.parametrize("seed", STRESS_SEEDS)
@@ -146,6 +109,111 @@ def test_gold_relations_are_semantically_backed_by_text(seed):
     for r in case.relations:
         assert _relation_supported(case, r), (
             f"{r.head}-{r.predicate}->{r.tail} 正文没有任何一句语义支撑")
+    # 同一道语义闸门也下沉到落盘/装载路径（corpus.validate_case 的一部分）
+    assert validate_case_semantics(case) == []
+
+
+@pytest.mark.parametrize("seed", STRESS_SEEDS)
+def test_budget_sensitive_long_sentences_state_head_then_trigger_tail(seed):
+    """块预算敏感长句必须是「头在句首、触发词+尾在句末」的合语句。
+
+    r3 评审反例：旧产物是「X的办案地位于，复查了……，望江路，现予确认。」，
+    触发词紧跟头名后被逗号截断，尾名在 ~1900 units 之后才出现——正文根本
+    没有陈述该三元组。这里直接锁死句面，不再依赖「中间没有同类型实体」这种
+    在单尾实体句上恒真的松校验。
+    """
+    case = generate_case(seed=seed)
+    checked = 0
+    for r in case.relations:
+        trigger = _TRIGGER[r.predicate]
+        for line in case.text.splitlines():
+            if (estimate_tokens(line) > PROD_MAX_UNITS
+                    and r.head in line and r.tail in line
+                    and trigger in line):
+                assert line.startswith(r.head), line[:60]
+                assert line.endswith(
+                    f"相关材料显示其{trigger}{r.tail}，现予确认。"), line[-80:]
+                checked += 1
+    assert checked >= 4
+
+
+def _case_with_swapped_long_relation_tail(seed=STRESS_SEEDS[0]):
+    """返回 (被篡改语料, 原关系)：把长句的尾换成另一个可定位的 LOC。"""
+    case = generate_case(seed=seed)
+    line, relation = next(
+        (line, r)
+        for r in case.relations
+        for line in case.text.splitlines()
+        if (r.predicate == "办案地位于"
+            and estimate_tokens(line) > PROD_MAX_UNITS
+            and r.head in line and r.tail in line))
+    other_loc = next(
+        e.name for e in case.entities
+        if e.type == "LOC" and e.name != relation.tail
+        and e.name not in line)
+    assert other_loc in case.text  # 替换后仍然「可定位」
+    tampered = type(case)(
+        seed=case.seed, name=case.name,
+        text=case.text.replace(line, line.replace(relation.tail, other_loc)),
+        entities=case.entities, relations=case.relations)
+    return tampered, relation
+
+
+def test_semantic_gate_rejects_tail_swapped_to_another_locatable_loc():
+    """负例：把长句的尾换成另一个「正文可定位」的 LOC，语义闸门必须拒绝。
+
+    只查可定位的旧闸门会放行这种改动（两个地名都在正文里出现），因此这条
+    测试专门守住「尾必须紧跟在触发词之后」——评审要求的负例。
+    """
+    tampered, relation = _case_with_swapped_long_relation_tail()
+    assert not relation_semantically_supported(
+        tampered.text, tampered.entities, relation)
+    assert any(f"{relation.head}-{relation.predicate}->{relation.tail}" in m
+               for m in validate_case_semantics(tampered))
+    # 落盘/装载统一走的 validate_case 也必须兜住（不是只在测试里校验）
+    missing_e, missing_r = validate_case(tampered)
+    assert not missing_e
+    assert any(f"{relation.head}-{relation.predicate}->{relation.tail}" in m
+               for m in missing_r)
+    # 可定位闸门本身看不出问题（尾名仍在正文别处）
+    assert relation.tail in tampered.text
+
+
+def _write_case_files(directory: Path, case) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    md_path = directory / f"{case.name}.md"
+    md_path.write_text(case.text, encoding="utf-8")
+    md_path.with_suffix(".answer.json").write_text(
+        json.dumps(serialize_case(case), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8")
+    return md_path
+
+
+def test_loader_rejects_semantically_unsupported_answers(tmp_path):
+    """装载闸门也必须查语义（r1 blocker 的根因就是 validate_case 查不出）。"""
+    from moray.evaluation.stress import load_stress_case
+
+    tampered, relation = _case_with_swapped_long_relation_tail()
+    md_path = _write_case_files(tmp_path, tampered)
+    with pytest.raises(ValueError) as excinfo:
+        load_stress_case(md_path)
+    assert f"{relation.head}-{relation.predicate}->{relation.tail}" in str(
+        excinfo.value)
+
+
+def test_generator_cli_rejects_semantically_unsupported_answers(
+        tmp_path, monkeypatch):
+    """生成器落盘前也必须查语义，不能只用 --seed 生成就放行。"""
+    module = _load_gen_module()
+    tampered, _ = _case_with_swapped_long_relation_tail()
+    monkeypatch.setattr(module, "generate_case", lambda **_: tampered)
+    with pytest.raises(SystemExit) as excinfo:
+        module.main([
+            "--seed", "1", "--name", "bad",
+            "--out-dir", str(tmp_path),
+        ])
+    assert "答案自洽校验失败" in str(excinfo.value)
+    assert not list(tmp_path.glob("bad.*"))
 
 
 @pytest.mark.parametrize("seed", STRESS_SEEDS)
@@ -372,6 +440,9 @@ def test_per_type_breakdown_reconciles_with_totals():
     assert agg["entity_relaxed"]["fp"] == 1
     assert "DATE" in agg["entity_by_type"]
     assert sum(p["fp"] for p in agg["entity_by_type"].values()) == 1
+    # tp 也要对账（r3 评审：此前只核了 fp/fn）
+    assert sum(p["tp"] for p in agg["entity_by_type"].values()) == (
+        agg["entity_relaxed"]["tp"])
     # fn 同理：预测漏掉的类型（此处无）也必须能被对账
     assert sum(p["fn"] for p in agg["entity_by_type"].values()) == (
         agg["entity_relaxed"]["fn"])
@@ -395,6 +466,25 @@ def test_committed_corpus_matches_generator_output_byte_for_byte():
             serialize_case(fresh), ensure_ascii=False, indent=2) + "\n"
         assert answer_path.read_text(encoding="utf-8") == expected, (
             f"{c.name}.answer.json 与生成器输出不一致")
+
+
+def test_committed_grid_report_matches_runner_output(tmp_path):
+    """仓内 ``eval_grid_report.json`` 必须能被当前代码逐字节重放。
+
+    语料有 ``test_committed_corpus_matches_generator_output_byte_for_byte``
+    钉着，但报告此前没有同类测试：抽取器/口径一改，报告就悄悄过期，而工单
+    04 会拿它当 A/B 基线。这里按 ``eval_stress_gold.py`` 的默认网格与落盘
+    口径重跑一遍，与仓内文件逐字节比较。
+    """
+    cases = load_stress_dir(STRESS_DIR)
+    assert {c.seed for c in cases} == set(STRESS_SEEDS)
+    grids = asyncio.run(run_grid_async(cases, grids=list(DEFAULT_GRIDS)))
+    fresh = tmp_path / "eval_grid_report.json"
+    save_grid_report(fresh, grids, seeds=[c.seed for c in cases])
+    committed = STRESS_DIR / "eval_grid_report.json"
+    assert committed.read_bytes() == fresh.read_bytes(), (
+        "eval_grid_report.json 与当前代码重跑结果不一致（先跑 "
+        "lessons/eval_stress_gold.py 重新生成）")
 
 
 def test_predicate_normalization_is_public_api():
@@ -424,6 +514,9 @@ async def test_grid_baseline_metrics_and_per_type_breakdown():
     # 基线确实抽到了一些实体（relaxed 精确率/召回都非零），关系也非零
     assert agg["entity_relaxed"]["recall"] > 0.0
     assert agg["relation"]["recall"] > 0.0
+    # 按类型 tp 与顶层对账（r3 评审要求补的一行）
+    assert sum(p["tp"] for p in by_type.values()) == (
+        agg["entity_relaxed"]["tp"])
 
 
 async def test_larger_chunk_budget_strictly_improves_relation_recall():
@@ -468,10 +561,23 @@ def test_grid_report_records_extractor_identity():
     payload = build_report({(1500, 200): []})
     assert payload["extractor"]["name"] == "StressRuleExtractor"
     assert isinstance(payload["extractor"]["revision"], int)
-    assert payload["corpus_version"] >= 2
     # 没有判别力的维度必须写明，否则后续工单会把"恒等"误当 A/B 证据。
     assert "overlap" in payload["overlap_note"]
     assert payload["entity_axis_note"]
+    # gold 是刻意子集：绝对 P 不能跨抽取器横比（04 注入真实 LLM 路径时尤其）
+    assert "刻意子集" in payload["gold_scope_note"]
+    assert "绝对 P" in payload["gold_scope_note"]
+
+
+def test_corpus_version_is_derived_from_corpus_source():
+    """版本身份必须由语料源码推导，而不是手写常量（改了语料却仍标旧版本）。"""
+    import hashlib
+    from moray.evaluation.stress import corpus as corpus_module
+
+    expected = "sha256:" + hashlib.sha256(
+        Path(corpus_module.__file__).read_bytes()).hexdigest()[:16]
+    payload = build_report({(1500, 200): []})
+    assert payload["corpus_version"] == expected
 
 
 def test_default_grids_cover_production_and_candidate_budgets():
@@ -502,3 +608,43 @@ async def test_old_six_gold_cases_unchanged():
     # 旧黄金目录里没有 stress 子目录被误扫
     assert {c.doc_id for c in old_cases} == {
         f"case0{i}.tagged" for i in range(1, 7)}
+
+
+# ---------------------------------------------------------------------------
+# 切片 4：生成器 CLI 的护栏（r3 评审 nit：--name/--seed/--target-chars）
+# ---------------------------------------------------------------------------
+def _load_gen_module():
+    import importlib.util
+
+    path = REPO_ROOT / "lessons" / "gen_stress_gold.py"
+    spec = importlib.util.spec_from_file_location("gen_stress_gold_cli", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_generator_cli_rejects_conflicting_seed_flags():
+    """--seed 与 --seeds 互斥；--name 只在单篇模式有意义，不能被静默忽略。"""
+    module = _load_gen_module()
+    with pytest.raises(SystemExit):
+        module.main(["--seed", "1", "--seeds", "2", "3"])
+    with pytest.raises(SystemExit):
+        module.main(["--seeds", "2", "3", "--name", "custom"])
+
+
+def test_generator_refuses_corpus_below_five_times_budget(tmp_path, monkeypatch):
+    """落盘前必须自检 > 5× 生产块预算，而不是等到 pytest 才炸。"""
+    module = _load_gen_module()
+    tiny = StressCase(
+        seed=1, name="tiny", text="张三，曾在甲有限公司任职。",
+        entities=[StressEntity("张三", "PER"),
+                  StressEntity("甲有限公司", "ORG")],
+        relations=[StressRelation("张三", "供职于", "甲有限公司")])
+    monkeypatch.setattr(module, "generate_case", lambda **_: tiny)
+    with pytest.raises(SystemExit) as excinfo:
+        module.main([
+            "--seed", "1", "--name", "tiny",
+            "--out-dir", str(tmp_path), "--max-units", "1500",
+        ])
+    assert "5 倍" in str(excinfo.value)
+    assert not list(tmp_path.glob("tiny.*"))
