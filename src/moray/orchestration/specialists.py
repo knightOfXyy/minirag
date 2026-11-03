@@ -94,8 +94,12 @@ def rule_review(
     # ② 关系端点必须在实体列表里（否则是指向空气的臆测关系）。
     #    与 local_backfill 的关系回填共用同一个 literal 索引（r5 F8）：
     #    标准名永远算已知；「唯一归属」的别名仅在瘦身模式（有 backfill 信号）
-    #    下放宽（r4 N1）。关闭态/full 模式保持改造前的严格口径（r5 F1）。
-    names = {e.name.strip() for e in result.entities}
+    #    下放宽（r4 N1）。关闭态/full 模式保持改造前的严格口径（r5 F1）：
+    #    names 不 strip；标准名也必须精确命中且归属唯一才算已知（r6 N2）。
+    if backfill is not None:
+        names = {e.name.strip() for e in result.entities}
+    else:
+        names = {e.name for e in result.entities}
     index = literal_index(result.entities)
     literal_owners: dict[str, set[tuple[str, str]]] = {
         literal: {(result.entities[i].type, result.entities[i].name)
@@ -105,11 +109,16 @@ def rule_review(
 
     def _endpoint_issue(role: str, literal: str) -> str | None:
         stripped = literal.strip()
-        if stripped in names:
-            return None
         owners = literal_owners.get(stripped, set())
-        if backfill is not None and len(owners) == 1:
-            return None
+        if backfill is not None:
+            # 瘦身模式：标准名永远已知；「唯一归属」的别名也放宽（r4 N1）。
+            if stripped in names or len(owners) == 1:
+                return None
+        else:
+            # 关闭态保持改造前的严格口径（r5 F1 + r6 N2）：只认精确标准名，
+            # 别名不放宽；同名异型标准名（owners>1）仍算归属不唯一。
+            if stripped in names and len(owners) <= 1:
+                return None
         if len(owners) > 1:
             # 字面确实在实体列表里，只是归属不唯一；不要误导模型去“补实体”
             # （r5 F4）。
@@ -123,8 +132,15 @@ def rule_review(
             if issue:
                 issues.append(issue)
 
-    # ③ 重复实体（同名出现两次，抽取员没去重）
-    if len(names) != len(result.entities):
+    # ③ 重复实体（同名出现两次，抽取员没去重）。
+    #    slim 模式下「同名不同类型」是合法歧义（工单 03 正文），不是未去重：
+    #    身份键必须用 (type, name)。关闭态保持 262319b 的纯 name 口径（r6 N2）。
+    if backfill is not None:
+        keys = [(e.type, e.name.strip()) for e in result.entities]
+        duplicated = len(set(keys)) != len(keys)
+    else:
+        duplicated = len(names) != len(result.entities)
+    if duplicated:
         issues.append("实体列表存在同名重复项，未去重")
 
     # ④ 没有任何证据 span 的关系（臆测风险）。
@@ -140,11 +156,21 @@ def rule_review(
                 return bool(ent.mentions)
         return False
 
+    def _endpoint_grounded_or_ambiguous(name: str) -> bool:
+        # 归属不唯一的端点不写 mention（策略：不猜），但字面确实在正文里。
+        # ② 已经用准确原因拦过一次（标准名则按设计放行），④ 不该再补一句
+        # 事实错误的「端点在正文中未命中」（r6 N1）。只跳过歧义端点本身，
+        # 另一端真未知时仍要拦。
+        if len(literal_owners.get(name.strip(), ())) > 1:
+            return True
+        return _endpoint_grounded(name)
+
     for r in result.relations:
         if r.evidence_span is not None:
             continue
         if backfill is not None:
-            if _endpoint_grounded(r.head) and _endpoint_grounded(r.tail):
+            if (_endpoint_grounded_or_ambiguous(r.head)
+                    and _endpoint_grounded_or_ambiguous(r.tail)):
                 continue
             issues.append(
                 f"关系 {r.head}-[{r.predicate}]->{r.tail} 无原文证据"
@@ -164,17 +190,33 @@ def rule_review(
         confidence = backfill.get("block_confidence")
         # 歧义命中的候选实体没有被归属（entities_grounded 少算），但它们
         # 确实在正文里出现过，不能因此触发“未找到出处”的模型返工。
+        # 跨块汇总的 entities_total/entities_grounded 是 chunk-weighted 计数，
+        # 而歧义候选是文档级去重键；不能拿计数相加后的 grounded/total 去比
+        # 文档级集合（r6 S2，≥2 块时会误报命中率）。这里只看
+        # matched_literals 里「一次都没命中」的文档级实体键。
         matched = backfill.get("matched_literals") or {}
         grounded_keys = {key for key, n in matched.items() if n}
         ambiguous = backfill.get("ambiguous_mentions") or []
         ambiguous_only = {
             key for am in ambiguous for key in (am.get("candidates") or [])
         } - grounded_keys
-        covered = grounded + len(ambiguous_only)
-        if confidence is not None and covered < total:
+        if "matched_literals" in backfill:
+            # 新信号：按文档级实体键集合判定，不再拿 chunk-weighted 计数相加
+            # 与文档级歧义集合比较（r6 S2）。
+            uncovered = {
+                key for key, n in matched.items() if not n} - ambiguous_only
+            undercovered = bool(uncovered)
+        else:
+            # 兼容旧调用方手写的精简 backfill 字典（没有 matched_literals）。
+            undercovered = grounded + len(ambiguous_only) < total
+        if confidence is not None and undercovered:
+            if "matched_literals" in backfill:
+                detail = f"{len(uncovered)} 个实体未在正文中找到出处"
+            else:
+                detail = "有实体未在正文中找到出处"
             issues.append(
                 f"回填命中率 {grounded}/{total}"
-                f"（块级置信度 {confidence}）：有实体未在正文中找到出处")
+                f"（块级置信度 {confidence}）：{detail}")
         phantom = backfill.get("unmatched_aliases") or []
         if phantom:
             issues.append(f"{len(phantom)} 个模型给出的别名在正文中不存在（疑似幻觉）")
