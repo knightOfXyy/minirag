@@ -38,6 +38,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from bisect import bisect_right
 from collections import deque
 from dataclasses import dataclass, field
@@ -50,6 +51,9 @@ from ..schema import (
     Span,
 )
 from .chunking import split_sentences
+
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -77,12 +81,14 @@ def max_confidence(a: float | None, b: float | None) -> float | None:
 
 
 def entity_signal_key(entity: Entity) -> str:
-    """回填信号里实体键：JSON [type, name]。
+    """回填信号里实体键：JSON [type, name.strip()]。
 
     不能只用 name——同名不同类型（苹果/ORG 与 苹果/MISC）会互相覆盖，
-    这也正是「歧义未归属」要保留的信息。
+    这也正是「歧义未归属」要保留的信息。name 与 ``entity_identity_key``
+    共用去空白口径：模型在不同块写「腾讯 」/「腾讯」时，跨块汇总不能把
+    同一个实体的计数拆成两个信号键（r13 N4）。
     """
-    return json.dumps([entity.type, entity.name], ensure_ascii=False)
+    return json.dumps([entity.type, entity.name.strip()], ensure_ascii=False)
 
 
 # 关系证据候选是「同句内头×尾」的全笛卡尔积；短文档可能只有几十条，
@@ -109,29 +115,46 @@ def entity_identity_key(
     return (entity.type, entity.name.strip() if strip_name else entity.name)
 
 
+def _copy_backfill_entry(entry: dict) -> dict:
+    """复制一条信号字典，连 ``chunk_ids`` 这类嵌套 list 也独立。
+
+    序列化边界与内存报告必须完全隔离：消费方改 ``chunk_ids`` 不能反向
+    污染 ``BackfillReport`` 或 ``cached_backfill_provenance`` 的共享产物
+    （r13 N1）。只在原条目确实带该键时复制，避免给旧数据凭空补字段。
+    """
+    item = dict(entry)
+    if "chunk_ids" in entry:
+        item["chunk_ids"] = list(entry.get("chunk_ids") or [])
+    return item
+
+
 def _cap_relation_candidates(cands: list[dict], limit: int | None) -> list[dict]:
     """序列化裁剪：``None`` = 全量，``0`` = 空，正数保留前 ``limit`` 条。
 
     负数没有合理语义（r10 曾表示全量、r11 又改成空，这种静默反转会让旧
-    工具/脚本把 0/负值当成「全量」而悄悄丢候选），因此直接 ``ValueError``
-    （r12 N10）。跨版本迁移：要全量传 ``None``，要空传 ``0``。
+    工具/脚本把 0/负值当成「全量」而悄悄丢候选）。r12 曾在序列化边界直接
+    ``ValueError``，但该上限可能来自环境/配置：坏配置会把整次抽取响应打成
+    500。这里改为 clamp 到对外默认窗口并记 WARNING（r13 N6）；配置层应在
+    启动时另行校验。跨版本迁移：要全量传 ``None``，要空传 ``0``。
 
     两个生产方（``backfill_provenance`` 与 ``merge_backfill_reports``）都把
     selected 放在首条，所以前 ``limit`` 条天然包含它；旧实现里「selected 不在
     前 limit 就替换末条」的分支不可达，已删除（r11 N5）。
 
     返回的是候选 dict 的副本：``to_dict()`` 的消费方修改结果不得污染内存报告
-    或 ``cached_backfill_provenance`` 的共享产物（r11 N3/ST2）。
+    或 ``cached_backfill_provenance`` 的共享产物（r11 N3/ST2、r13 N1）。
     """
     if limit is None:
-        return [dict(c) for c in cands]
+        return [_copy_backfill_entry(c) for c in cands]
     if limit < 0:
-        raise ValueError(
-            "max_relation_evidence_candidates 不能为负：None=全量、0=空、"
-            f"正数=保留前 N 条，收到 {limit}")
+        logger.warning(
+            "max_relation_evidence_candidates=%s 非法（负数），"
+            "序列化边界 clamp 到默认 %d 条；None=全量、0=空、正数=前 N 条",
+            limit, MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES)
+        limit = MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES
     if limit == 0:
         return []
-    return [dict(c) for c in cands[:limit]]
+    return [_copy_backfill_entry(c) for c in cands[:limit]]
 
 
 def _copy_ambiguous_for_output(entry: dict) -> dict:
@@ -168,7 +191,7 @@ def serialize_backfill_for_output(
         _copy_ambiguous_for_output(entry)
         for entry in (backfill.get("ambiguous_mentions") or [])]
     data["relations_without_evidence"] = [
-        dict(entry)
+        _copy_backfill_entry(entry)
         for entry in (backfill.get("relations_without_evidence") or [])]
     data["relation_evidence_candidates"] = {
         key: _cap_relation_candidates(cands, max_relation_evidence_candidates)
@@ -312,7 +335,7 @@ class BackfillReport:
                 for am in self.ambiguous_mentions
             ],
             "relations_without_evidence": [
-                dict(x) for x in self.relations_without_evidence],
+                _copy_backfill_entry(x) for x in self.relations_without_evidence],
             "relation_evidence_candidates": capped_candidates,
         }
 
@@ -436,7 +459,9 @@ def _coalesce_entities(entities: list[Entity]) -> list[Entity]:
         else:
             index[key] = len(merged)
             merged.append(Entity(
-                name=e.name, type=e.type, aliases=list(e.aliases),
+                # 存值与身份键同口径（r13 N3）：短文档/直连 Extractor 路径
+                # 不经 naive_merge，若这里保留「 腾讯」入库会解析失败。
+                name=e.name.strip(), type=e.type, aliases=list(e.aliases),
                 mentions=[], confidence=e.confidence,
                 attributes=dict(e.attributes),
                 description=e.description))
@@ -596,11 +621,6 @@ def backfill_provenance(
     return ExtractionResult(entities=new_entities, relations=new_relations), report
 
 
-def _relation_key(r: Relation) -> str:
-    """三元组的无碰撞 key（JSON 编码，避免 "-" / "->" 拼接碰撞）。"""
-    return json.dumps([r.head, r.predicate, r.tail], ensure_ascii=False)
-
-
 def _trim_bounds(text: str, start: int, end: int) -> tuple[int, int]:
     """句子边界裁掉首尾空白，保证与 evidence_span 的精确切片一致。"""
     while start < end and text[start].isspace():
@@ -653,8 +673,12 @@ def _backfill_relations(
 
     out: list[Relation] = []
     for r in relations:
-        hi = _resolve(r.head)
-        ti = _resolve(r.tail)
+        # 存值规范化（r13 N3）：与 slim 归并/实体名同口径。短文档路径只跑
+        # Extractor.extract，不经过 naive_merge；端点不去空白会让入库
+        # ``_resolve`` 精确/别名匹配失败而建 MISC 占位。
+        head, tail = r.head.strip(), r.tail.strip()
+        hi = _resolve(head)
+        ti = _resolve(tail)
         pairs: list[tuple[int, int, int, int, int]] = []
         # (head_start, tail_start, sent_start, sent_end, distance)
         if hi is not None and ti is not None:
@@ -670,7 +694,7 @@ def _backfill_relations(
                     ss, se = sentences[hsent]
                     pairs.append((hs, ts, ss, se, abs(hs - ts)))
 
-        key = _relation_key(r)
+        key = json.dumps([head, r.predicate, tail], ensure_ascii=False)
         evidence: Span | None = None
         if pairs:
             # 最近的一对；取该句整句作为证据 span（去掉句首尾空白，
@@ -700,14 +724,14 @@ def _backfill_relations(
             report.relation_evidence_candidates[key] = cands
         else:
             report.relations_without_evidence.append(
-                {"head": r.head, "predicate": r.predicate, "tail": r.tail}
+                {"head": head, "predicate": r.predicate, "tail": tail}
             )
 
         out.append(
             Relation(
-                head=r.head,
+                head=head,
                 predicate=r.predicate,
-                tail=r.tail,
+                tail=tail,
                 evidence_span=evidence,
                 # 同实体：不把 grounding 写回内核 confidence。
                 confidence=r.confidence,
@@ -999,20 +1023,32 @@ def reconcile_span_ambiguity(
 
 
 def _backfill_cache_key(result: ExtractionResult, text: str) -> tuple:
-    """回填缓存的轻量内容指纹（不序列化整份结果）。
+    """回填缓存的内容指纹（不序列化整份结果）。
 
-    只用回填真正依赖的字段：原文、每个实体的 ``(type, name, aliases)``、
-    每条关系的 ``(head, predicate, tail)``。confidence/description/attributes
-    不参与 mention/span 与证据定位，不必进键。
+    缓存值是整个 ``filled ExtractionResult``，所以键必须覆盖所有会被重试
+    修正的字段，而不只是 mention/span 定位依赖的字段：模型返工最常见的形态
+    就是只改 attributes/description/confidence，若这些不进键，第二轮会命中
+    第一轮的旧产物，把刚通过领域校验的值换回去（r13 S1）。
 
-    刻意不用 ``id(result)``：质量中间件把 ``event.structured_output`` 重新
-    ``model_validate`` 成一个**新对象**，与抽取器 ``to_core_result`` 的产物
-    对象不同；只认对象身份会让「同一 reply 只扫一次」失效。内容指纹还能在
-    返工后输出变化时自然未命中。
+    ``attributes`` 用排序 JSON 保证同内容同键；``default=str`` 兜住非 JSON
+    原生值，避免缓存键生成抛错。刻意不用 ``id(result)``：质量中间件把
+    ``event.structured_output`` 重新 ``model_validate`` 成一个新对象，只认
+    对象身份会让「同一 reply 只扫一次」失效。
     """
     return (
         text,
-        tuple((e.type, e.name, tuple(e.aliases)) for e in result.entities),
+        tuple(
+            (
+                e.type,
+                e.name,
+                tuple(e.aliases),
+                json.dumps(
+                    e.attributes, ensure_ascii=False, sort_keys=True, default=str),
+                e.description,
+                e.confidence,
+            )
+            for e in result.entities
+        ),
         tuple((r.head, r.predicate, r.tail) for r in result.relations),
     )
 

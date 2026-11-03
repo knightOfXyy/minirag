@@ -4,6 +4,11 @@
 > N1/N4/N5/N6/N7）见 `03-r4-fix-evidence.md`；验收 8/9 以
 > `03-r3-stress-ab.json` 的最新多轮重跑为准。本文件下方 r2 记录保留为历史。
 >
+> **第 13 轮评审修复（r13：S1 缓存键含 attributes/description/confidence、
+> S2 验收 8 HEAD 重放与旧文档纠正、N1/N3/N4/N5/N6、N2 口径收窄）见
+> `03-r13-fix-evidence.md`；验收 8 的最新 HEAD 重放见
+> `03-r13-stress-ab.json`。**
+>
 > **第 10 轮评审修复（r10：S1 吸收字面作关系端点、S2 重叠块同 span 歧义对账、
 > N1–N11）见 `03-r10-fix-evidence.md`；第 11 轮（r11：F1 分块候选全量传递、
 > F2 验收 8 口径、N1–N11）见 `03-r11-fix-evidence.md`。** 验收 8 **未达成**：
@@ -53,7 +58,7 @@
 | 2 | N 次出现 → N mention、span 原文切片 | 达成 | `test_n_occurrences_produce_n_mentions_with_exact_slices`；slim span 1.0 |
 | 3 | 前缀/子串最长匹配不错误覆盖 | 达成（含部分重叠） | `test_prefix_substring_longest_match_wins`、`test_partial_overlap_short_name_does_not_leak_into_long_name` |
 | 4 | 别名/标准名同实体；幻觉别名计入信号 | 达成 | `test_canonical_and_alias_ground_to_same_entity_phantom_alias_signaled`、`test_unmatched_aliases_absorbed_by_longer_name_is_not_hallucination` |
-| 5 | 同句共现回填证据；跨句/跨块不臆造；保留全部候选 | 达成（中文/英文/开头空白；r10 N1/N2 修候选边界与全局 selected；**r11 F1 修分块路径截断**：块间/内存保留全部候选，只在 API/作业落盘按 20 裁剪） | `test_relation_evidence_splits_ascii_period_sentences`、`test_relation_evidence_handles_document_starting_with_whitespace`、`test_relation_evidence_not_fabricated_across_chunks`、`test_selected_candidate_bounds_match_evidence_span_after_trim`、`test_chunked_pipeline_preserves_all_relation_evidence_candidates`、`test_extract_endpoint_caps_backfill_candidates` |
+| 5 | 同句共现回填证据；跨句/跨块不臆造；保留全部候选 | **有条件达成（r13 N2 口径收窄）**：证据定位达成（中文/英文/开头空白；r10 N1/N2 修候选边界与全局 selected；r11 F1 修分块路径截断：块间/内存保留全量，只在 API/作业落盘按 20 裁剪）。但进程内仍有单条关系 **≤2000 条**软上限（r12 N2），极端单句（如 50×50 共现）不再保留全部候选——这是对验收 5 的明确收窄，不再声称无条件「保留全部候选」 | `test_relation_evidence_splits_ascii_period_sentences`、`test_relation_evidence_handles_document_starting_with_whitespace`、`test_relation_evidence_not_fabricated_across_chunks`、`test_selected_candidate_bounds_match_evidence_span_after_trim`、`test_chunked_pipeline_preserves_all_relation_evidence_candidates`、`test_extract_endpoint_caps_backfill_candidates`、`test_real_extractor_caps_internal_candidates_above_soft_limit` |
 | 6 | 同名歧义未归属 | 达成（单块 + r10 S2 重叠块同一全局 span 对账） | `test_same_name_different_type_is_ambiguous_and_unattributed`、`test_alias_ownership_conflict_is_ambiguous`、`test_overlap_same_span_owned_by_two_entities_is_unattributed` |
 | 7 | 开关关闭逐字段一致 + 默认关 | **达成（口径已讲清）**：schema/prompt 对 262319b 逐字节；归并结果对 262319b 全字段 golden；默认关 | `test_full_schema_and_prompt_match_pre_change_golden`、`test_switch_off_merge_matches_pre_change_full_field_golden` |
 | 8 | 02 扩展语料实体 F1 不跌、关系不降 | **未达成**：唯一快照 `9f95ed4` 的 mean-of-3 = +0.0733pt（3 轮 +1.00 / −1.30 / +0.52pt），但 worst-of-N 单轮 −1.30pt、seed20261104 逐篇均值 −2.88pt 均超过 ≤0.5pt 门槛；HEAD 未重放。默认开关保持关闭，翻开关前必须用 HEAD 重放并同时报 mean-of-N 与 worst-of-N（r11 F2） | `03-r3-stress-ab.json`、`03-r11-fix-evidence.md` |
@@ -62,18 +67,18 @@
 
 ## 测试
 
-r11 评审修复后的最新回归（本分支 HEAD，含 03 × 01 × 05 合并后的全部用例）：
+r13 评审修复后的最新回归（本分支 HEAD，含 03 × 01 × 05 合并后的全部用例）：
 
 ```bash
 # 离线（无 DB；ARK_API_KEY=dummy 仅为让 get_settings() 通过，不发请求）
 ARK_API_KEY=dummy python3 -m pytest -q -p no:cacheprovider
-# 379 passed, 65 skipped, 0 failed  -> docs/evidence/03-r11-full-suite.txt
+# 401 passed, 65 skipped, 0 failed  -> docs/evidence/03-r13-full-suite.txt
 ```
 
-DB 用例（`RUN_DB_TESTS=1`）本轮未跑：本机无 pgvector；r10 改动不涉 SQL/迁移。
-（历史数字：r2 时 148 passed / 50 skipped；收敛后 281 passed / 64 skipped。）
+DB 用例（`RUN_DB_TESTS=1`）本轮未跑：本机无 pgvector；r13 改动不涉 SQL/迁移。
+（历史数字：r2 时 148 passed / 50 skipped；r11 时 379 passed / 65 skipped。）
 
-原始输出：`03-r11-full-suite.txt`（r11 本轮更新；r10 为 `03-r10-full-suite.txt`）。
+原始输出：`03-r13-full-suite.txt`（r13 本轮更新；r12 为 `03-r12-full-suite.txt`）。
 
 > 收敛说明：临时实现（先红提交 `03a7c79` 之后稳定分支自补的 r2）已删除，
 > 03 相关代码与测试以分支真实实现（`1d4fbd7`/`8a0d750`）为准，只保留

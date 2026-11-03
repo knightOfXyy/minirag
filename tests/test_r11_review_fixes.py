@@ -335,9 +335,11 @@ def test_relation_candidate_cap_semantics():
     assert report.to_dict(
         max_relation_evidence_candidates=0
     )["relation_evidence_candidates"][key] == []
-    # r12 N10：负数不再静默等于「空」，直接拒绝（None=全量 / 0=空）。
-    with pytest.raises(ValueError):
-        report.to_dict(max_relation_evidence_candidates=-5)
+    # r13 N6：负数不再抛错（坏配置会把整次响应打成 500），clamp 到默认窗口。
+    clamped = report.to_dict(
+        max_relation_evidence_candidates=-5
+    )["relation_evidence_candidates"][key]
+    assert len(clamped) == lb.MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES
 
     # selected 始终在首条：裁剪前 5 条也必须包含它（没有替换末条的分支）。
     kept = report.to_dict(

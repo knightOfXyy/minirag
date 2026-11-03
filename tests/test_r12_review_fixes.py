@@ -12,7 +12,8 @@
 * N7（nit）``reconciled_unattributed`` 进入看板字段；
 * N8（nit）序列化边界深拷贝嵌套容器；
 * N9（nit）``MergeMode.SLIM`` 一个开关表达四个归并口径；
-* N10（nit）候选上限拒绝负数，只保留 None=全量 / 0=空。
+* N10（nit）候选上限只保留 None=全量 / 0=空；负数在序列化边界 clamp + warning
+  （r13 N6 从抛错改为降级）。
 """
 
 from types import SimpleNamespace
@@ -412,9 +413,9 @@ def test_merge_mode_slim_is_a_single_switch_for_all_four_behaviors():
 
 
 # ---------------------------------------------------------------------------
-# N10：候选上限拒绝负数，None=全量 / 0=空
+# N10 / r13 N6：候选上限 None=全量 / 0=空；负数 clamp + warning
 # ---------------------------------------------------------------------------
-def test_relation_candidate_cap_rejects_negative_limit():
+def test_relation_candidate_cap_clamps_negative_limit():
     result = ExtractionResult(
         entities=[
             Entity(name="华为", type="ORG"),
@@ -428,8 +429,16 @@ def test_relation_candidate_cap_rejects_negative_limit():
     assert report.to_dict(
         max_relation_evidence_candidates=0
     )["relation_evidence_candidates"][key] == []
-    with pytest.raises(ValueError):
-        report.to_dict(max_relation_evidence_candidates=-5)
-    with pytest.raises(ValueError):
-        lb.serialize_backfill_for_output(
-            report.to_dict(), max_relation_evidence_candidates=-1)
+    # r13 N6：负数在序列化边界 clamp 到默认窗口 + warning，不抛错。
+    all_cands = report.to_dict(
+        max_relation_evidence_candidates=None
+    )["relation_evidence_candidates"][key]
+    clamped = report.to_dict(
+        max_relation_evidence_candidates=-5
+    )["relation_evidence_candidates"][key]
+    assert len(clamped) == min(
+        len(all_cands), lb.MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES)
+    assert len(lb.serialize_backfill_for_output(
+        report.to_dict(), max_relation_evidence_candidates=-1
+    )["relation_evidence_candidates"][key]) == (
+        min(len(all_cands), lb.MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES))

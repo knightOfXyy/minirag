@@ -122,9 +122,12 @@ def naive_merge(
     overlap 区域产生的重复 mention 会自然落在同一实体下，不会重复造实体。
 
     ``mode``：``MergeMode.SLIM`` 一次性打开下面四个瘦身口径；
-    ``MergeMode.LEGACY``/``None`` 保持 262319b 的旧行为（r12 N9）。四个关键字
-    参数仍作为兼容 shim 保留：显式传值时覆盖模式默认，便于旧调用方/测试
-    只改其中一项。
+    ``MergeMode.LEGACY``/``None`` 保持 262319b 的旧行为（r12 N9）。
+
+    **兼容 shim（deprecated）**：下面四个关键字参数仅为旧调用方保留，新代码
+    请只传 ``mode``。shim 显式传值（含 ``False``）即覆盖 ``mode`` 的默认，
+    可用于逐个维度回到 LEGACY；注意同时指定 ``mode`` 与部分 shim 会得到
+    两套口径都命名不了的混合状态，因此不要再在新代码里混用（r13 N5）。
 
     ``merge_relation_duplicates``：重复三元组是否把后见的证据/更高置信度
     并进首见条目。默认 **False**，即 262319b 的「先见赢家」旧语义——本函数

@@ -1,0 +1,16 @@
+  WARNING max_relation_evidence_candidates=-5 非法（负数），序列化边界 clamp 到默认 20 条；None=全量、0=空、正数=前 N 条
+== S1 缓存键覆盖重试会修正的字段 ==
+  attributes: 期望 {'code': 'RIGHT'} -> 实际 {'code': 'RIGHT'}
+  description: 期望 '新描述' -> 实际 '新描述'
+  confidence: 期望 0.9 -> 实际 0.9
+== N1 chunk_ids 深拷贝 ==
+  to_dict 后内存: ['c0'] ['c0']
+  serialize 后输入: ['c0'] ['c0']
+== N3 短文档路径存值规范化 ==
+  names= ['腾讯', '混元']  relation= [('腾讯', '混元')]
+== N4 信号键去空白 ==
+  padded= ["ORG", "腾讯"]  clean= ["ORG", "腾讯"]
+  merged.matched_literals= {'["ORG", "腾讯"]': 3}
+== N6 负数候选上限 clamp + warning ==
+  to_dict(-5) candidates= 20
+全部探针通过
