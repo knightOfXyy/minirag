@@ -141,6 +141,7 @@ async def build_document_handler(
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,
                 cached_input_tokens=usage.cached_input_tokens,
+                cache_hits=usage.cache_hits,
                 latency_ms=latency_ms))
 
         # 工单 01：分块度量与 API 路径消费同一份 DocumentMetrics 序列化结果

@@ -147,11 +147,11 @@ DB 侧 `tests/test_chunk_metrics_integration.py` 再验证落库）。
 
 ## 测试
 
-- 离线：`ARK_API_KEY=dummy pytest -q` → **217 passed / 55 skipped**。
+- 离线：`ARK_API_KEY=dummy pytest -q` → **227 passed / 58 skipped**。
   其中 `tests/test_chunk_metrics.py`、`tests/test_instrumented_model.py`、
   `tests/test_chunk_metrics_review_fixes.py` 覆盖全部确定性验收与第 1 轮评审修复
   （含 OpenAI 3 参数调用、None 不写 0、短文档/失败块信号、source、API/handler 同字段）。
-- DB/全量：`RUN_DB_TESTS=1 ARK_API_KEY=dummy pytest -q` → **272 passed**
+- DB/全量：`RUN_DB_TESTS=1 ARK_API_KEY=dummy pytest -q` → **285 passed**
   （+55 个 pgvector/MCP/API/作业集成；API 与批量两路径字段一致 + source 过滤 +
   NULL 分段耗时 + SQL 聚合。合并 01/03/05 后的稳定分支实测）。
 - 无新增运行时第三方依赖（仅子类化 agentscope 已装包；看板仍走现有 PostgreSQL）。

@@ -249,26 +249,40 @@ def chunk_settings() -> dict:
 _ENABLED_WORDS = {"1", "true", "yes", "on"}
 
 
+_RESULT_CACHE_BACKENDS = ("memory", "postgres")
+
+
 def result_cache_settings() -> dict:
     """分块抽取结果【内容级缓存】开关（工单 05）。
 
     纯加速层，默认【关闭】——不配任何东西时作业语义与历史逐字节一致。
       MORAY_RESULT_CACHE_ENABLED：置真（1/true/yes/on）才启用。
-      MORAY_RESULT_CACHE_BACKEND：存储后端：
-        · memory（缺省）：进程内、零外部依赖，单飞在这一层生效；
+      MORAY_RESULT_CACHE_BACKEND：存储后端，写错立即 ConfigError（不静默降级）：
+        · memory（缺省）：进程内、零外部依赖，单飞只在本进程；
         · postgres：复用作业库（extraction_result_cache 表），跨 worker
-          副本/重启共享缓存内容（跨进程强一致单飞不做保证，至多多抽一次）。
+          副本/重启共享缓存内容，并用占位行做跨进程单飞。
+      MORAY_RESULT_CACHE_TTL_HOURS：postgres 行保留小时数，0=不清理。
     """
     enabled = _first_env("MORAY_RESULT_CACHE_ENABLED").lower() in _ENABLED_WORDS
     backend = _first_env("MORAY_RESULT_CACHE_BACKEND") or "memory"
-    return {"enabled": enabled, "backend": backend}
+    if backend not in _RESULT_CACHE_BACKENDS:
+        raise ConfigError(
+            f"MORAY_RESULT_CACHE_BACKEND={backend!r} 未知，"
+            f"可选：{'/'.join(_RESULT_CACHE_BACKENDS)}")
+    return {
+        "enabled": enabled,
+        "backend": backend,
+        "ttl_hours": _int_env("MORAY_RESULT_CACHE_TTL_HOURS", 0),
+    }
 
 
 async def build_result_cache(settings: dict | None = None, *, pool=None):
-    """按配置构造分块结果缓存；关闭或后端不可用时返回 None（= 完全不缓存）。
+    """按配置构造分块结果缓存；关闭时返回 None（= 完全不缓存）。
 
-    memory 后端零依赖即可用；postgres 后端需传入 asyncpg 连接池并建表，
-    建表/初始化失败时安全退回 memory（保证服务可用、不改变抽取正确性）。
+    这里只读开关、选后端，不建表也不吞异常：postgres 后端的 DDL 由调用方在
+    启动处 ``await cache.init_schema()`` 完成（N1），建表失败照常抛出让运维看见；
+    运行期读/写失败仍由 ContentResultCache 降级为正常抽取。
+    postgres 后端必须传入 asyncpg 连接池，缺失时启动即报错（S7）。
     """
     s = settings or result_cache_settings()
     if not s.get("enabled"):
@@ -276,19 +290,15 @@ async def build_result_cache(settings: dict | None = None, *, pool=None):
     backend_name = s.get("backend", "memory")
     from .extraction.cache import ContentResultCache, InMemoryCacheBackend
 
-    if backend_name == "postgres" and pool is not None:
+    if backend_name == "postgres":
+        if pool is None:
+            raise ConfigError(
+                "MORAY_RESULT_CACHE_BACKEND=postgres 需要连接池："
+                "请在 worker/API 启动处传入 init_pool() 的结果")
         from .extraction.cache import PostgresCacheBackend
 
-        pg = PostgresCacheBackend(pool)
-        try:
-            await pg.init_schema()
-            return ContentResultCache(pg)
-        except Exception:  # noqa: BLE001 缓存是加速层：建表失败退回内存，不阻断服务
-            import logging
-
-            logging.getLogger(__name__).warning(
-                "抽取结果缓存 postgres 后端初始化失败，退回进程内内存后端",
-                exc_info=True)
+        return ContentResultCache(
+            PostgresCacheBackend(pool, ttl_hours=s.get("ttl_hours", 0)))
     return ContentResultCache(InMemoryCacheBackend())
 
 

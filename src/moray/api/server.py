@@ -56,6 +56,8 @@ async def build_deps(*, enable_llm: bool = False,
     from ..config import build_result_cache
 
     result_cache = await build_result_cache(pool=pool)
+    if result_cache is not None:
+        await result_cache.init_schema()   # postgres 后端建表（memory 为 no-op）
 
     return AppDeps(
         pool=pool, store=store, kb=kb, ingestor=ingestor,

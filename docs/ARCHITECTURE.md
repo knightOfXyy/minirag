@@ -1,7 +1,7 @@
 # Moray 架构总览
 
 企业级实体抽取（NER/RE）+ 实体知识库，基于 **AgentScope 2.0**，15 课增量建成。
-约 5k 行库代码 + 15 个可运行讲义 + 272 个测试。设计主线：**每一层都可离线、
+约 5k 行库代码 + 15 个可运行讲义 + 285 个测试。设计主线：**每一层都可离线、
 确定性地单独验证**，LLM 只出现在明确的接缝处。
 
 ## 数据流
@@ -33,6 +33,7 @@
 | `schema/` | 稳定核心 `Entity/Relation/Span` + 领域配置/动态枚举/`attributes` JSONB | L01/06 |
 | `extraction/` | Agent 事件/block、FunctionTool/ReAct/HITL、结构化输出、分块 map-reduce、分块级度量 `chunk_metrics`、规则抽取器、质量校验 `verify_spans`、评测基线 | L02-05/15 |
 | `config_instrumented.py` | 模型边界埋点：捞回供应商原生 `finish_reason`（截断护栏）、流式分段计时；不改请求/解析内容 | L04/01 |
+| `extraction/cache.py` | 分块结果内容级缓存（键=领域指纹+模型+正文+模板版本）；内存/PostgreSQL 两后端（表 `extraction_result_cache`）、进程内+跨进程单飞、损坏降级、TTL/LRU | 05 |
 | `embedding/` | bge-small-zh ONNX 本地嵌入（单例/L2 归一/批处理） | L07 |
 | `kb/store.py` | 实体/别名/提及/关系/证据表、ivfflat 索引、余弦近邻、幂等 upsert、合并、审核队列 | L07-09 |
 | `kb/ingestor.py` | 抽取结果→向量+实体+关系+溯源；缺端点补 MISC；可选消歧 | L08/09 |
@@ -62,8 +63,8 @@
 ## 测试
 
 ```bash
-python -m pytest tests/ -q                 # 217 个离线确定性单测（CI 同款）
-RUN_DB_TESTS=1 python -m pytest tests/ -q  # 全量 272（+55 个 pgvector/MCP/API/作业/合并集成）
+python -m pytest tests/ -q                 # 227 个离线确定性单测（CI 同款）
+RUN_DB_TESTS=1 python -m pytest tests/ -q  # 全量 285（+58 个 pgvector/MCP/API/作业/合并集成）
 ```
 
 ## 从哪开始读代码

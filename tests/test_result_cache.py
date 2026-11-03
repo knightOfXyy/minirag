@@ -64,6 +64,16 @@ def test_key_stable_for_identical_inputs():
     )
 
 
+def test_prompt_template_version_is_part_of_key(monkeypatch):
+    """提示模板/生成参数版本变化也要换键（N11）：改 _LEAD_IN 不失效的风险用版本号兜住。"""
+    import moray.extraction.cache as cache_mod
+
+    before = build_cache_key("fp", "m", "正文")
+    monkeypatch.setattr(cache_mod, "_PROMPT_TEMPLATE_VERSION", 2)
+    after = build_cache_key("fp", "m", "正文")
+    assert before != after
+
+
 # ---------------------------------------------------------------------------
 # 命中/未命中
 # ---------------------------------------------------------------------------
@@ -260,6 +270,88 @@ async def test_concurrent_singleflight_failure_propagates_and_clears():
     assert hit2 is True and attempt["n"] == 2
 
 
+@pytest.mark.asyncio
+async def test_single_call_failure_leaves_no_unretrieved_future_exception():
+    """单块失败且无并发等待者时，不能留下没人取异常的 future（S6）。"""
+    import asyncio
+    import gc
+
+    cache = ContentResultCache(InMemoryCacheBackend())
+    unhandled = []
+    loop = asyncio.get_running_loop()
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _l, ctx: unhandled.append(ctx))
+
+    async def boom():
+        raise RuntimeError("模型超时")
+
+    try:
+        with pytest.raises(RuntimeError):
+            await cache.get_or_extract("fp", "m", "单块失败", boom)
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous)
+
+    messages = [str(ctx.get("message", "")) for ctx in unhandled]
+    assert not any("never retrieved" in m for m in messages), messages
+
+
+class _SlowGetBackend:
+    """get 会真实让出事件循环，模拟 postgres 网络往返；统计并发读峰值。"""
+
+    def __init__(self):
+        self.store: dict[str, str] = {}
+        self.active = 0
+        self.max_active = 0
+
+    async def get(self, key):
+        import asyncio
+
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            await asyncio.sleep(0.02)
+            return self.store.get(key)
+        finally:
+            self.active -= 1
+
+    async def set(self, key, value):
+        self.store[key] = value
+
+
+@pytest.mark.asyncio
+async def test_backend_reads_are_not_serialized_by_global_inflight_lock():
+    """不同键的缓存读不能排在同一把全局锁里（S5）：并发读峰值应 > 1。"""
+    import asyncio
+
+    backend = _SlowGetBackend()
+    cache = ContentResultCache(backend)
+
+    async def extract():
+        return _output()
+
+    await asyncio.gather(
+        cache.get_or_extract("fp", "m", "键A", extract),
+        cache.get_or_extract("fp", "m", "键B", extract),
+    )
+    assert backend.max_active >= 2
+
+
+def test_memory_backend_evicts_least_recently_used():
+    """进程内后端必须有上限，长跑 worker 不能只增不减（N6）。"""
+    import asyncio
+
+    backend = InMemoryCacheBackend(max_entries=2)
+    asyncio.run(backend.set("a", "1"))
+    asyncio.run(backend.set("b", "2"))
+    assert asyncio.run(backend.get("a")) == "1"   # 访问把 a 提到最近使用
+    asyncio.run(backend.set("c", "3"))            # 淘汰最久未用的 b
+    assert asyncio.run(backend.get("b")) is None
+    assert asyncio.run(backend.get("a")) == "1"
+    assert asyncio.run(backend.get("c")) == "3"
+
+
 # ---------------------------------------------------------------------------
 # 端到端：接入 ChunkedExtractionPipeline
 # ---------------------------------------------------------------------------
@@ -382,6 +474,46 @@ async def test_pipeline_cache_hit_still_emits_one_metric_record_per_chunk():
 
 
 @pytest.mark.asyncio
+async def test_cache_hit_restores_backfill_and_reused_tokens():
+    """03 × 05：缓存命中仍还原回填信号，并把省下的 token 记 reused_*。"""
+    from moray.extraction.document import Document
+
+    class _BackfillExtractor(_CountingRealExtractor):
+        async def extract(self, document):
+            out = await super().extract(document)
+            out.backfill = {
+                "entities_total": 1, "entities_grounded": 1,
+                "matched_literals": {document.text[:6]: 1},
+            }
+            return out
+
+    text = _long_text()
+    real = _BackfillExtractor(
+        DomainSpec(code="general", name="通用",
+                   types=(TypeSpec("ORG", "机构", "机构"),)))
+    cache = ContentResultCache(InMemoryCacheBackend())
+    doc = Document(id="docB", text=text, source="t", domain_code="general")
+    chunks = _chunks(text)
+
+    out1 = await _pipeline(real, cache).run(doc, chunks)
+    assert out1.backfill is not None
+    calls_first = real.calls
+
+    out2 = await _pipeline(real, cache).run(doc, chunks)
+    assert real.calls == calls_first
+    # 回填信号随缓存产物一起还原，不因命中而消失
+    assert out2.backfill is not None
+    assert out2.backfill["entities_total"] == len(chunks)
+    assert out2.backfill["entities_grounded"] == len(chunks)
+    # 命中只记 cache_hits + reused_*，真实 token 仍为 0
+    assert out2.usage.cache_hits == len(chunks)
+    assert out2.usage.reused_input_tokens == 3 * len(chunks)
+    assert out2.usage.reused_output_tokens == 2 * len(chunks)
+    assert out2.usage.input_tokens == 0
+    assert out2.usage.output_tokens == 0
+
+
+@pytest.mark.asyncio
 async def test_pipeline_cache_on_failed_chunk_still_counts_tokens_and_metrics():
     """缓存开启时失败块语义不回退（01 的失败块口径不被 05 覆盖）。
 
@@ -471,11 +603,15 @@ async def test_pipeline_content_edit_invalidates_cache():
         Document(id="d", text=text1, source="t"), _chunks(text1))
     calls_after_first = real.calls
 
-    # 改正文中一个字（并保持分块结构一致以便对照）
+    # 改正文中一个字（同长度替换，分块边界不变，便于精确断言）
     text2 = text1.replace("第2段", "第２段", 1)
-    await _pipeline(real, cache).run(
-        Document(id="d", text=text2, source="t"), _chunks(text2))
-    assert real.calls > calls_after_first        # 至少受影响块真实重抽
+    chunks2 = _chunks(text2)
+    assert len(chunks2) == len(_chunks(text1))
+    out2 = await _pipeline(real, cache).run(
+        Document(id="d", text=text2, source="t"), chunks2)
+    # 只有含被改字符的那一块真抽，其余块全部命中
+    assert real.calls == calls_after_first + 1
+    assert out2.usage.cache_hits == len(chunks2) - 1
 
 
 @pytest.mark.asyncio
@@ -634,6 +770,9 @@ async def test_cached_usage_excluded_from_real_cost_fields():
     assert out2.usage.output_tokens == 0
     assert out2.usage.cached_input_tokens == 0
     assert out2.usage.cache_hits == n_chunks
+    # 命中时缓存里还原出来的用量记到独立的「复用」字段，不计真实成本（S4）
+    assert out2.usage.reused_input_tokens == 3 * n_chunks
+    assert out2.usage.reused_output_tokens == 2 * n_chunks
     # 序列化（作业结果/API 响应/看板都走 model_dump）带上这一列
     dumped = out2.usage.model_dump()
     assert dumped["cache_hits"] == n_chunks
@@ -670,5 +809,60 @@ async def test_pipeline_concurrent_same_chunk_text_extracts_once():
     offsets = sorted(m.span.start for e in out.result.entities
                      for m in e.mentions if m.span)
     assert offsets == [10 * i for i in range(6)]
+
+
+@pytest.mark.asyncio
+async def test_domain_fingerprint_computed_once_per_pipeline(monkeypatch):
+    """每个分块都重建一次领域模型是纯浪费（N2）：一次 pipeline.run 只算一次指纹。"""
+    import moray.extraction.pipeline as pipeline_mod
+
+    calls = {"n": 0}
+    original = pipeline_mod.domain_fingerprint
+
+    def counting(domain):
+        calls["n"] += 1
+        return original(domain)
+
+    monkeypatch.setattr(pipeline_mod, "domain_fingerprint", counting)
+
+    text = _long_text()
+    real = _CountingRealExtractor(
+        DomainSpec(code="general", name="通用",
+                   types=(TypeSpec("ORG", "机构", "机构"),)))
+    cache = ContentResultCache(InMemoryCacheBackend())
+    Document = __import__("moray.extraction.document", fromlist=["Document"]).Document
+    pipe = _pipeline(real, cache)
+    await pipe.run(Document(id="d", text=text, source="t"), _chunks(text))
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_non_domain_spec_fallback_includes_full_identity():
+    """非 DomainSpec 的假对象也不能只退化成 code：不同 domain 内容必须换键（N3）。"""
+    from types import SimpleNamespace
+
+    class _FakeExtractor:
+        def __init__(self, domain):
+            self.domain = domain
+            self.model_name = "fake-model"
+            self.calls = 0
+
+        async def extract(self, document):
+            self.calls += 1
+            return ExtractionOutput(
+                document_id=document.id, domain_code=self.domain.code,
+                result=ExtractionResult(), model_name=self.model_name,
+                usage=Usage(input_tokens=1), attempts=1)
+
+    text = _long_text()
+    chunks = _chunks(text)
+    Document = __import__("moray.extraction.document", fromlist=["Document"]).Document
+    cache = ContentResultCache(InMemoryCacheBackend())
+
+    a = _FakeExtractor(SimpleNamespace(code="g", types=("ORG",)))
+    b = _FakeExtractor(SimpleNamespace(code="g", types=("ORG", "PER")))
+    await _pipeline(a, cache).run(Document(id="d", text=text, source="t"), chunks)
+    await _pipeline(b, cache).run(Document(id="d", text=text, source="t"), chunks)
+    assert b.calls == len(chunks)      # 同一 code 但配置内容不同 → 不命中
 
 

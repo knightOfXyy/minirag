@@ -42,6 +42,10 @@ class Usage(BaseModel):
     # 不产生 input/output token。与 cached_input_tokens（提示缓存命中的真实
     # 计费 token）严格区分：成本/看板统计只汇总前三个真实计量字段。
     cache_hits: int = 0
+    # 命中时从缓存还原出来的“本可花费”的用量：只用于估算省了多少，绝不加进
+    # input_tokens/output_tokens，成本汇总不会把它误算成真实 LLM token（S4）。
+    reused_input_tokens: int = 0
+    reused_output_tokens: int = 0
 
     @computed_field
     @property
@@ -61,6 +65,8 @@ class Usage(BaseModel):
         self.output_tokens += other.output_tokens
         self.cached_input_tokens += other.cached_input_tokens
         self.cache_hits += other.cache_hits
+        self.reused_input_tokens += other.reused_input_tokens
+        self.reused_output_tokens += other.reused_output_tokens
 
 
 class ExtractionOutput(BaseModel):

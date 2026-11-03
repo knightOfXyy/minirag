@@ -55,6 +55,7 @@ __all__ = [
     "merge_call_metrics",
     "naive_merge",
     "remap_spans",
+    "CacheBackend",
     "ContentResultCache",
     "InMemoryCacheBackend",
     "PostgresCacheBackend",

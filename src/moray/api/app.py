@@ -243,6 +243,8 @@ def create_app(
                         usage.output_tokens if usage is not None else 0),
                     cached_input_tokens=(
                         usage.cached_input_tokens if usage is not None else 0),
+                    cache_hits=(
+                        usage.cache_hits if usage is not None else 0),
                     latency_ms=api_latency_ms))
             except Exception:  # noqa: BLE001 观测失败不能拖垮实时抽取
                 logger.warning(

@@ -20,6 +20,7 @@ import logging
 import time
 
 from ..schema import (
+    DomainSpec,
     Entity,
     EntityMention,
     ExtractionResult,
@@ -154,18 +155,22 @@ class ChunkedExtractionPipeline:
         # 键=领域配置指纹+模型名+块正文；命中不调模型，用量记 cache_hits 而非
         # 真实 token；同键并发在缓存内部单飞去重。
         self.result_cache = result_cache
+        # 领域指纹只依赖抽取器配置，一次 pipeline.run 内不会变：构造时算一次，
+        # 避免每个分块都重建 pydantic 模型 + JSON schema（N2）。
+        self._cached_domain_fingerprint = (
+            self._domain_fingerprint() if result_cache is not None else None)
 
     def _domain_fingerprint(self) -> str:
         """当前抽取器所用领域配置的版本指纹。
 
-        Extractor 持有完整 DomainSpec；测试注入的假抽取器可能只有 .domain.code，
-        此时回退到 code 本身（换 code 仍会失效；改 spec 的场景用真 Extractor）。
+        真 Extractor 持有完整 DomainSpec，走内容级指纹（system prompt + schema）。
+        对不是 DomainSpec 的假对象，回退值必须包含该对象的完整 repr：只退化成
+        code 会让“同 code、不同枚举”的配置共用缓存键（N3）。
         """
         domain = getattr(self.extractor, "domain", None)
-        try:
+        if isinstance(domain, DomainSpec):
             return domain_fingerprint(domain)
-        except Exception:  # noqa: BLE001 假对象/非 DomainSpec：退回可用标识
-            return f"code:{getattr(domain, 'code', 'unknown')}"
+        return f"code:{getattr(domain, 'code', 'unknown')}|repr:{domain!r}"
 
     async def _extract_chunk_output(
         self, mini_doc: Document, chunk: Chunk,
@@ -178,7 +183,7 @@ class ChunkedExtractionPipeline:
         if self.result_cache is None:
             return await self.extractor.extract(mini_doc), False
 
-        fingerprint = self._domain_fingerprint()
+        fingerprint = self._cached_domain_fingerprint
         model_name = getattr(self.extractor, "model_name", "") or ""
 
         async def _do_extract() -> ExtractionOutput:
@@ -199,7 +204,8 @@ class ChunkedExtractionPipeline:
         是否容忍。
 
         缓存（05）× 度量（01）× 回填（03）的交叉语义：命中缓存不发起模型调用、
-        不计真实 token（用量只记一次 cache_hits），但仍为该块落一条
+        不计真实 token（用量只记一次 cache_hits，被省下的 token 进 reused_*），
+        但仍为该块落一条
         ChunkCallMetrics（finish_reason=cache_hit、attempts=0、token 全 0）——
         文档级"每块一条"的口径不能被缓存打破，否则 chunk_calls 会随缓存命中率
         漂移、看板失去可比性。回填信号是 03 的旁路可观测信息，作为额外的第 5 个
@@ -249,6 +255,8 @@ class ChunkedExtractionPipeline:
 
             if hit:
                 # 命中：还原结果但不计真实 token，只标记一次缓存来源；
+                # 被省下的 input/output 记到独立的 reused_* 字段（S4），
+                # 成本/看板只汇总真实计量字段。
                 # 度量仍要为该块落一条（见方法 docstring 的口径说明）。
                 m = ChunkCallMetrics(
                     chunk_id=chunk.id,
@@ -263,7 +271,11 @@ class ChunkedExtractionPipeline:
                 )
                 metrics.add(m)
                 return (remap_spans(output.result, chunk),
-                        Usage(cache_hits=1), chunk.id, m, output.backfill)
+                        Usage(
+                            cache_hits=1,
+                            reused_input_tokens=output.usage.input_tokens,
+                            reused_output_tokens=output.usage.output_tokens,
+                        ), chunk.id, m, output.backfill)
 
             m = output.call_metrics
             if m is not None:
