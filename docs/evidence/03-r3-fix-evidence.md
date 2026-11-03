@@ -1,5 +1,9 @@
 # 工单 03 r3 评审修复证据（2026-11-03）
 
+> r4 复审后，本文件的 A/B 数字已被 `03-r3-stress-ab.json`（3 轮重复、含 02
+> 谓词的可判域）取代；逐条修复见 `03-r4-fix-evidence.md`。下方 r3 内容保留
+> 作为历史记录，不再作为验收 8/9 的最终证据。
+
 - 分支：`yzc/tmp-yzd-feat-relation-202610-03-mention-span`
 - 起点：`262319b`（改造前基线）；本轮先把临时分支 fast-forward 到
   `dev/yzd-feat-relation-202610`（`a4c10cd`，已含 01/02/05 与本工单 r2），

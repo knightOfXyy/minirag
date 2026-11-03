@@ -1,5 +1,9 @@
 # 工单 03 证据汇总：结构化输出瘦身 + mention/span 确定性本地回填
 
+> 第 4 轮评审修复（缓存键含回填模式、整篇别名口径、验收 8 可判域重跑、
+> N1/N4/N5/N6/N7）见 `03-r4-fix-evidence.md`；验收 8/9 以
+> `03-r3-stress-ab.json` 的最新多轮重跑为准。本文件下方 r2 记录保留为历史。
+
 开关：环境变量 `MORAY_LOCAL_BACKFILL`（`1/true/yes/on` 打开），**默认关闭**。
 关闭时：full schema / 提示词 / 归并语义保持 262319b（schema+结果逐字段 golden）。
 打开时：模型只出逻辑实体/关系，mention/span 与关系证据由本地 Aho-Corasick

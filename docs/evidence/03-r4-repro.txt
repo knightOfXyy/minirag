@@ -1,0 +1,12 @@
+# B1 fingerprints
+full: e084408b3bbb25dd
+slim: 8b9e2ebfd4afb900
+
+# S1 reviewer repro (with document_text)
+unmatched_aliases: []
+seen_literals: ['腾讯', '鹅厂']
+
+# N1 alias endpoint rule_review
+verdict: pass
+issues: []
+evidence: start=0 end=8 text='鹅厂发布了混元。'

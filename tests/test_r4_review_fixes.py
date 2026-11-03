@@ -9,11 +9,9 @@
 * N6：实体 description 补全与关系重复合并是两个独立开关。
 """
 
-import json
-from pathlib import Path
 from types import SimpleNamespace
 
-from moray.extraction import Chunk, Chunker, Document, ExtractionOutput, Extractor
+from moray.extraction import Chunk, Document, ExtractionOutput, Extractor
 from moray.extraction.cache import ContentResultCache, InMemoryCacheBackend
 from moray.extraction.document import Usage
 from moray.extraction.local_backfill import (
@@ -29,7 +27,6 @@ from moray.schema import (
     Entity,
     ExtractionResult,
     Relation,
-    Span,
     domain_fingerprint,
 )
 
