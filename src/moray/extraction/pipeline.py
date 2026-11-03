@@ -438,7 +438,12 @@ class ChunkedExtractionPipeline:
         # document_text 用于整篇口径的别名幻觉判定：某块漏抽实体时，仍按
         # 整篇正文确认别名是否真实存在（r4 S1）。坐标系必须用 source_text：
         # 返工轮 text 可能追加了审校反馈，反馈里的别名不是正文（r5 F3）。
-        document_text = document.source_text or document.text
+        # 空字符串是合法的「空正文」，不能回退到 text（r9 N12）：与
+        # extractor 的 `is not None` 口径保持一致。
+        document_text = (
+            document.source_text
+            if document.source_text is not None else document.text
+        )
         backfill = (merge_backfill_reports(
             backfill_reports, document_text=document_text).to_dict()
             if backfill_reports else None)

@@ -5,13 +5,15 @@
 合入 dev 的工单 01 `DocumentMetrics` 后，对同一份 02 压力语料、同一块预算
 （1500 units / overlap 200）跑 full vs slim，逐块统计 output token 与截断：
 
-  full: 78 块，output 161,826 tokens，均值 2074.69/块，截断块 2
-  slim: 78 块，output  40,591 tokens，均值  520.40/块，截断块 0
-  单块平均 output token 降幅 = 74.92%（≥30% 达标），截断块数不增加。
+  full: 78 块，output 184,546 tokens（3 轮均值），均值 2365.98/块，截断块 6
+  slim: 78 块，output  45,406 tokens（3 轮均值），均值  582.13/块，截断块 0
+  单块平均 output token 降幅 = 75.32%（≥30% 达标），截断块数不增加（6→0）。
 
-命令与完整明细见 docs/evidence/03-r3-fix-evidence.md、
-docs/evidence/03-r3-stress-ab.json（`chunk_summary` / `chunk_details`）。
-下面保留 r2 时的口径说明与旁证，不再作为验收 9 的结论。
+口径以 `docs/evidence/03-r3-stress-ab.json` 的 `delta` 为准
+（`mean_output_tokens_per_chunk_before/after`、`truncated_chunks_before/after`）。
+本节早先的 2074.69 / 520.40 与「截断 2→0」来自另一次未入库的运行，已废弃，
+不再作为验收 9 的数字。命令与完整明细见 `docs/evidence/03-r3-fix-evidence.md`、
+`docs/evidence/03-r3-stress-ab.json`（`chunk_summary` / `chunk_details`）。
 
 ## 验收 9：单块平均输出 token ≥30% 降、截断块数不增加 —— r2 时未闭环
 

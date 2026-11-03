@@ -1,0 +1,34 @@
+/tmp/opencode/review-venv/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.2.0, pluggy-1.7.0 -- /tmp/opencode/review-venv/bin/python
+cachedir: .pytest_cache
+rootdir: /home/dell/orca/workspaces/minirag/tmp-yzd-feat-relation-202610-03-mention-span
+configfile: pyproject.toml
+plugins: anyio-4.16.0, asyncio-1.4.1.post1
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 19 items
+
+tests/test_r9_review_fixes.py::test_dashboard_all_unmeasured_backfill_stays_null PASSED [  5%]
+tests/test_r9_review_fixes.py::test_run_recorder_backfill_fields_declared_once PASSED [ 10%]
+tests/test_r9_review_fixes.py::test_whitespace_only_alias_is_not_a_hallucination PASSED [ 15%]
+tests/test_r9_review_fixes.py::test_entity_literal_absorbed_by_longer_entity_is_not_missing PASSED [ 21%]
+tests/test_r9_review_fixes.py::test_ambiguous_mentions_deduped_regardless_of_candidate_order PASSED [ 26%]
+tests/test_r9_review_fixes.py::test_middleware_does_not_backfill_when_switch_is_off PASSED [ 31%]
+tests/test_r9_review_fixes.py::test_middleware_backfills_when_extractor_switch_is_on PASSED [ 36%]
+tests/test_r9_review_fixes.py::test_full_dynamic_relation_fields_match_core_relation PASSED [ 42%]
+tests/test_r9_review_fixes.py::test_off_mode_confidence_none_branch_is_intentional PASSED [ 47%]
+tests/test_r9_review_fixes.py::test_from_dict_explicit_zero_chunk_start_wins PASSED [ 52%]
+tests/test_r9_review_fixes.py::test_from_dict_default_still_reads_fallback_chunk_start PASSED [ 57%]
+tests/test_r9_review_fixes.py::test_empty_source_text_is_not_replaced_by_feedback_body PASSED [ 63%]
+tests/test_observability.py::test_audit_records_model_usage PASSED       [ 68%]
+tests/test_observability.py::test_audit_records_failed_model_call PASSED [ 73%]
+tests/test_observability.py::test_cost_reply_passthrough_and_timing PASSED [ 78%]
+tests/test_observability.py::test_extraction_metrics_counts_and_scores PASSED [ 84%]
+tests/test_observability.py::test_collector_totals PASSED                [ 89%]
+tests/test_observability.py::test_slim_output_without_confidence_is_not_counted_as_low_confidence PASSED [ 94%]
+tests/test_observability.py::test_slim_output_with_ungrounded_entity_lowers_quality_score PASSED [100%]
+
+============================== 19 passed in 0.72s ==============================

@@ -16,9 +16,10 @@ from agentscope.message import Msg, UserMsg
 class _FakeAgent:
     name = "Extractor"
 
-    def __init__(self, source_text=None):
+    def __init__(self, source_text=None, local_backfill=False):
         if source_text is not None:
             self._audit_source_text = source_text
+        self._audit_local_backfill = local_backfill
 
 
 # --------------------------------------------------------------------------
@@ -160,6 +161,7 @@ async def test_slim_output_without_confidence_is_not_counted_as_low_confidence()
         yield final
 
     agent = _FakeAgent(source_text=text)
+    agent._audit_local_backfill = True
     [ev async for ev in mw.on_reply(agent, {}, fake_next)]
     rec = collector.current()
     assert rec.n_entities == 2
@@ -190,6 +192,7 @@ async def test_slim_output_with_ungrounded_entity_lowers_quality_score():
         yield final
 
     agent = _FakeAgent(source_text=text)
+    agent._audit_local_backfill = True
     [ev async for ev in mw.on_reply(agent, {}, fake_next)]
     rec = collector.current()
     assert rec.entities_total == 2
