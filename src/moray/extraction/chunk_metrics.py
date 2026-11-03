@@ -70,9 +70,11 @@ class ChunkCallMetrics:
     # 一次模型调用的墙钟耗时：非流式也能测，但不等同 prefill/decode。
     # 缺省 None = 这条遥测路径没有测（不是 0）。
     latency_s: float | None = None
-    # 该块各次尝试的结束原因（attempts 条）；末位即 finish_reason
+    # 该块各次尝试里【每一次模型调用】的结束原因（attempt 内可能多次调用）；
+    # 末位即 finish_reason
     attempt_finish_reasons: list[str] = field(default_factory=list)
-    # 该块是否出现过任何一次截断（可能截断后又返工成功，仍要计数暴露）
+    # 被 length 截断的【模型调用】次数（不是 attempt 数：同一次尝试里截断后
+    # 自纠也可能发生多次 length）；块级聚合时为各块之和
     truncated_attempts: int = 0
     error: str = ""
 
@@ -147,16 +149,10 @@ def merge_call_metrics(records: list[ChunkCallMetrics]) -> ChunkCallMetrics:
         output_tokens=sum(r.output_tokens for r in records),
         cached_input_tokens=sum(r.cached_input_tokens for r in records),
         wait_s=sum(r.wait_s for r in records),
-        # 任一轮测到就累加；全测不到才为 None
-        latency_s=(round(sum(r.latency_s for r in records
-                             if r.latency_s is not None), 6)
-                   if any(r.latency_s is not None for r in records) else None),
-        prefill_s=(round(sum(r.prefill_s for r in records
-                             if r.prefill_s is not None), 6)
-                   if any(r.prefill_s is not None for r in records) else None),
-        decode_s=(round(sum(r.decode_s for r in records
-                            if r.decode_s is not None), 6)
-                  if any(r.decode_s is not None for r in records) else None),
+        # 任一轮测到就累加；全测不到才为 None（语义与 _sum 一致）
+        latency_s=_sum([r.latency_s for r in records]),
+        prefill_s=_sum([r.prefill_s for r in records]),
+        decode_s=_sum([r.decode_s for r in records]),
         attempt_finish_reasons=[
             reason for r in records for reason in r.attempt_finish_reasons],
         truncated_attempts=sum(r.truncated_attempts for r in records),

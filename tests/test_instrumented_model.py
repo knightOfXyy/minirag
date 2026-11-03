@@ -324,7 +324,6 @@ async def test_second_model_call_in_same_reply_does_not_hide_length_signal(
     assert out.attempts == 1
     assert m.attempt_finish_reasons == ["length", "stop"]
     assert m.truncated_attempts == 1
-    assert m.truncation_signals if hasattr(m, "truncation_signals") else True
     # 两次模型调用的分段计时都应累计（不能只留最后一次）
     assert m.prefill_s == pytest.approx(0.7)
     assert m.decode_s == pytest.approx(1.3)

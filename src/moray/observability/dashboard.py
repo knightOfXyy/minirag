@@ -104,7 +104,7 @@ class RunRecorder:
             "prefill_ms": _ms("prefill_s"),
             "decode_ms": _ms("decode_s"),
             "chunk_metrics_json": (
-                [c.to_dict() for c in dm.chunks] if dm is not None else None),
+                dm.to_dict()["chunks"] if dm is not None else None),
         }
 
     @classmethod
@@ -183,10 +183,12 @@ class RunRecorder:
         chunks = getattr(document_metrics, "chunks", None) or []
         if not chunks:
             return {}
+        # 复用 DocumentMetrics.summary() 的同一份 token 聚合，避免两处各算一遍
+        summary = document_metrics.summary()
         return {
-            "input_tokens": sum(c.input_tokens for c in chunks),
-            "output_tokens": sum(c.output_tokens for c in chunks),
-            "cached_input_tokens": sum(c.cached_input_tokens for c in chunks),
+            "input_tokens": summary["input_tokens"],
+            "output_tokens": summary["output_tokens"],
+            "cached_input_tokens": summary["cached_input_tokens"],
         }
 
     @classmethod
@@ -318,8 +320,10 @@ class Dashboard:
               coalesce(sum(prefill_ms),0)                            AS prefill_ms,
               coalesce(sum(decode_ms),0)                             AS decode_ms,
               -- 真实测到耗时的行数：0 表示这些 run 全是非流式、不可测。
-              -- 旧库列曾是 NOT NULL DEFAULT 0，历史行仍是 0；按 >0 排除，
-              -- 避免把"没测到"当成"测到 0ms"。
+              -- 旧库列曾是 NOT NULL DEFAULT 0，历史行仍是 0；只有旧行才会
+              -- 出现这种"没测到"的 0。实测 0ms 语义上也是有效值，故用 >0
+              -- 只排除历史 0（清理旧行后可改成 IS NOT NULL），绝不把没测到
+              -- 当成"测到 0ms"。
               count(chunk_latency_ms) FILTER (
                   WHERE chunk_latency_ms > 0)                        AS chunk_latency_measured_runs,
               count(prefill_ms) FILTER (WHERE prefill_ms > 0)        AS prefill_measured_runs,

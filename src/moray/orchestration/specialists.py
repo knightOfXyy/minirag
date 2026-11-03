@@ -25,10 +25,11 @@ AgentScope 2.0 提供两种编排原语（见 lessons/l10 的讲解）：
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Awaitable, Callable
 
 from ..extraction.chunk_metrics import DocumentMetrics, merge_call_metrics
+from ..extraction.extractor import ExtractionError
 from ..extraction.quality import verify_spans
 from ..schema import ExtractionResult
 
@@ -235,7 +236,9 @@ async def run_chunked_team(
     ``document_id`` 是写进度量记录的真实文档 id（缺省占位 "chunked"，
     便于看板把度量行对回具体文档）；``metrics_sink`` 由调用方**显式**传入时
     才为短文档路径收集调用度量——不传就完全用调用方自己的 extractor，
-    不隐式换实现（nit4），因此 document_metrics 保持 None。
+    不隐式换实现（nit4），因此 document_metrics 保持 None。短文档**永久失败**
+    时同样把已花的度量挂到 ``ExtractionError.document_metrics`` 上（S1），
+    失败看板行不会是 token=0 / truncation_signals=0。
     """
     if provider is None:
         return await run_extraction_team(
@@ -252,7 +255,6 @@ async def run_chunked_team(
         # 收集本轮（含审校返工轮）的 call_metrics，包成"1 块"的文档级度量，
         # 截断信号才能进看板（F4）。不隐式替换调用方传入的 extractor：
         # 换实现必须由调用方显式请求（nit4）。
-        sink: list = metrics_sink if metrics_sink is not None else []
         # 回填信号必须落回【调用方的】sink：短文档路径若另开一个中间 dict，
         # 抽取闭包写的是调用方那份，最后再用中间值覆盖就会把信号冲成 None。
         short_backfill: dict = backfill_sink if backfill_sink is not None else {}
@@ -267,17 +269,38 @@ async def run_chunked_team(
                     if "backfill_sink" in params:
                         extra_kwargs["backfill_sink"] = short_backfill
                     short_extractor = await provider_extract(
-                        domain_code, usage_sink=usage, metrics_sink=sink,
-                        **extra_kwargs)
-        reviewed = await run_extraction_team(
-            text, extractor=short_extractor, max_iters=max_iters,
-            # 短文档同样要让规则审校消费回填信号（命中率/歧义）
-            backfill_sink=short_backfill)
-        if sink:
+                        domain_code, usage_sink=usage,
+                        metrics_sink=metrics_sink, **extra_kwargs)
+
+        def _short_document_metrics() -> DocumentMetrics | None:
+            if not metrics_sink:
+                return None
+            merged = merge_call_metrics(metrics_sink)
+            # nit5：provider 闭包里的 Document 只有占位 id（<domain>-dyn），
+            # 短文档明细的 chunk_id 要用调用方传进来的真实 document_id。
+            if document_id and merged.chunk_id != document_id:
+                merged = replace(merged, chunk_id=document_id)
             dm = DocumentMetrics(
                 document_id=document_id or "chunked", n_chunks=1)
-            dm.add(merge_call_metrics(sink))
-            reviewed.document_metrics = dm
+            dm.add(merged)
+            return dm
+
+        try:
+            reviewed = await run_extraction_team(
+                text, extractor=short_extractor, max_iters=max_iters,
+                # 短文档同样要让规则审校消费回填信号（命中率/歧义）
+                backfill_sink=short_backfill)
+        except ExtractionError as exc:
+            # S1：短文档也会永久失败（三次尝试后抛错），provider 闭包已把
+            # 失败块真实的 token/截断信号放进 metrics_sink；把这块度量挂回
+            # 异常，API/作业的失败看板行才不会 token=0、truncation_signals=0。
+            dm = _short_document_metrics()
+            if dm is not None:
+                exc.document_metrics = dm
+            raise
+        reviewed.document_metrics = _short_document_metrics()
+        # 03 的回填信号：闭包直接写调用方 sink，这里再兜一层（闭包未写时用
+        # 审校路径拿到的值回填），保证返回值与调用方 sink 一致、不互相覆盖。
         if reviewed.backfill is None:
             reviewed.backfill = short_backfill.get("backfill")
         if backfill_sink is not None:
