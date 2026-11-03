@@ -1,20 +1,25 @@
-===== 2026-11-03 r13 更正：验收 8 的权威口径 =====
+===== 2026-11-03 r15 更正：验收 8 的当前权威口径 =====
 本文件旧的 r3 段曾写「验收 8 已在 02 压力语料闭环」，并列出与
 docs/evidence/03-r3-stress-ab.json 的 delta 不一致的数字（0.8698→0.8791、
 关系 0.0→0.0133、token 2074.69→520.40、截断 2→0）；该结论已删除，避免
 放量评审时被当成绿灯。
 
-验收 8 当前结论（r13 更新）：**达成**。HEAD `0df406c` 用同一脚本/语料/块预算
-重放 02 压力语料 full vs slim 3 轮（docs/evidence/03-r13-stress-ab.json，
-git_dirty=false）：
-  实体 macro relaxed F1 0.8947→0.9050，mean-of-N +1.0333pt，
-  worst-of-N −0.28pt（单轮 +2.04 / −0.28 / +1.34pt，均在 ≤0.5pt 门槛内）；
-  关系 F1 0.4255→0.6782（不下降）；span 一致率 min/mean 0.0087/0.0148→1.0/1.0；
-  单块 output token 2783.56→610.20（−77.73%）；截断块 6→0。
-历史快照 9f95ed4（03-r3-stress-ab.json）的 delta 是 0.8977→0.8984
-（mean +0.0733pt，但 worst-of-N −1.30pt 超门槛）、关系 0.3245→0.7195、
-token 2365.98→582.13、截断 6→0；它只说明当时 HEAD 未达成，不再作为当前
-结论。默认开关保持关闭。
+验收 8 当前结论（r15 更新）：**达成**。代码 HEAD `a5e1ca2` 用同一脚本/
+语料/块预算重放 02 压力语料 full vs slim 3 轮
+（docs/evidence/03-r15-stress-ab.json，git_dirty=false）：
+  实体 macro relaxed F1 0.8934→0.8997，mean-of-N +0.63pt，
+  worst-of-N −0.15pt（单轮 −0.15 / +1.32 / +0.72pt，均在 ≤0.5pt 门槛内）；
+  关系 F1 0.3223→0.6996（不下降）；span 一致率 min/mean 0.0093/0.0164→1.0/1.0；
+  单块 output token 2610.83→595.61（−76.83%）；截断块 7→0。
+逐篇最差 −4.55pt（stress_seed20261104 r1，该篇三轮 −4.55/0.00/0.00、
+均值 −1.52pt）；「≤0.5pt」是单轮 macro 的 mean/worst-of-N 口径，翻默认前
+需单独评估逐篇波动。
+
+历史快照 `0df406c`（03-r13-stress-ab.json）的 delta 是 0.8947→0.9050
+（mean +1.0333pt、worst-of-N −0.28pt）、关系 0.4255→0.6782、
+token 2783.56→610.20、截断 6→0；它只证明 r13 实现，r14/r15 改动后不再作为
+当前结论。更早的 9f95ed4（03-r3-stress-ab.json）mean +0.0733pt、worst
+−1.30pt 超门槛，只说明当时未达成。默认开关保持关闭。
 
 下面保留 r2 时的基线旁证，不再作为验收 8 证据。
 
@@ -35,7 +40,7 @@ span 一致率     before min/mean=0.2000/0.6778  after min/mean=1.0000/1.0000
   现改名为 03-baseline-ab.txt，避免后续误判「压力集已测」。
 - 2026-11-03 评审 r2 环境核查（历史记录）：本 worktree 当时没有 ARK_API_KEY/.env，
   无法复跑真实 LLM。因此验收 8 的「工单 02 扩展压力语料」**r2 时未闭环**；
-  最新状态以上方 r13 段与 `03-r13-stress-ab.json` 为准。
+  最新状态以上方 r15 段与 `03-r15-stress-ab.json` 为准。
 - 复跑前置：工单 02 的 `moray.evaluation.stress` loader 需先合入 dev（本分支
   `load_gold_dir` 只认 *.tagged.txt，压力集是 *.md + *.answer.json）。
   合入后执行：

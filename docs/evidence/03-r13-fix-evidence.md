@@ -1,5 +1,10 @@
 # 工单 03 第 13 轮评审修复证据（2026-11-03）
 
+> 历史文档：本文件记录的 `git diff 0df406c..HEAD -- src` 为空的结论只在
+> r13 当时成立。r14/r15 后续修改了 `local_backfill.py` 等源码，验收 8/9 的
+> **当前**权威证据是 `03-r15-stress-ab.json`（r15 代码 HEAD `a5e1ca2`），
+> 见 `03-r15-fix-evidence.md`。
+
 - 分支：`yzc/tmp-yzd-feat-relation-202610-03-mention-span`
 - 起点：`0065885`（r12 修复后的定点）；本轮只处理 `review-r13-03.md` 的
   2 should + 6 nit，不做顺手重构。
