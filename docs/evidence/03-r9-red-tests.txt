@@ -1,0 +1,178 @@
+/tmp/opencode/review-venv/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+FFFFFF...F.F                                                             [100%]
+=================================== FAILURES ===================================
+______________ test_dashboard_all_unmeasured_backfill_stays_null _______________
+
+    @pytest.mark.asyncio
+    async def test_dashboard_all_unmeasured_backfill_stays_null():
+        pool = _NullBackfillPool()
+        s = await Dashboard(pool).summary()
+    
+        assert s["avg_block_confidence"] is None, "未知≠0：全 NULL 不能聚合成 0%"
+        assert s["entities_grounded"] is None
+        assert s["entities_total"] is None
+        assert s["avg_relation_evidence_ratio"] is None
+    
+        q = pool.query
+        for col in ("avg_block_confidence", "entities_grounded",
+                    "entities_total", "avg_relation_evidence_ratio"):
+            assert f"coalesce(avg({col}),0)" not in q
+>           assert f"coalesce(sum({col}),0)" not in q
+E           AssertionError: assert 'coalesce(su...grounded),0)' not in '\n         ...            '
+E             
+E             'coalesce(sum(entities_grounded),0)' is contained here:
+E                         coalesce(sum(entities_grounded),0)                     AS entities_grounded,
+E             ?           ++++++++++++++++++++++++++++++++++
+E                             coalesce(sum(entities_total),0)                        AS entities_total,
+E                             coalesce(avg(relation_evidence_ratio),0)               AS avg_relation_evidence_ratio,
+E                             coalesce(sum(ambiguous_mentions),0)                    AS ambiguous_mentions,...
+E             
+E             ...Full output truncated, use '-vv' to show
+
+tests/test_r9_review_fixes.py:90: AssertionError
+_______________ test_run_recorder_backfill_fields_declared_once ________________
+
+    def test_run_recorder_backfill_fields_declared_once():
+        import inspect
+        import re
+    
+        # dataclass 的 __annotations__/__dataclass_fields__ 都是 dict，重复声明
+        # 会被静默覆盖；只能查类源码里每个字段注解出现的次数。
+        src = inspect.getsource(RunRecorder)
+        for name in ("block_confidence", "entities_grounded", "entities_total",
+                     "relation_evidence_ratio", "ambiguous_mentions"):
+>           assert len(re.findall(rf"^\s+{name}:", src, flags=re.M)) == 1, (
+                f"{name} 在 RunRecorder 源码里重复声明")
+E           AssertionError: block_confidence 在 RunRecorder 源码里重复声明
+E           assert 2 == 1
+E            +  where 2 = len(['    block_confidence:', '    block_confidence:'])
+E            +    where ['    block_confidence:', '    block_confidence:'] = <function findall at 0x78d011ff32e0>('^\\s+block_confidence:', '@dataclass\nclass RunRecorder:\n    """组装一次文档运行的指标（像 L06 那样逐步填充，最后一次性落库）。"""\n\n    document_id: str\n    domain_code...cy_ms=latency_ms,\n            model_name=model_name,\n            **cls._chunk_fields(document_metrics),\n        )\n', flags=re.MULTILINE)
+E            +      where <function findall at 0x78d011ff32e0> = <module 're' from '/usr/lib/python3.12/re/__init__.py'>.findall
+E            +      and   re.MULTILINE = <module 're' from '/usr/lib/python3.12/re/__init__.py'>.M
+
+tests/test_r9_review_fixes.py:106: AssertionError
+______________ test_whitespace_only_alias_is_not_a_hallucination _______________
+
+    def test_whitespace_only_alias_is_not_a_hallucination():
+        text = "混元发布了新品。"
+        _result, report = backfill_provenance(
+            ExtractionResult(entities=[
+                Entity(name=" 腾讯", type="ORG", aliases=["腾讯"]),
+                Entity(name="混元", type="MISC"),
+            ]),
+            text,
+        )
+>       assert report.unmatched_aliases == []
+E       AssertionError: assert [{'entity': '...teral': '腾讯'}] == []
+E         
+E         Left contains one more item: {'entity': ' 腾讯', 'literal': '腾讯'}
+E         Use -v to get more diff
+
+tests/test_r9_review_fixes.py:122: AssertionError
+_________ test_entity_literal_absorbed_by_longer_entity_is_not_missing _________
+
+    def test_entity_literal_absorbed_by_longer_entity_is_not_missing():
+        text = "阿里巴巴发布新品。"
+        logical = ExtractionResult(entities=[
+            Entity(name="阿里巴巴", type="ORG"),
+            Entity(name="阿里", type="ORG"),
+        ])
+        result, report = backfill_provenance(logical, text)
+        assert "阿里" in report.seen_literals
+        review = rule_review(text, result, backfill=report.to_dict())
+>       assert review.verdict == ReviewVerdict.PASS, review.issues
+E       AssertionError: ['回填命中率 1/2（块级置信度 0.5）：1 个实体未在正文中找到出处']
+E       assert 'needs_fix' == 'pass'
+E         
+E         - pass
+E         + needs_fix
+
+tests/test_r9_review_fixes.py:137: AssertionError
+________ test_ambiguous_mentions_deduped_regardless_of_candidate_order _________
+
+    def test_ambiguous_mentions_deduped_regardless_of_candidate_order():
+        a = BackfillReport(
+            chunk_id="c0", chunk_start=0,
+            ambiguous_mentions=[AmbiguousMention(
+                surface="同名", start=0, end=2,
+                candidates=['["ORG", "腾讯"]', '["ORG", "网易"]'],
+                chunk_id="c0")],
+        )
+        b = BackfillReport(
+            chunk_id="c1", chunk_start=0,
+            ambiguous_mentions=[AmbiguousMention(
+                surface="同名", start=0, end=2,
+                candidates=['["ORG", "网易"]', '["ORG", "腾讯"]'],
+                chunk_id="c1")],
+        )
+        merged = merge_backfill_reports([a, b])
+>       assert len(merged.ambiguous_mentions) == 1
+E       assert 2 == 1
+E        +  where 2 = len([AmbiguousMention(surface='同名', start=0, end=2, candidates=['["ORG", "腾讯"]', '["ORG", "网易"]'], reason='', chunk_id='c0...rface='同名', start=0, end=2, candidates=['["ORG", "网易"]', '["ORG", "腾讯"]'], reason='', chunk_id='c1', chunk_ids=['c1'])])
+E        +    where [AmbiguousMention(surface='同名', start=0, end=2, candidates=['["ORG", "腾讯"]', '["ORG", "网易"]'], reason='', chunk_id='c0...rface='同名', start=0, end=2, candidates=['["ORG", "网易"]', '["ORG", "腾讯"]'], reason='', chunk_id='c1', chunk_ids=['c1'])] = BackfillReport(matched_literals={}, unmatched_aliases=[], seen_literals=[], ambiguous_mentions=[AmbiguousMention(surfa... relations_with_evidence=0, relations_without_evidence=[], relation_evidence_candidates={}, chunk_id='', chunk_start=0).ambiguous_mentions
+
+tests/test_r9_review_fixes.py:160: AssertionError
+_____________ test_middleware_does_not_backfill_when_switch_is_off _____________
+
+    @pytest.mark.asyncio
+    async def test_middleware_does_not_backfill_when_switch_is_off():
+        collector = MetricsCollector()
+        collector.start("Extractor")
+        mw = ExtractionMetricsMiddleware(collector)
+    
+        async def fake_next():
+            yield _slim_msg()
+    
+        agent = _MwAgent(source_text="华为在深圳。", local_backfill=False)
+        [ev async for ev in mw.on_reply(agent, {}, fake_next)]
+        rec = collector.current()
+>       assert rec.block_confidence is None
+E       AssertionError: assert 0.5 is None
+E        +  where 0.5 = ExtractionMetrics(agent_name='Extractor', started_at=1793682601.3742855, duration_s=0.0, model_calls=[], tool_calls=[]...tities=0, block_confidence=0.5, entities_grounded=1, entities_total=2, relation_evidence_ratio=1.0, quality_score=0.75).block_confidence
+
+tests/test_r9_review_fixes.py:199: AssertionError
+________________ test_from_dict_explicit_zero_chunk_start_wins _________________
+
+    def test_from_dict_explicit_zero_chunk_start_wins():
+        report = BackfillReport.from_dict(
+            {"chunk_start": 999}, chunk_start=0, chunk_id="c0")
+>       assert report.chunk_start == 0
+E       AssertionError: assert 999 == 0
+E        +  where 999 = BackfillReport(matched_literals={}, unmatched_aliases=[], seen_literals=[], ambiguous_mentions=[], entities_total=0, e...ations_with_evidence=0, relations_without_evidence=[], relation_evidence_candidates={}, chunk_id='c0', chunk_start=999).chunk_start
+
+tests/test_r9_review_fixes.py:250: AssertionError
+___________ test_empty_source_text_is_not_replaced_by_feedback_body ____________
+
+    @pytest.mark.asyncio
+    async def test_empty_source_text_is_not_replaced_by_feedback_body():
+        from moray.extraction.chunking import Chunk
+        from moray.extraction.document import Document
+        from moray.extraction.pipeline import ChunkedExtractionPipeline
+    
+        body = "腾讯发布了新品。上次问题：鹅厂 未出现"
+        chunks = [Chunk(id="d#c0", text=body, start=0, end=len(body), index=0)]
+        out = await ChunkedExtractionPipeline(
+            _EmptySourceTextFake(), concurrency=1).run(
+                Document(id="d", text=body, source_text=""), chunks)
+    
+>       assert out.backfill["unmatched_aliases"] == [
+            {"entity": "腾讯", "literal": "鹅厂"}]
+E       AssertionError: assert [] == [{'entity': '...teral': '鹅厂'}]
+E         
+E         Right contains one more item: {'entity': '腾讯', 'literal': '鹅厂'}
+E         Use -v to get more diff
+
+tests/test_r9_review_fixes.py:297: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_r9_review_fixes.py::test_dashboard_all_unmeasured_backfill_stays_null
+FAILED tests/test_r9_review_fixes.py::test_run_recorder_backfill_fields_declared_once
+FAILED tests/test_r9_review_fixes.py::test_whitespace_only_alias_is_not_a_hallucination
+FAILED tests/test_r9_review_fixes.py::test_entity_literal_absorbed_by_longer_entity_is_not_missing
+FAILED tests/test_r9_review_fixes.py::test_ambiguous_mentions_deduped_regardless_of_candidate_order
+FAILED tests/test_r9_review_fixes.py::test_middleware_does_not_backfill_when_switch_is_off
+FAILED tests/test_r9_review_fixes.py::test_from_dict_explicit_zero_chunk_start_wins
+FAILED tests/test_r9_review_fixes.py::test_empty_source_text_is_not_replaced_by_feedback_body
+8 failed, 4 passed in 0.77s
