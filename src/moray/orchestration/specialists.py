@@ -75,9 +75,7 @@ ReviewerFn = Callable[[str, ExtractionResult], Awaitable[ExtractionReview]]
 # 真实系统里它是 LLM 审校 Agent 的第一道廉价闸门；这关不过就不必浪费模型。
 # ---------------------------------------------------------------------------
 def rule_review(
-    text: str,
-    result: ExtractionResult,
-    backfill: dict | None = None,
+    text: str, result: ExtractionResult, *, backfill: dict | None = None
 ) -> ExtractionReview:
     """规则审校：只做客观可判的事（span/端点/重复/证据/回填命中）。
 
@@ -108,33 +106,33 @@ def rule_review(
     if len(names) != len(result.entities):
         issues.append("实体列表存在同名重复项，未去重")
 
-    # ④ 没有任何证据 span 的关系（臆测风险）
-    # 置信度未知（None，slim 模式常态）必须与"高置信"同等拦截——旧写法
-    # `confidence >= 0.8` 在 None 上恒为 False，等于对瘦身输出永不触发。
-    # 只有模型明确给了低置信（<0.8）的关系才交给人工按低置信处理，不列为硬伤。
+    # ④ 没有任何证据 span 的关系（臆测风险）。slim 模式 confidence 是未知(None)，
+    #    旧条件 `confidence >= 0.8` 会让本工单目标模式永不触发——未知 + 无证据
+    #    同样要拦，full 模式仍只看高置信（保持旧语义）。
     for r in result.relations:
-        if r.evidence_span is not None:
-            continue
-        if r.confidence is None:
+        if r.evidence_span is None and (
+            r.confidence is None or r.confidence >= 0.8
+        ):
             issues.append(
-                f"关系 {r.head}-[{r.predicate}]->{r.tail} 置信度未知且无原文证据")
-        elif r.confidence >= 0.8:
-            issues.append(
-                f"关系 {r.head}-[{r.predicate}]->{r.tail} 置信度高却无原文证据")
+                f"关系 {r.head}-[{r.predicate}]->{r.tail} 无原文证据"
+                f"（置信度{'未知' if r.confidence is None else r.confidence}）")
 
-    # ⑤ 确定性回填命中率（仅瘦身回填开关打开时有值）
+    # ⑤ 确定性回填信号：块级命中率 + 歧义未归属 + 正文不存在的别名。
+    #    slim 模式模型不输出 confidence/span，这里是真正可用的质量信号。
     if backfill:
         total = int(backfill.get("entities_total") or 0)
         grounded = int(backfill.get("entities_grounded") or 0)
-        if total and grounded < total:
+        confidence = backfill.get("block_confidence")
+        if confidence is not None and confidence < 1.0:
             issues.append(
-                f"确定性回填命中 {grounded}/{total} 个实体："
-                f"部分实体在正文找不到出处（疑似幻觉，需人工复核）")
+                f"回填命中率 {grounded}/{total}"
+                f"（块级置信度 {confidence}）：有实体未在正文中找到出处")
         ambiguous = backfill.get("ambiguous_mentions") or []
         if ambiguous:
-            issues.append(
-                f"回填有 {len(ambiguous)} 处出现无法唯一归属（同名/别名冲突），"
-                f"需人工复核")
+            issues.append(f"{len(ambiguous)} 处提及歧义未归属，需人工确认")
+        phantom = backfill.get("unmatched_aliases") or []
+        if phantom:
+            issues.append(f"{len(phantom)} 个模型给出的别名在正文中不存在（疑似幻觉）")
 
     verdict = ReviewVerdict.PASS if not issues else ReviewVerdict.NEEDS_FIX
     return ExtractionReview(verdict=verdict, issues=issues,
@@ -156,12 +154,14 @@ async def run_extraction_team(
     reviewer:  async (text, result) -> ExtractionReview；默认用规则审校员。
     max_iters: 最多抽取轮数（含首轮），超出仍不通过则按最后结果返回并标记
                accepted=False，交给上层（通常转人工）。
-    backfill_sink: 可选字典。provider 闭包把最后一次抽取的回填信号写进
-               ``backfill_sink["backfill"]``，规则审校要消费它（命中率/歧义），
+    backfill_sink: 抽取器把本次确定性回填信号写进 ``sink["backfill"]``；
+               默认审校员在每轮审校时读取，用于判定块级命中率/歧义。
                返回的 ReviewedExtraction 也带上，避免主链丢信号。
     """
     async def _default_reviewer(t: str, r: ExtractionResult) -> ExtractionReview:
-        return rule_review(t, r, backfill=(backfill_sink or {}).get("backfill"))
+        # 每轮都现读 sink：抽取器刚写进去的块级信号要能被当轮审校消费。
+        current = (backfill_sink or {}).get("backfill")
+        return rule_review(t, r, backfill=current)
 
     reviewer = reviewer or _default_reviewer
     history: list[ExtractionReview] = []
@@ -238,7 +238,9 @@ async def run_chunked_team(
     不隐式换实现（nit4），因此 document_metrics 保持 None。
     """
     if provider is None:
-        return await run_extraction_team(text, extractor=extractor, max_iters=max_iters)
+        return await run_extraction_team(
+            text, extractor=extractor, max_iters=max_iters,
+            backfill_sink=backfill_sink)
 
     from ..extraction.chunking import Chunker
     from ..extraction.document import Document as _Doc
@@ -251,7 +253,9 @@ async def run_chunked_team(
         # 截断信号才能进看板（F4）。不隐式替换调用方传入的 extractor：
         # 换实现必须由调用方显式请求（nit4）。
         sink: list = metrics_sink if metrics_sink is not None else []
-        short_backfill: dict = {}
+        # 回填信号必须落回【调用方的】sink：短文档路径若另开一个中间 dict，
+        # 抽取闭包写的是调用方那份，最后再用中间值覆盖就会把信号冲成 None。
+        short_backfill: dict = backfill_sink if backfill_sink is not None else {}
         short_extractor = extractor
         if metrics_sink is not None:
             provider_extract = getattr(provider, "extract", None)
@@ -295,9 +299,8 @@ async def run_chunked_team(
     if usage is not None:
         usage.add(output.usage)
 
-    # 回填信号既要进审校（命中率/歧义是 slim 模式唯一的质量依据），
-    # 也要继续往上层透传（看板/API 响应）。
-    if backfill_sink is not None:
+    # 回填信号既进 ReviewedExtraction，也写给上层 sink（API/作业复用同一份）。
+    if backfill_sink is not None and output.backfill is not None:
         backfill_sink["backfill"] = output.backfill
     review = rule_review(text, output.result, backfill=output.backfill)
     review.iterations = 1

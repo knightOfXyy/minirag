@@ -1,4 +1,13 @@
-ssssss..................sssssssssss...................ssssssssss........ [ 40%]
-........................sssssssssssssssss...............sss............. [ 81%]
-................................                                         [100%]
-129 passed, 47 skipped in 0.97s
+工单03 评审 r2 修复后测试（2026-11-03）
+
+== 离线（无 DB）==
+命令：ARK_API_KEY=dummy PYTHONPATH=src pytest -q -p no:cacheprovider
+.......................................sssssssssssssssss................ [ 72%]
+..sssss...............................................                   [100%]
+148 passed, 50 skipped in 1.05s
+
+== 含 DB 集成（本机 moray-pgvector 5433）==
+命令：RUN_DB_TESTS=1 ARK_API_KEY=dummy PYTHONPATH=src pytest -q -p no:cacheprovider
+........................................................................ [ 72%]
+......................................................                   [100%]
+198 passed in 4.68s

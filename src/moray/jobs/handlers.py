@@ -95,6 +95,8 @@ async def build_document_handler(
                 chunk_max_units=_cs["max_units"],
                 chunk_overlap_units=_cs["overlap_units"],
                 chunk_concurrency=_cs["concurrency"],
+                # 03：整篇闭包路径的回填信号经 sink 回收，两条路都不丢信号
+                backfill_sink=backfill_sink,
                 result_cache=result_cache)
         except ExtractionError as exc:
             # 批量路径同样不能把失败块的截断/返工信号丢掉（F5）：

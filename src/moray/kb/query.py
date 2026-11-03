@@ -24,7 +24,8 @@ class EntityCard:
     name: str
     type: str
     attributes: dict
-    confidence: float
+    # None = 未知（瘦身模式模型不自报），与「0.0 最不可信」区分
+    confidence: float | None
     aliases: list[str] = field(default_factory=list)
     outgoing: list[dict] = field(default_factory=list)   # 我 -> 别人
     incoming: list[dict] = field(default_factory=list)   # 别人 -> 我
@@ -78,16 +79,22 @@ class KnowledgeBase:
             )]
         return EntityCard(
             id=row["id"], name=row["name"], type=row["type"],
-            attributes=row["attributes"], confidence=float(row["confidence"]),
+            attributes=row["attributes"],
+            confidence=(None if row["confidence"] is None
+                        else float(row["confidence"])),
             aliases=aliases,
             outgoing=[
                 {"predicate": r["predicate"], "dst_name": r["dst_name"],
-                 "dst_type": r["dst_type"], "confidence": float(r["confidence"])}
+                 "dst_type": r["dst_type"],
+                 "confidence": (None if r["confidence"] is None
+                                else float(r["confidence"]))}
                 for r in out
             ],
             incoming=[
                 {"predicate": r["predicate"], "src_name": r["src_name"],
-                 "src_type": r["src_type"], "confidence": float(r["confidence"])}
+                 "src_type": r["src_type"],
+                 "confidence": (None if r["confidence"] is None
+                                else float(r["confidence"]))}
                 for r in inc
             ],
         )

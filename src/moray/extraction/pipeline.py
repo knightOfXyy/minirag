@@ -39,6 +39,7 @@ from .document import CacheSavings, Document, ExtractionOutput, Usage
 from .extractor import ExtractionError, Extractor
 from .local_backfill import (
     BackfillReport,
+    max_confidence,
     merge_backfill_reports,
     merge_entity_metadata,
 )
@@ -91,9 +92,7 @@ def remap_spans(result: ExtractionResult, chunk: Chunk) -> ExtractionResult:
 
 
 def naive_merge(
-    partials: list[ExtractionResult],
-    *,
-    merge_relation_duplicates: bool = True,
+    partials: list[ExtractionResult], *, merge_relation_duplicates: bool = True
 ) -> ExtractionResult:
     """朴素归并（L09 会升级为向量+LLM 共指消解）。
 
@@ -101,9 +100,9 @@ def naive_merge(
     关系按三元组字符串去重，置信度取最大值。
     overlap 区域产生的重复 mention 会自然落在同一实体下，不会重复造实体。
 
-    ``merge_relation_duplicates=False`` 退回 262319b 的旧语义：同一三元组
-    首见赢家通吃（后见的证据/置信度都不并入）。该开关由抽取器的
-    ``local_backfill`` 决定——关开关必须逐字段等于改造前，打开才用改进版。
+    ``merge_relation_duplicates``：重复三元组是否把后见的证据/更高置信度
+    并进首见条目。分块流水线只在瘦身开关打开时启用——开关关闭必须保持
+    262319b 的「先见赢家」语义（验收 7 逐字段一致）。
     """
     bucket: dict[tuple[str, str], Entity] = {}
     for part in partials:
@@ -118,7 +117,9 @@ def naive_merge(
             ent = bucket[key]
             # 与 local_backfill 共用同一套元数据合并规则（别名并集/属性首见/
             # 置信度取大），避免两处逻辑漂移；mention 在归并层必须全量保留。
-            merge_entity_metadata(ent, e)
+            # description 补全也是新行为：开关关闭时必须保持 262319b 旧输出。
+            merge_entity_metadata(
+                ent, e, fill_description=merge_relation_duplicates)
             ent.mentions.extend(e.mentions)
 
     rel_index: dict[tuple[str, str, str], Relation] = {}
@@ -128,15 +129,13 @@ def naive_merge(
             key = (r.head, r.predicate, r.tail)
             existing = rel_index.get(key)
             if existing is not None:
-                if not merge_relation_duplicates:
-                    # 关开关：旧语义，首见赢家，后见不并入
-                    continue
-                # 同一三元组在别的块可能才拿到证据/更高置信度：首见不能赢家通吃。
-                if existing.evidence_span is None and r.evidence_span is not None:
-                    existing.evidence_span = r.evidence_span
-                known = [c for c in (existing.confidence, r.confidence)
-                         if c is not None]
-                existing.confidence = max(known) if known else None
+                if merge_relation_duplicates:
+                    # 同一三元组在别的块可能才拿到证据/更高置信度：
+                    # 首见不能赢家通吃。
+                    if existing.evidence_span is None and r.evidence_span is not None:
+                        existing.evidence_span = r.evidence_span
+                    existing.confidence = max_confidence(
+                        existing.confidence, r.confidence)
                 continue
             rel_index[key] = r
             relations.append(r)
@@ -401,12 +400,14 @@ class ChunkedExtractionPipeline:
 
         # 归并口径跟抽取器开关走：关开关时保持 262319b 的旧语义
         # （同一三元组首见赢家），打开才合并后见证据/更高置信度（03 r2）。
+        # 抽取器没有该属性时按「关」处理，保证旧对象逐字段等于改造前。
         merged = naive_merge(
             partials,
             merge_relation_duplicates=getattr(
-                self.extractor, "local_backfill", True))
+                self.extractor, "local_backfill", False))
         # 分块回填信号必须汇总后继续往上层传，不能在 pipeline 这里丢掉。
         # 关开关时所有块都是 None -> 保持 None（与改造前一致）。
+        # 块内偏移的平移由 merge_backfill_reports 按各块 chunk_start 统一完成。
         backfill = (merge_backfill_reports(backfill_reports).to_dict()
                     if backfill_reports else None)
         return ExtractionOutput(

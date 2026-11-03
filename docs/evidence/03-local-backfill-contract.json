@@ -1,28 +1,100 @@
 {
   "ticket": "03",
-  "title": "结构化输出瘦身 + mention/span 与关系证据的确定性本地回填",
+  "title": "结构化输出瘦身 + mention/span 与关系证据确定性本地回填（评审 r2 修复后）",
   "switch": "MORAY_LOCAL_BACKFILL",
   "default": "off",
-  "note": "开关打开时，对上层暴露的稳定内核 Entity/EntityMention/Span/Relation 字段与语义不变；模型侧 schema 只保留逻辑字段。",
+  "note": "开关打开时，模型只出逻辑实体/关系；稳定内核 Entity/EntityMention/Span/Relation 字段不变。confidence 语义不变（模型自报），但瘦身模式模型不自报 = 未知(None/NULL)，不再用 0.0 冒充。",
   "chunk_text": "阿里巴巴（简称阿里，NYSE:BABA）由马云创立。阿里巴巴总部位于杭州。",
   "model_request_schema": {
-    "entity_fields": [
-      "name",
-      "type",
-      "aliases",
-      "attributes"
-    ],
-    "relation_fields": [
-      "head",
-      "predicate",
-      "tail"
-    ],
-    "removed_from_model_output": [
-      "entities[].mentions",
-      "entities[].confidence",
-      "relations[].evidence_span",
-      "relations[].confidence"
-    ]
+    "$defs": {
+      "GeneralEntity": {
+        "properties": {
+          "name": {
+            "description": "实体标准名称，取最正式完整的叫法",
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "description": "实体类型，只能取本领域枚举值之一",
+            "enum": [
+              "PER",
+              "ORG",
+              "LOC",
+              "EVENT",
+              "MISC"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "aliases": {
+            "description": "其他叫法/简称",
+            "items": {
+              "type": "string"
+            },
+            "title": "Aliases",
+            "type": "array"
+          },
+          "attributes": {
+            "additionalProperties": true,
+            "description": "该类型专有的属性键值对；没有则空对象。\nPER 的 attributes 字段：birth_date: 字符串；title: 字符串\nORG 的 attributes 字段：founded_date: 字符串；registered_capital: 数字；legal_representative: 字符串；industry: 字符串\nEVENT 的 attributes 字段：event_date: 字符串",
+            "title": "Attributes",
+            "type": "object"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "GeneralEntity",
+        "type": "object"
+      },
+      "GeneralRelation": {
+        "properties": {
+          "head": {
+            "description": "头实体的标准名称",
+            "title": "Head",
+            "type": "string"
+          },
+          "predicate": {
+            "description": "关系类型，规范动词短语",
+            "title": "Predicate",
+            "type": "string"
+          },
+          "tail": {
+            "description": "尾实体的标准名称",
+            "title": "Tail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "head",
+          "predicate",
+          "tail"
+        ],
+        "title": "GeneralRelation",
+        "type": "object"
+      }
+    },
+    "properties": {
+      "entities": {
+        "description": "抽取出的去重实体",
+        "items": {
+          "$ref": "#/$defs/GeneralEntity"
+        },
+        "title": "Entities",
+        "type": "array"
+      },
+      "relations": {
+        "description": "有明确证据的关系三元组",
+        "items": {
+          "$ref": "#/$defs/GeneralRelation"
+        },
+        "title": "Relations",
+        "type": "array"
+      }
+    },
+    "title": "GeneralExtractionResultSlim",
+    "type": "object"
   },
   "model_response_logical_only": {
     "entities": [
@@ -104,7 +176,7 @@
             }
           }
         ],
-        "confidence": 0.0,
+        "confidence": null,
         "attributes": {},
         "description": ""
       },
@@ -122,7 +194,7 @@
             }
           }
         ],
-        "confidence": 0.0,
+        "confidence": null,
         "attributes": {},
         "description": ""
       },
@@ -140,7 +212,7 @@
             }
           }
         ],
-        "confidence": 0.0,
+        "confidence": null,
         "attributes": {},
         "description": ""
       }
@@ -155,7 +227,7 @@
           "end": 26,
           "text": "阿里巴巴（简称阿里，NYSE:BABA）由马云创立。"
         },
-        "confidence": 0.0
+        "confidence": null
       },
       {
         "head": "阿里巴巴",
@@ -166,21 +238,23 @@
           "end": 37,
           "text": "阿里巴巴总部位于杭州。"
         },
-        "confidence": 0.0
+        "confidence": null
       }
     ]
   },
   "deterministic_backfill_signals": {
     "block_confidence": 1.0,
     "relation_evidence_ratio": 1.0,
+    "chunk_id": "",
+    "chunk_start": 0,
     "entities_total": 3,
     "entities_grounded": 3,
     "relations_total": 2,
     "relations_with_evidence": 2,
     "matched_literals": {
-      "阿里巴巴": 3,
-      "马云": 1,
-      "杭州": 1
+      "[\"ORG\", \"阿里巴巴\"]": 3,
+      "[\"PER\", \"马云\"]": 1,
+      "[\"LOC\", \"杭州\"]": 1
     },
     "unmatched_aliases": [],
     "ambiguous_mentions": [],
@@ -224,5 +298,180 @@
       ]
     }
   },
-  "kernel_confidence_note": "回填不得覆盖稳定内核 confidence（语义=模型自报抽取置信度）；瘦身模型不输出该字段时保持默认 0.0。确定性质量信号只走 deterministic_backfill_signals（块级置信度/命中/歧义/证据）。"
+  "kernel_confidence_note": "回填不得覆盖内核 confidence。slim schema 无该字段 -> to_core_result 产出 None；ingestor 原样写 NULL，store/query/API 回 null，relations 排序 NULLS LAST；full schema 仍要求模型给 0~1 数值。",
+  "api_response_sample": {
+    "entities": [
+      {
+        "name": "阿里巴巴",
+        "type": "ORG",
+        "aliases": [
+          "阿里",
+          "BABA"
+        ],
+        "mentions": [
+          {
+            "surface": "阿里巴巴",
+            "span": {
+              "start": 0,
+              "end": 4,
+              "text": "阿里巴巴"
+            }
+          },
+          {
+            "surface": "阿里",
+            "span": {
+              "start": 7,
+              "end": 9,
+              "text": "阿里"
+            }
+          },
+          {
+            "surface": "BABA",
+            "span": {
+              "start": 15,
+              "end": 19,
+              "text": "BABA"
+            }
+          },
+          {
+            "surface": "阿里巴巴",
+            "span": {
+              "start": 26,
+              "end": 30,
+              "text": "阿里巴巴"
+            }
+          }
+        ],
+        "confidence": null,
+        "attributes": {},
+        "description": ""
+      },
+      {
+        "name": "马云",
+        "type": "PER",
+        "aliases": [],
+        "mentions": [
+          {
+            "surface": "马云",
+            "span": {
+              "start": 21,
+              "end": 23,
+              "text": "马云"
+            }
+          }
+        ],
+        "confidence": null,
+        "attributes": {},
+        "description": ""
+      },
+      {
+        "name": "杭州",
+        "type": "LOC",
+        "aliases": [],
+        "mentions": [
+          {
+            "surface": "杭州",
+            "span": {
+              "start": 34,
+              "end": 36,
+              "text": "杭州"
+            }
+          }
+        ],
+        "confidence": null,
+        "attributes": {},
+        "description": ""
+      }
+    ],
+    "relations": [
+      {
+        "head": "马云",
+        "predicate": "创立",
+        "tail": "阿里巴巴",
+        "evidence_span": {
+          "start": 0,
+          "end": 26,
+          "text": "阿里巴巴（简称阿里，NYSE:BABA）由马云创立。"
+        },
+        "confidence": null
+      },
+      {
+        "head": "阿里巴巴",
+        "predicate": "总部位于",
+        "tail": "杭州",
+        "evidence_span": {
+          "start": 26,
+          "end": 37,
+          "text": "阿里巴巴总部位于杭州。"
+        },
+        "confidence": null
+      }
+    ],
+    "backfill": {
+      "block_confidence": 1.0,
+      "relation_evidence_ratio": 1.0,
+      "chunk_id": "",
+      "chunk_start": 0,
+      "entities_total": 3,
+      "entities_grounded": 3,
+      "relations_total": 2,
+      "relations_with_evidence": 2,
+      "matched_literals": {
+        "[\"ORG\", \"阿里巴巴\"]": 3,
+        "[\"PER\", \"马云\"]": 1,
+        "[\"LOC\", \"杭州\"]": 1
+      },
+      "unmatched_aliases": [],
+      "ambiguous_mentions": [],
+      "relations_without_evidence": [],
+      "relation_evidence_candidates": {
+        "[\"马云\", \"创立\", \"阿里巴巴\"]": [
+          {
+            "head_start": 21,
+            "tail_start": 15,
+            "sent_start": 0,
+            "sent_end": 26,
+            "distance": 6,
+            "selected": true
+          },
+          {
+            "head_start": 21,
+            "tail_start": 7,
+            "sent_start": 0,
+            "sent_end": 26,
+            "distance": 14,
+            "selected": false
+          },
+          {
+            "head_start": 21,
+            "tail_start": 0,
+            "sent_start": 0,
+            "sent_end": 26,
+            "distance": 21,
+            "selected": false
+          }
+        ],
+        "[\"阿里巴巴\", \"总部位于\", \"杭州\"]": [
+          {
+            "head_start": 26,
+            "tail_start": 34,
+            "sent_start": 26,
+            "sent_end": 37,
+            "distance": 8,
+            "selected": true
+          }
+        ]
+      }
+    }
+  },
+  "r2_fix_notes": {
+    "finding_1": "confidence 可空：未知=None/NULL，规则④对未知+无证据也拦，审校/看板消费 block_confidence",
+    "finding_2": "区间裁决改为整段全空闲才接受（部分重叠不再漏）",
+    "finding_3": "关系证据句切认英文句号并修掉开头空白导致空句列表",
+    "finding_4": "开关关闭时 naive_merge 保持 262319b 先见赢家语义，有逐字段 golden",
+    "finding_7": "质量分用本地回填命中率替代空转 span 1.0；RunRecorder/看板记录命中信号",
+    "finding_8": "unmatched_aliases 用字面存在性判定，被长名吸收的别名不算幻觉",
+    "finding_9": "matched_literals/歧义候选键改为 JSON [type,name]",
+    "finding_10": "跨块汇总按 chunk_start 平移偏移并带 chunk_id；未命中关系按三元组去重"
+  }
 }

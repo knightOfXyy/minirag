@@ -70,3 +70,47 @@ async def test_alias_exact_match(store):
     )
     assert (await store.find_by_name_or_alias("Huawei"))["name"] == "华为技术有限公司"
     assert await store.find_by_name_or_alias("不存在") is None
+
+
+@pytest.mark.asyncio
+async def test_unknown_confidence_is_null_not_zero(store):
+    """slim 的未知置信度必须落 NULL（可区分未知/最不可信），不能写 0。"""
+    eid = await store.upsert_entity(
+        name="未知置信公司", type="ORG", embedding=[0.1] * 512)
+    row = await store.get(eid)
+    assert row["confidence"] is None
+
+    # 已有已知值时，再写「未知」不能把已知值冲掉
+    await store.upsert_entity(
+        name="未知置信公司", type="ORG", embedding=[0.1] * 512, confidence=0.7)
+    await store.upsert_entity(
+        name="未知置信公司", type="ORG", embedding=[0.1] * 512)
+    assert (await store.get(eid))["confidence"] == pytest.approx(0.7, abs=1e-6)
+
+    from moray.kb.query import KnowledgeBase
+
+    class _Emb:
+        def embed_one(self, text):
+            return [0.1] * 512
+
+    card = await KnowledgeBase(store, embedder=_Emb()).card(eid)
+    assert card.confidence == pytest.approx(0.7, abs=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_relation_unknown_confidence_sorts_last(store):
+    """/relations 排序：未知(NULL) 不能排在有值前面，也不能被当成 0 参与比较。"""
+    a = await store.upsert_entity(
+        name="甲", type="ORG", embedding=[0.1] * 512)
+    b = await store.upsert_entity(
+        name="乙", type="ORG", embedding=[0.1] * 512)
+    c = await store.upsert_entity(
+        name="丙", type="ORG", embedding=[0.1] * 512)
+    await store.upsert_relation(
+        source_id=a, predicate="未知证据", target_id=b, confidence=None)
+    await store.upsert_relation(
+        source_id=a, predicate="已知证据", target_id=c, confidence=0.9)
+
+    rels = await store.relations_of(a, direction="out")
+    assert [r["predicate"] for r in rels] == ["已知证据", "未知证据"]
+    assert rels[1]["confidence"] is None

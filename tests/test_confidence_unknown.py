@@ -53,6 +53,9 @@ class _FakeStore:
         self.relations.append(kwargs)
         return len(self.relations)
 
+    async def get_entity_id(self, name, *, domain_code="general"):
+        return None
+
     async def add_relation_evidence(self, *args, **kwargs):
         return None
 

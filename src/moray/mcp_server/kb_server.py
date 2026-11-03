@@ -206,7 +206,8 @@ def build_server(kb: KnowledgeBase | None = None) -> FastMCP:
                 "source": r["src_name"], "source_type": r["src_type"],
                 "predicate": r["predicate"],
                 "target": r["dst_name"], "target_type": r["dst_type"],
-                "confidence": round(float(r["confidence"]), 3),
+                "confidence": (None if r["confidence"] is None
+                               else round(float(r["confidence"]), 3)),
             }
             for r in rels
         ]

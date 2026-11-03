@@ -47,6 +47,21 @@
 | `evaluation/` | 黄金集加载、严格/宽松匹配、P/R/F1、宏/微平均、基线对比 | L15 |
 | `evaluation/stress/` | 多种子确定性压力案卷（`data/gold/stress/`，正文>5×块预算）+ 答案可信闸门 + 零 LLM 分块规则抽取器 + 按块预算/重叠的网格 A/B 报告；报告自带 `overlap_note`/`entity_axis_note`：overlap 当前无判别力、实体轴只证明接线，块预算判据看关系轴 | 工单02 |
 
+## 结构化输出瘦身与本地回填（工单 03）
+
+- 开关：`MORAY_LOCAL_BACKFILL`（默认关）。打开后模型只输出逻辑实体
+  （name/type/aliases/attributes）与逻辑关系（head/predicate/tail），不再输出
+  mentions/字符偏移/证据句/自报置信度。
+- 职责边界：`extraction/local_backfill.py` 是纯函数模块，负责 ①Aho–Corasick
+  多模式一次扫描 ②最长匹配区间裁决 ③歧义未归属 ④关系「同句共现」证据
+  ⑤`BackfillReport` 确定性信号；不读环境、不调模型。文件内按这 5 块组织，
+  新读者从 `backfill_provenance` / `merge_backfill_reports` 两个入口读即可。
+- 偏移：块内回填 -> `pipeline.remap_spans` 平移到全局；跨块信号汇总时
+  `merge_backfill_reports` 再按 `chunk_start` 平移并带 `chunk_id`。
+- 置信度：模型自报语义不变；slim 模式不自报 = `None`/SQL NULL（未知），
+  不能被 0.0 冒充。下游（审校/看板/API）消费 `BackfillReport.block_confidence`
+  等确定性信号。
+
 ## 贯穿全项目的工程原则
 
 1. **LLM 接缝最小化**：抽取器实现统一 `async extract(Document)->ExtractionResult`，

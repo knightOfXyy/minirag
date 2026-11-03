@@ -1,0 +1,29 @@
+工单03 评审 r2 逐条修复的复现输出（2026-11-03，ARK_API_KEY=dummy 仅过配置检查，未调模型）
+命令：ARK_API_KEY=dummy PYTHONPATH=src python <内联脚本，逻辑见本文件各节>
+
+== finding 2：部分重叠不再漏 ==
+阿里巴巴巴 {'阿里巴巴': [(0, 4)], '巴巴': []}
+北京大学的生活 {'北京大学': [(0, 4)], '大学生': []}
+
+== finding 3：英文句号/前导空白 ==
+sentences: [(0, 23), (23, 48)]
+sentences(leading newline): [(0, 1), (1, 8)]
+{('Carol', 'Bob'): 'Carol met Bob in London.', ('Alice', 'Bob'): 'Alice met Bob in Paris.'}
+leading-ws evidence: 华为位于深圳。 without_evidence: []
+
+== finding 1：slim confidence 未知 ==
+kernel confidence: None None
+rule4: needs_fix ['关系尾实体「深圳」不在实体列表中（疑似臆测或漏抽实体）', '关系 华为-[位于]->深圳 无原文证据（置信度未知）']
+
+== finding 7：slim 幻觉实体降分（命中率进质量分）==
+block_confidence: 0.5 grounded: 1/2 quality_score: 0.75
+
+== finding 9/10：信号键与跨块偏移 ==
+ambiguous: [('苹果', 12, 14, 'd#c1', ['["ORG", "苹果"]', '["MISC", "苹果"]'])]
+without_evidence: [{'head': '张三', 'predicate': '创立', 'tail': '腾飞公司', 'chunk_id': 'd#c0', 'chunk_ids': ['d#c0', 'd#c1']}]
+matched_literals keys: ['["PER", "张三"]', '["ORG", "腾飞公司"]', '["ORG", "苹果"]', '["MISC", "苹果"]']
+
+== finding 1（DB 层）：未知置信度落 NULL、不冲掉已知值、/relations NULLS LAST ==
+命令：RUN_DB_TESTS=1 ARK_API_KEY=dummy PYTHONPATH=src pytest -q tests/test_pgvector_integration.py -k unknown
+..                                                                       [100%]
+2 passed, 3 deselected in 0.90s

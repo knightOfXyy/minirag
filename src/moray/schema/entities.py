@@ -79,7 +79,7 @@ class Entity(BaseModel):
         le=1.0,
         description=(
             "抽取置信度，0~1；越确信越接近 1。"
-            "模型没自报时为 None = 未知（不是 0.0 的「低置信」）"
+            "未知时为 null（瘦身模式模型不自报置信度）——不要用 0.0 冒充未知"
         ),
     )
     # 动态属性包：领域专有的、不稳定的字段都放这里（如合同金额、药品剂量）。
@@ -122,10 +122,11 @@ class Relation(BaseModel):
         description="支撑该关系的原文证据句位置，用于溯源",
     )
     confidence: float | None = Field(
-        default=None, ge=0.0, le=1.0,
+        default=None,
+        ge=0.0,
+        le=1.0,
         description=(
-            "关系抽取置信度，0~1；模型没自报时为 None = 未知"
-            "（不是 0.0 的「低置信」）"
+            "关系抽取置信度，0~1；未知时为 null（瘦身模式模型不自报）"
         ),
     )
 

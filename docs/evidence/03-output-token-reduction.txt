@@ -1,11 +1,33 @@
-真实 LLM 输出 token（同模型、同 6 篇黄金语料，A/B）：
+工单03 输出体积证据（2026-11-03，评审 r2 修复后重新标注口径）
+
+## 验收 9：单块平均输出 token ≥30% 降、截断块数不增加 —— 本轮未闭环
+
+阻塞原因（如实标注，不用代理指标冒充）：
+1. 口径：工单 01 的 chunk_metrics（单块 output token / 截断块计数）在本分支
+   **不存在**（01 只在 dev 与 tmp-…-01 分支）；本分支也没有合并它。
+2. 环境：本 worktree 没有 ARK_API_KEY/.env，本轮无法复跑真实 LLM。
+3. 下面的数字是「每篇 document 一次抽取」的真实 usage（不是单块），
+   `attempts` 是校验重试次数（不能证明无截断：截断可能静默缺字段）。
+   只能作为「改造前后同输入的旁证」，不作为验收 9 的达标证据。
+
+## 已保留的 r1 真实 LLM 旁证（基线语料，非压力集）
+
+真实 LLM 输出 token（同模型、同 6 篇基线黄金语料 data/gold，A/B）：
   full schema（模型自报 mentions/偏移/置信度）: output=2011 tokens（每篇均值 335.17）
   slim + 本地回填                              : output=953  tokens（每篇均值 158.83）
-  降幅 = 52.6%  目标 >=30%: 达标
-  模型尝试次数 full=6 slim=6（无新增重试/截断迹象）
+  降幅 = 52.6%
+  模型尝试次数 full=6 slim=6（无新增校验重试，但不是截断指标）
 
 结构化 schema 定义（真实 build_extraction_model 生成，非手写 payload）：
   full=2904B slim=1429B 降幅=50.8%
 
-数据源：docs/evidence/03-ab-llm.json
+数据源：docs/evidence/03-ab-llm.json（语料=data/gold 6 篇基线集）
 复跑：PYTHONPATH=src python tools/backfill_ab_eval.py --mode llm
+
+## 闭环所需的后续动作（不写未跑过的东西）
+
+1. 合入工单 01 的 chunk_metrics（每块 output token + 截断计数）到本分支/dev。
+2. 配置可用模型密钥后，分别对 full/slim 跑同一分块语料，输出：
+   - 单块平均 output token 与降幅；
+   - 命中 max_tokens / finish_reason=length 的块数（或 01 定义的截断口径）。
+3. 在证据文件里写命令与结果，替换本节的「未闭环」。

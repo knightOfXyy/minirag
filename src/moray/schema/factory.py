@@ -166,35 +166,25 @@ def build_extraction_model(domain: DomainSpec, *, slim: bool = False) -> Type[Ba
             __base__=BaseModel,
         )
     else:
-        # 全量口径必须与改造前（262319b）逐字节一致：显式重建字段，而不是
-        # 直接复用内核 Relation。内核的 confidence 已改为可空（未知语义，
-        # slim 侧需要），直接复用会让 full 的结构化输出 schema 跟着漂移，
-        # 模型被要求提供的字段也就变了。
         dyn_relation = create_model(
             "Relation",
-            __doc__=(
-                "一条 (头实体, 关系, 尾实体) 的三元组。\n\n"
-                "head/tail 用实体的标准名称引用，和 Entity.name 对齐；\n"
-                "第 8 课入库后会改成稳定的实体 ID。"
-            ),
             head=(str, Field(description="头实体的标准名称（关系的发起方）")),
-            predicate=(
-                str,
-                Field(description=(
+            predicate=(str, Field(
+                description=(
                     "关系类型，尽量使用规范动词短语，如 "
-                    "「创立」「任职于」「总部位于」「投资」「收购」「子公司」")),
-            ),
+                    "「创立」「任职于」「总部位于」「投资」「收购」「子公司」"
+                ),
+            )),
             tail=(str, Field(description="尾实体的标准名称（关系的承受方）")),
-            evidence_span=(
-                Span | None,
-                Field(default=None, description="支撑该关系的原文证据句位置，用于溯源"),
-            ),
-            confidence=(
-                float,
-                Field(default=0.0, ge=0.0, le=1.0, description="关系抽取置信度，0~1"),
-            ),
+            evidence_span=(Span | None, Field(
+                default=None, description="支撑该关系的原文证据句位置，用于溯源")),
+            confidence=(float, Field(
+                default=0.0, ge=0.0, le=1.0,
+                description="关系抽取置信度，0~1")),
             __base__=BaseModel,
         )
+        # 与内核 Relation 的文档字符串一致，保证 full schema golden 逐字节不变
+        dyn_relation.__doc__ = Relation.__doc__
 
     # ④ 顶层结果模型：实体 + 关系
     suffix = "Slim" if slim else ""

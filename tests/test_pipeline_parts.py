@@ -96,7 +96,7 @@ def _merge_golden_inputs():
     b = ExtractionResult(
         entities=[
             Entity(name="甲", type="ORG", aliases=["甲总"], confidence=0.9,
-                   attributes={"k": "b", "x": 1}),
+                   attributes={"k": "b", "x": 1}, description="甲集团简介"),
         ],
         relations=[Relation(
             head="甲", predicate="投", tail="乙",

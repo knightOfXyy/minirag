@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS entities (
     name        TEXT NOT NULL,                 -- 规范名
     type        TEXT NOT NULL,                 -- 领域类型代码（PER/ORG/CONTRACT...）
     attributes  JSONB NOT NULL DEFAULT '{}',
-    confidence  REAL NOT NULL DEFAULT 0,
+    -- 未知置信度写 NULL（瘦身模式模型不自报），不能用 0 冒充「最不可信」
+    confidence  REAL DEFAULT 0,
     embedding   vector(512),                   -- bge-small-zh，512 维
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -64,7 +65,8 @@ CREATE TABLE IF NOT EXISTS relations (
     source_entity_id BIGINT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
     predicate       TEXT NOT NULL,
     target_entity_id BIGINT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    confidence      REAL NOT NULL DEFAULT 0,
+    -- 未知置信度写 NULL；见 entities.confidence
+    confidence      REAL DEFAULT 0,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (domain_code, source_entity_id, predicate, target_entity_id)
 );
@@ -111,3 +113,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_review_pending
     ON merge_reviews(LEAST(survivor_id, duplicate_id),
                      GREATEST(survivor_id, duplicate_id))
     WHERE status = 'pending';
+
+-- ---------------------------------------------------------------------------
+-- 平滑升级：置信度未知必须是 NULL（slim 模式模型不自报），不能落 0 冒充真实值。
+-- 可重复执行；新建库在 CREATE TABLE 里已允许 NULL，这里对旧库补一次。
+-- ---------------------------------------------------------------------------
+ALTER TABLE entities ALTER COLUMN confidence DROP NOT NULL;
+ALTER TABLE relations ALTER COLUMN confidence DROP NOT NULL;

@@ -102,17 +102,15 @@ class EntityStore:
         domain_code: str = "general",
         aliases: list[str] | None = None,
         attributes: dict[str, Any] | None = None,
-        confidence: float | None = 0.0,
+        confidence: float | None = None,
         mentions: list[dict] | None = None,
     ) -> int:
         """幂等写入一个实体（含向量/别名/出处），返回实体 id。
 
         同一 (domain, type, name) 已存在则更新向量与属性，并合并别名/出处。
+        confidence=None 表示「未知」（瘦身模式模型不自报），写 NULL；
+        GREATEST 会忽略 NULL，因此未知不会把已有已知值冲成 0。
         mentions: [{'document_id','surface','start','end','chunk_id'}]
-
-        confidence=None 表示「模型没自报 = 未知」。DB 列沿用历史 NOT NULL
-        口径，落库时按 0 存（不为未知改表）；未知与低置信的区分留在内核
-        对象与 API 响应里，GREATEST 也不会让旧值被 0 覆盖。
         """
         async with self.pool.acquire() as conn:
             async with conn.transaction():
@@ -131,8 +129,7 @@ class EntityStore:
                     RETURNING id
                     """,
                     domain_code, name, type, (attributes or {}),
-                    confidence if confidence is not None else 0.0,
-                    _vec_literal(embedding),
+                    confidence, _vec_literal(embedding),
                 )
                 entity_id = row["id"]
 
@@ -276,7 +273,7 @@ class EntityStore:
         predicate: str,
         target_id: int,
         domain_code: str = "general",
-        confidence: float | None = 0.0,
+        confidence: float | None = None,
     ) -> int:
         row = await self.pool.fetchrow(
             """
@@ -287,8 +284,7 @@ class EntityStore:
             DO UPDATE SET confidence = GREATEST(relations.confidence, EXCLUDED.confidence)
             RETURNING id
             """,
-            domain_code, source_id, predicate, target_id,
-            confidence if confidence is not None else 0.0,
+            domain_code, source_id, predicate, target_id, confidence,
         )
         return row["id"]
 
@@ -332,7 +328,7 @@ class EntityStore:
             JOIN entities se ON se.id=r.source_entity_id
             JOIN entities te ON te.id=r.target_entity_id
             WHERE {where}
-            ORDER BY r.confidence DESC
+            ORDER BY r.confidence DESC NULLS LAST
         """
         return [dict(r) for r in await self.pool.fetch(sql, *params)]
 

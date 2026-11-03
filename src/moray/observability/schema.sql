@@ -15,6 +15,11 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
 
     -- 质量
     span_ratio        REAL,                          -- 出处一致率 0~1
+    block_confidence  REAL,                          -- 瘦身回填命中率（未知=NULL）
+    entities_grounded INTEGER,                       -- 回填命中实体数（未知=NULL）
+    entities_total    INTEGER,                       -- 参与回填的实体数（未知=NULL）
+    relation_evidence_ratio REAL,                    -- 关系证据命中率（未知=NULL）
+    ambiguous_mentions INTEGER NOT NULL DEFAULT 0,   -- 歧义未归属提及数
     review_passed     BOOLEAN,                       -- 是否通过审校门禁
     review_iters      INTEGER NOT NULL DEFAULT 1,    -- 审校返工轮数
     open_issues       INTEGER NOT NULL DEFAULT 0,    -- 仍未解决的问题数
@@ -48,15 +53,7 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     -- NULL=该请求形态下不可测（生产默认非流式）；不要写 0 冒充"测到了"
     prefill_ms          INTEGER,                     -- 首 token（prefill）总耗时
     decode_ms           INTEGER,                     -- 解码总耗时
-    chunk_metrics       JSONB,                        -- 每块一条明细，供下钻
-
-    -- 工单 03：瘦身回填的确定性接地信号（slim 输出不自报 confidence 时的
-    -- 替代质量依据）。NULL=开关关闭/无信号——不是 0，不能当"全错"聚合。
-    block_confidence        REAL,                     -- 实体在正文里有出处的占比
-    entities_grounded       INTEGER,                  -- 命中的实体数
-    entities_total          INTEGER,                  -- 参与回填的实体数
-    relation_evidence_ratio REAL,                     -- 关系拿到同句证据的占比
-    ambiguous_mentions      INTEGER NOT NULL DEFAULT 0  -- 无法唯一归属的出现数
+    chunk_metrics       JSONB                         -- 每块一条明细，供下钻
 );
 CREATE INDEX IF NOT EXISTS idx_runs_doc ON pipeline_runs(document_id);
 CREATE INDEX IF NOT EXISTS idx_runs_created ON pipeline_runs(created_at);

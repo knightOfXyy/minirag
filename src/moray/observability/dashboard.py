@@ -36,6 +36,12 @@ class RunRecorder:
     n_entities: int = 0
     n_relations: int = 0
     span_ratio: float | None = None
+    # 确定性回填信号（仅瘦身开关打开时有值；关闭时 None）
+    block_confidence: float | None = None
+    entities_grounded: int | None = None
+    entities_total: int | None = None
+    relation_evidence_ratio: float | None = None
+    ambiguous_mentions: int = 0
     review_passed: bool | None = None
     review_iters: int = 1
     open_issues: int = 0
@@ -120,7 +126,11 @@ class RunRecorder:
         trace_id: str | None = None,
         backfill: dict | None = None,
     ) -> RunRecorder:
-        """从 L10 ReviewedExtraction + L08/09 IngestReport 便捷构造。"""
+        """从 L10 ReviewedExtraction + L08/09 IngestReport 便捷构造。
+
+        backfill 是瘦身模式的确定性信号；关闭开关时传 None，字段保持 NULL，
+        看板不会把「未测」当成「满分/零分」。
+        """
         dm = getattr(reviewed, "document_metrics", None)
         chunk_fields = cls._chunk_fields(dm)
         return cls(
@@ -280,6 +290,11 @@ class Dashboard:
               count(*)                                              AS runs,
               count(*) FILTER (WHERE review_passed)                  AS passed,
               coalesce(avg(span_ratio),0)                            AS avg_span_ratio,
+              coalesce(avg(block_confidence),0)                      AS avg_block_confidence,
+              coalesce(sum(entities_grounded),0)                     AS entities_grounded,
+              coalesce(sum(entities_total),0)                        AS entities_total,
+              coalesce(avg(relation_evidence_ratio),0)               AS avg_relation_evidence_ratio,
+              coalesce(sum(ambiguous_mentions),0)                    AS ambiguous_mentions,
               coalesce(avg(review_iters),0)                          AS avg_review_iters,
               coalesce(sum(open_issues),0)                           AS total_open_issues,
               coalesce(sum(n_entities),0)                            AS total_entities,

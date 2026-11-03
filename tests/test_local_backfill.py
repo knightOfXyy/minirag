@@ -178,7 +178,12 @@ def test_alias_ownership_conflict_is_ambiguous():
     am = report.ambiguous_mentions
     assert len(am) == 1
     assert am[0].surface == "东方"
-    assert set(am[0].candidates) == {"东方集团", "东方科技"}
+    from moray.extraction.local_backfill import entity_signal_key
+
+    assert set(am[0].candidates) == {
+        entity_signal_key(Entity(name="东方集团", type="ORG")),
+        entity_signal_key(Entity(name="东方科技", type="ORG")),
+    }
     assert text[am[0].start:am[0].end] == "东方"
 
 
@@ -636,7 +641,10 @@ def test_signal_keys_keep_type_so_same_name_different_type_does_not_collide():
         ]),
         text,
     )
-    assert report.matched_literals == {}
+    assert report.matched_literals == {
+        entity_signal_key(Entity(name="苹果", type="ORG")): 0,
+        entity_signal_key(Entity(name="苹果", type="MISC")): 0,
+    }
     assert len(report.ambiguous_mentions) == 1
     assert report.ambiguous_mentions[0].candidates == [
         entity_signal_key(Entity(name="苹果", type="ORG")),

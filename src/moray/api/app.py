@@ -179,6 +179,8 @@ def create_app(
                 chunk_max_units=cs["max_units"],
                 chunk_overlap_units=cs["overlap_units"],
                 chunk_concurrency=cs["concurrency"],
+                # 03：整篇闭包路径的回填信号经 sink 回收，两条路都不丢信号
+                backfill_sink=backfill_sink,
                 result_cache=d.result_cache)
         except ExtractionError as exc:
             # 整篇失败（典型：某块永久失败且可能被截断）也要落一行观测：
@@ -355,7 +357,8 @@ def create_app(
             "source": r["src_name"], "source_type": r["src_type"],
             "predicate": r["predicate"],
             "target": r["dst_name"], "target_type": r["dst_type"],
-            "confidence": round(float(r["confidence"]), 3)} for r in rels]}
+            "confidence": (None if r["confidence"] is None
+                           else round(float(r["confidence"]), 3))} for r in rels]}
 
     # ------------------------------------------------------------------ HITL
     @app.get("/reviews")

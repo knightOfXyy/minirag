@@ -54,13 +54,11 @@ class ExtractionMetrics:
     low_confidence_entities: int = 0
     # 本次结果中真正带 confidence 的实体数（瘦身输出该值为 0 = 未知，不是低置信）
     known_confidence_entities: int = 0
-    # 瘦身回填的确定性接地信号：模型不报 confidence 时用「实体在正文里有出处」
-    # 替代主观置信度；None = 没有回填信号（开关关闭/无原文）。
-    entities_total: int | None = None
-    entities_grounded: int | None = None
+    # 确定性回填信号（瘦身模式）：命中率与关系证据率，质量分用它替代空转的 span 1.0
     block_confidence: float | None = None
+    entities_grounded: int | None = None
+    entities_total: int | None = None
     relation_evidence_ratio: float | None = None
-    ambiguous_mentions: int = 0
     quality_score: float | None = None
 
     @property
@@ -86,6 +84,10 @@ class ExtractionMetrics:
 
     def summary(self) -> str:
         q = f"{self.quality_score:.2f}" if self.quality_score is not None else "N/A"
+        hit = (
+            f" 回填命中{self.entities_grounded}/{self.entities_total}"
+            if self.block_confidence is not None else ""
+        )
         return (
             f"[{self.agent_name}] 耗时{self.duration_s:.1f}s "
             f"模型调用{len(self.model_calls)}次 "
@@ -93,7 +95,7 @@ class ExtractionMetrics:
             f"/cached{self.cached_input_tokens}"
             f"|命中{self.cache_hit_rate:.0%}) "
             f"实体{self.n_entities} 关系{self.n_relations} "
-            f"低置信{self.low_confidence_entities} 质量分={q}"
+            f"低置信{self.low_confidence_entities}{hit} 质量分={q}"
         )
 
 

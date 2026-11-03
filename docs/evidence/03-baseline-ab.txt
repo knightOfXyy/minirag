@@ -1,0 +1,24 @@
+===== 真实 LLM A/B（仓库内基线语料 data/gold，6 篇，DeepSeek）=====
+命令：PYTHONPATH=src python tools/backfill_ab_eval.py --mode llm --json-out docs/evidence/03-ab-llm.json
+语料：data/gold/*.tagged.txt（基线黄金集，**不是**工单 02 的扩展压力语料）
+抽取器：真实 LLM（DeepSeek），full schema vs slim+本地回填
+
+实体 relaxed F1 before=1.0000 after=1.0000 delta=+0.0000
+实体 strict  F1 before=0.8333 after=1.0000 delta=+0.1667
+关系 F1         before=0.9444 after=0.9444 delta=+0.0000
+span 一致率     before min/mean=0.2000/0.6778  after min/mean=1.0000/1.0000
+回填命中        slim=16/16；full 不回填（0/0）
+模型尝试次数    full=6 slim=6
+
+说明：
+- 这份文件原名 03-stress-corpus-eval.txt，但内容并不是压力集结果（评审 r2 finding 5）。
+  现改名为 03-baseline-ab.txt，避免后续误判「压力集已测」。
+- 2026-11-03 评审 r2 环境核查：本 worktree 没有 ARK_API_KEY/.env，无法复跑真实 LLM。
+  因此验收 8 的「工单 02 扩展压力语料」**本轮未闭环**，阻塞原因与复跑命令如下。
+- 复跑前置：工单 02 的 `moray.evaluation.stress` loader 需先合入 dev（本分支
+  `load_gold_dir` 只认 *.tagged.txt，压力集是 *.md + *.answer.json）。
+  合入后执行：
+    PYTHONPATH=src python tools/backfill_ab_eval.py \
+      --gold data/gold/stress --mode llm --json-out docs/evidence/03-stress-ab-llm.json
+- 规则模式（--mode rule）只能验证「回填不改变逻辑集合」，评审明确不作为验收 8 证据；
+  本轮未用规则结果冒充压力集 LLM 结果。
