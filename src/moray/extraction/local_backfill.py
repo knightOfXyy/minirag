@@ -85,6 +85,38 @@ def entity_signal_key(entity: Entity) -> str:
     return json.dumps([entity.type, entity.name], ensure_ascii=False)
 
 
+# 关系证据候选是「同句内头×尾」的全笛卡尔积；短文档可能只有几十条，
+# 无标点长文/单块大文本却能到几十万条（数十 MB）。序列化（API 响应、
+# 作业结果）默认只带 selected + 最近的 K 条；内存里的 BackfillReport
+# 始终保留全部，调试/评测可直接读对象（r10 N4）。
+MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES = 20
+
+
+def entity_identity_key(
+    entity: Entity, *, strip_name: bool = True
+) -> tuple[str, str]:
+    """实体逻辑身份键 ``(type, name)``（r10 N9）。
+
+    回填（``_coalesce_entities``）用去首尾空白的口径，避免「腾讯 」与「腾讯」
+    在块内合并、跨块归并时又拆成两个实体。关闭瘦身开关时 ``naive_merge``
+    保留 262319b 的精确键（``strip_name=False``）。
+    """
+    return (entity.type, entity.name.strip() if strip_name else entity.name)
+
+
+def _cap_relation_candidates(cands: list[dict], limit: int | None) -> list[dict]:
+    """序列化裁剪：保留最近 ``limit`` 条，selected 那条总在其中（r10 N4）。"""
+    if limit is None or limit <= 0 or len(cands) <= limit:
+        return list(cands)
+    kept = list(cands[:limit])
+    if any(c.get("selected") for c in kept):
+        return kept
+    selected = next((c for c in cands if c.get("selected")), None)
+    if selected is None:
+        return kept
+    return kept[:-1] + [selected]
+
+
 
 @dataclass
 class BackfillReport:
@@ -170,8 +202,22 @@ class BackfillReport:
         }
         return report
 
-    def to_dict(self) -> dict:
-        """可落盘/进看板的纯字典（确定性信号，供下游替代模型自报置信度）。"""
+    def to_dict(
+        self,
+        *,
+        max_relation_evidence_candidates: int | None = (
+            MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES),
+    ) -> dict:
+        """可落盘/进看板的纯字典（确定性信号，供下游替代模型自报置信度）。
+
+        ``max_relation_evidence_candidates``：序列化时每条关系最多保留多少条
+        候选（含 selected）。内存对象不受影响；传 ``None`` 可保留全量。
+        """
+        capped_candidates = {
+            key: _cap_relation_candidates(
+                cands, max_relation_evidence_candidates)
+            for key, cands in self.relation_evidence_candidates.items()
+        }
         return {
             "block_confidence": round(self.block_confidence, 4),
             "relation_evidence_ratio": round(self.relation_evidence_ratio, 4),
@@ -197,7 +243,7 @@ class BackfillReport:
                 for am in self.ambiguous_mentions
             ],
             "relations_without_evidence": self.relations_without_evidence,
-            "relation_evidence_candidates": self.relation_evidence_candidates,
+            "relation_evidence_candidates": capped_candidates,
         }
 
 
@@ -314,7 +360,7 @@ def _coalesce_entities(entities: list[Entity]) -> list[Entity]:
     merged: list[Entity] = []
     index: dict[tuple[str, str], int] = {}
     for e in entities:
-        key = (e.type, e.name.strip())
+        key = entity_identity_key(e)
         if key in index:
             merged[index[key]] = merge_entity_metadata(merged[index[key]], e)
         else:
@@ -454,7 +500,7 @@ def backfill_provenance(
             if (literal and literal != e.name.strip()
                     and literal not in seen_literals):
                 report.unmatched_aliases.append(
-                    {"entity": e.name, "literal": literal}
+                    {"type": e.type, "entity": e.name, "literal": literal}
                 )
         new_entities.append(
             Entity(
@@ -480,6 +526,15 @@ def backfill_provenance(
 def _relation_key(r: Relation) -> str:
     """三元组的无碰撞 key（JSON 编码，避免 "-" / "->" 拼接碰撞）。"""
     return json.dumps([r.head, r.predicate, r.tail], ensure_ascii=False)
+
+
+def _trim_bounds(text: str, start: int, end: int) -> tuple[int, int]:
+    """句子边界裁掉首尾空白，保证与 evidence_span 的精确切片一致。"""
+    while start < end and text[start].isspace():
+        start += 1
+    while end > start and text[end - 1].isspace():
+        end -= 1
+    return start, end
 
 
 def _backfill_relations(
@@ -548,26 +603,27 @@ def _backfill_relations(
             # 最近的一对；取该句整句作为证据 span（去掉句首尾空白，
             # 但保持对原文的精确切片）
             ordered = sorted(pairs, key=lambda p: p[4])
-            hs, ts, ss, se, _dist = ordered[0]
-            while ss < se and text[ss].isspace():
-                ss += 1
-            while se > ss and text[se - 1].isspace():
-                se -= 1
+            _hs, _ts, ss, se, _dist = ordered[0]
+            ss, se = _trim_bounds(text, ss, se)
             evidence = Span(start=ss, end=se, text=text[ss:se])
             report.relations_with_evidence += 1
             # 候选按距离排序，并显式标出「被选中的最近一对」，让证据 span
             # 可观测、可复核（而不只是存一个不可解释的 evidence_span）。
-            cands = [
-                {
+            # evidence_start/end 是裁剪后的整句边界，与 Relation.evidence_span
+            # 逐值对齐（r10 N1）；sent_start/end 保留原始句表边界便于排查。
+            cands = []
+            for p in ordered:
+                ev_s, ev_e = _trim_bounds(text, p[2], p[3])
+                cands.append({
                     "head_start": p[0],
                     "tail_start": p[1],
                     "sent_start": p[2],
                     "sent_end": p[3],
+                    "evidence_start": ev_s,
+                    "evidence_end": ev_e,
                     "distance": p[4],
                     "selected": p is ordered[0],
-                }
-                for p in ordered
-            ]
+                })
             report.relation_evidence_candidates[key] = cands
         else:
             report.relations_without_evidence.append(
@@ -614,7 +670,9 @@ def merge_backfill_reports(
     merged = BackfillReport()
     missing_index: dict[str, dict] = {}
     ambiguous_index: dict[tuple, AmbiguousMention] = {}
-    unmatched_index: dict[tuple[str, str], dict] = {}
+    # 去重键带类型：同名异型（苹果/ORG 与 苹果/MISC）的幻觉别名不能互相
+    # 覆盖，否则信号少计（r10 N3）。
+    unmatched_index: dict[tuple[str, str, str], dict] = {}
     seen_literals: set[str] = set()
     for report in reports:
         offset = report.chunk_start
@@ -626,7 +684,8 @@ def merge_backfill_reports(
             merged.matched_literals[key] = merged.matched_literals.get(key, 0) + n
         seen_literals.update(report.seen_literals)
         for entry in report.unmatched_aliases:
-            key = (str(entry.get("entity", "")), str(entry.get("literal", "")))
+            key = (str(entry.get("type", "")), str(entry.get("entity", "")),
+                   str(entry.get("literal", "")))
             unmatched_index.setdefault(key, dict(entry))
         for am in report.ambiguous_mentions:
             start, end = am.start + offset, am.end + offset
@@ -671,20 +730,31 @@ def merge_backfill_reports(
             shifted = []
             for c in cands:
                 item = dict(c)
-                for field in ("head_start", "tail_start", "sent_start", "sent_end"):
+                for field in ("head_start", "tail_start", "sent_start",
+                              "sent_end", "evidence_start", "evidence_end"):
                     if item.get(field) is not None:
                         item[field] = item[field] + offset
                 item["chunk_id"] = report.chunk_id
                 shifted.append(item)
-            merged.relation_evidence_candidates.setdefault(key, []).extend(shifted)
+            bucket = merged.relation_evidence_candidates.setdefault(key, [])
+            bucket.extend(shifted)
+            # selected 本来是「块内最近的一对」；跨块拼接后会出现多条
+            # selected=True，而 naive_merge 只保留一条 evidence span。按块顺序
+            # 保留第一条（= 首个真正提供了证据的块），其余降为普通候选
+            # （r10 N2）。
+            selected_indices = [
+                i for i, c in enumerate(bucket) if c.get("selected")]
+            if len(selected_indices) > 1:
+                for i in selected_indices[1:]:
+                    bucket[i]["selected"] = False
     # 真实分块的盲点：某块漏抽实体时，该实体的别名不会进入那一块的模式集，
     # 于是 seen_literals 里没有它，即使正文里明明存在。对「仍可能被判幻觉」
     # 的候选别名在整篇正文上补一次 AC 扫描（候选数远小于实体别名数，仍是
     # 线性），把整篇可见的字面并入 seen_literals（r4 S1）。
     if document_text is not None and unmatched_index:
         candidates = sorted({
-            key[1] for key in unmatched_index
-            if key[1] and key[1] not in seen_literals
+            key[2] for key in unmatched_index
+            if key[2] and key[2] not in seen_literals
         })
         if candidates:
             seen_literals.update(
@@ -696,6 +766,94 @@ def merge_backfill_reports(
     # 只保留一条，不按块堆叠。
     merged.unmatched_aliases = [
         entry for key, entry in unmatched_index.items()
-        if key[1] not in seen_literals
+        if key[2] not in seen_literals
     ]
     return merged
+
+
+def reconcile_span_ambiguity(
+    result: ExtractionResult,
+    report: BackfillReport,
+) -> tuple[ExtractionResult, BackfillReport]:
+    """跨块归并后按「同一处全局 span」对账歧义（r10 S2）。
+
+    分块路径每块独立回填，重叠块会对同一处原文各写一次 mention。若模型在
+    不同块给出不同类型，``naive_merge`` 会把同一个全局 span 同时挂到两个实体
+    上（溯源冲突），而单块内的歧义裁决看不见跨块的这份冲突。
+
+    这里只对 ``(surface, start, end)`` 完全相同的那一处对账：owner 多于一个
+    时，从所有实体的 mentions 里删掉该 span，并合并成一条全局
+    ``AmbiguousMention``（candidates = owner 集合）。不同位置上的同名出现不在
+    此列——按块内上下文归属是合理的，不能一律判歧义。
+
+    计数口径不变：``entities_grounded`` 等仍是 chunk-weighted 计数（r4 N4），
+    这里只修「写进哪个实体」的归属冲突，不重算块加权比率。
+    """
+    owners: dict[tuple[str, int, int], list[int]] = {}
+    for ei, ent in enumerate(result.entities):
+        for m in ent.mentions:
+            if m.span is None:
+                continue
+            key = (m.surface, m.span.start, m.span.end)
+            bucket = owners.setdefault(key, [])
+            if ei not in bucket:
+                bucket.append(ei)
+    conflicts = {key: eis for key, eis in owners.items() if len(eis) > 1}
+    if not conflicts:
+        return result, report
+
+    drop: dict[int, set[tuple[int, int]]] = {}
+    for (_surface, start, end), eis in conflicts.items():
+        for ei in eis:
+            drop.setdefault(ei, set()).add((start, end))
+
+    entities: list[Entity] = []
+    for ei, ent in enumerate(result.entities):
+        dropped = drop.get(ei)
+        mentions = [
+            m for m in ent.mentions
+            if m.span is None or dropped is None
+            or (m.span.start, m.span.end) not in dropped
+        ]
+        entities.append(
+            ent if len(mentions) == len(ent.mentions)
+            else ent.model_copy(update={"mentions": mentions}))
+
+    for (surface, start, end), eis in sorted(
+            conflicts.items(), key=lambda kv: (kv[0][1], kv[0][2], kv[0][0])):
+        report.ambiguous_mentions.append(AmbiguousMention(
+            surface=surface,
+            start=start,
+            end=end,
+            candidates=[entity_signal_key(result.entities[i]) for i in eis],
+            reason="同一处原文归属多个逻辑实体（跨块归并）",
+        ))
+
+    return (
+        ExtractionResult(entities=entities, relations=list(result.relations)),
+        report,
+    )
+
+
+def cached_backfill_provenance(
+    owner: object,
+    result: ExtractionResult,
+    text: str,
+) -> tuple[ExtractionResult, BackfillReport]:
+    """同一份抽取结果的回填只扫描一次，产物缓存在 ``owner`` 上（r10 N5）。
+
+    质量中间件（审校前）与抽取器（审校后）都需要同一份回填信号。两侧都各跑
+    一遍 ``backfill_provenance`` 会把块正文扫两次。这里按
+    ``(原文, 抽取结果)`` 做确定性缓存：中间件先算，抽取器随后命中同一份产物；
+    结果不同（例如返工后的新输出）则自然未命中、重新计算。
+
+    ``owner`` 通常是本次 reply 的 agent 对象（一次抽取一个实例），缓存不会跨
+    文档泄漏。
+    """
+    key = (text, result.model_dump_json())
+    cached = getattr(owner, "_audit_backfill_cache", None)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    filled, report = backfill_provenance(result, text)
+    setattr(owner, "_audit_backfill_cache", (key, (filled, report)))
+    return filled, report

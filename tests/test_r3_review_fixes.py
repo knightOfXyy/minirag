@@ -224,7 +224,8 @@ def test_unmatched_aliases_are_deduped_after_merge():
         BackfillReport.from_dict(r1.to_dict(), chunk_start=8, chunk_id="d#c1"),
     ])
     # 两块都未见过该别名：合并后只保留一条，不按块堆叠
-    assert merged.unmatched_aliases == [{"entity": "腾讯", "literal": "鹅厂"}]
+    assert merged.unmatched_aliases == [
+        {"type": "ORG", "entity": "腾讯", "literal": "鹅厂"}]
 
 
 # ---------------------------------------------------------------------------

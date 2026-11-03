@@ -141,7 +141,7 @@ async def test_whole_document_alias_scan_uses_source_text_not_feedback():
 
     # 「鹅厂」只在反馈里出现，原始正文没有 -> 必须仍算幻觉
     assert out.backfill["unmatched_aliases"] == [
-        {"entity": "腾讯", "literal": "鹅厂"}]
+        {"type": "ORG", "entity": "腾讯", "literal": "鹅厂"}]
     assert "鹅厂" not in out.backfill["seen_literals"]
 
 

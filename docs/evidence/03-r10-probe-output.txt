@@ -1,0 +1,22 @@
+== S1: 被长名吸收的字面作为关系端点 ==
+seen_literals: ['阿里', '阿里巴巴']
+阿里 mentions: []
+rule_review: pass []
+run_extraction_team: calls=1 accepted=True
+
+== S2: 重叠块同一全局 span 归属两个实体 ==
+owners: [('苹果', 'ORG', []), ('苹果', 'MISC', [])]
+ambiguous: [{"surface": "苹果", "start": 0, "end": 2, "candidates": ["[\"ORG\", \"苹果\"]", "[\"MISC\", \"苹果\"]"], "reason": "同一处原文归属多个逻辑实体（跨块归并）", "chunk_id": "", "chunk_ids": []}]
+
+== N1/N2/N4: 关系证据候选 ==
+evidence_span: 24 48
+selected candidate: {'sent_start': 23, 'sent_end': 48, 'evidence_start': 24, 'evidence_end': 48}
+in-memory candidates: 900 serialized: 20 selected in serialized: 1
+
+== N5: 同一结果只扫一次 ==
+backfill_provenance scans for two calls: 1
+
+== N9/N10: 归并身份键 / 入参不被改写 ==
+slim merge entities: 1
+legacy merge entities: 2
+input relation confidence after merge: None

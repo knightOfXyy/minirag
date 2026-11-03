@@ -109,6 +109,9 @@ def rule_review(
                   for i in idxs}
         for literal, idxs in index.items()
     }
+    # 回填信号里「正文真实出现过的字面」（含随后被最长匹配吸收的命中）。
+    # ④ 与 ⑤ 共用这一份集合，避免两处各算一套「有没有出处」的口径。
+    seen = {str(x) for x in ((backfill or {}).get("seen_literals") or [])}
 
     def _endpoint_issue(role: str, literal: str) -> str | None:
         if backfill is None:
@@ -156,7 +159,12 @@ def rule_review(
         for ent in result.entities:
             aliases = {a.strip() for a in ent.aliases}
             if ent.name.strip() == name or name in aliases:
-                return bool(ent.mentions)
+                # 字面被更长的实体名吸收时（如「阿里」出现在「阿里巴巴」里），
+                # 回填按最长匹配把 mention 给了长名，短名实体没有 mention。
+                # 但该字面确实在正文出现过（seen_literals），据「没有 mention」
+                # 判「端点在正文中未命中」是事实错误，会触发无意义的模型返工
+                # （r10 S1）。
+                return bool(ent.mentions) or name in seen
         return False
 
     def _endpoint_grounded_or_ambiguous(name: str) -> bool:
@@ -214,7 +222,7 @@ def rule_review(
         # 实体字面被更长的实体名吸收时（如「阿里」出现在「阿里巴巴」里），
         # 它的 matched_literals=0，但字面确实在正文中出现过。不能再报
         # 「未在正文中找到出处」——那是事实错误的返工反馈（r9 N3）。
-        seen = {str(x) for x in (backfill.get("seen_literals") or [])}
+        # ``seen`` 与 ④ 共用函数开头算好的同一份集合。
         absorbed = {
             entity_signal_key(e) for e in result.entities
             if any(lit.strip() in seen

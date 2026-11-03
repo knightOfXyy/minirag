@@ -68,12 +68,29 @@
   绝不能共用键（否则关闭态会拿到 slim 的实体与 `backfill`）；换采样档位同样
   不得复用旧产物。
 - 整篇别名口径：`unmatched_aliases` 先取各块 `seen_literals` 并集；`pipeline`
-  再把 `document.source_text or document.text` 传给 `merge_backfill_reports`，
+  再把 `document.source_text if document.source_text is not None else document.text`
+  传给 `merge_backfill_reports`（空字符串是合法的「空正文」，不回退；r9 N12），
   对候选别名补一次线性 AC 扫描。某块漏抽实体但正文里真实存在该别名时，不算
   幻觉；只在返工反馈里出现的别名仍算幻觉。
 - 计数口径：`entities_total/matched_literals/...` 跨块按块相加，是
   **chunk-weighted** 计数（重叠块对同一原文各计一次），不是文档级去重值；
   需要文档级计数时由消费方按 `(entity_key, span)` 收敛。
+- 跨块 span 歧义对账（r10 S2）：每块独立回填后，`naive_merge` 可能把**同一处
+  全局 span** 同时挂到两个逻辑实体上（重叠块里模型给出不同类型）。
+  `pipeline.run` 归并后调用 `reconcile_span_ambiguity`，只对
+  `(surface, start, end)` 完全相同的冲突撤销归属（从两侧 mentions 删掉该
+  span）并合并成一条全局 `AmbiguousMention`；不同位置上的同名出现不判歧义。
+- 关系证据候选（r10 N1/N2/N4）：候选带 `evidence_start/evidence_end`（裁剪后，
+  与 `Relation.evidence_span` 逐值对齐）与原始 `sent_start/sent_end`；跨块
+  合并后全局只有一条 `selected=True`。序列化默认每条关系最多
+  `MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES=20` 条（selected 必留），
+  内存里的 `BackfillReport` 仍保留全部。
+- 实体身份键（r10 N9）：回填与 slim 归并共用 `entity_identity_key`
+  （默认去首尾空白）；关闭态 `naive_merge` 保持 262319b 的精确键。
+  `naive_merge` 合并关系时存 `model_copy`，不改写调用方传入的 partial（r10 N10）。
+- 回填只扫一次（r10 N5）：质量中间件与抽取器共用 `cached_backfill_provenance`
+  （按 `(原文, 结果)` 缓存在本次 reply 的 agent 上）；中间件在没有可核对 span
+  时把 `span_ratio` 记 `None`（未测），不再写空转的 1.0。
 - 审校口径：`rule_review` 的关系端点与回填共用 `literal_index`——标准名永远
   合法；「唯一归属」的别名只在瘦身模式（有 `backfill` 信号）下放宽。关闭态
   逐字面保持 262319b：只认实体标准名**原样**精确命中（不 strip、不看归属
