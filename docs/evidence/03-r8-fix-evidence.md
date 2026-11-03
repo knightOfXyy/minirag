@@ -4,6 +4,7 @@
 - 先红提交：`059768e`（只加/改用例，未改实现）。
 - 修复提交：`01e2316`（`specialists.py` ②④、`local_backfill.py` 合并身份键与
   关系证据配对、`ARCHITECTURE.md` 审校/复杂度口径）。
+- 证据首版提交：`e2f4c3a`（本文件与 `03-r8-*.txt`；随后一个提交只补本行哈希）。
 - 本轮修复面：r8 的 1 个 should（F1）+ 5 个 nit（F2~F6）。
 - 只改本分支，未动 `dev/yzd-feat-relation-202610` / `main`。
 - 先红：`docs/evidence/03-r8-red-tests.txt`（**7 failed / 17 passed**）。
