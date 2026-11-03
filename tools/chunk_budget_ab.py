@@ -28,7 +28,9 @@ import argparse
 import asyncio
 import hashlib
 import json
+import math
 import os
+import statistics
 import subprocess
 import sys
 import time
@@ -41,12 +43,13 @@ from dotenv import load_dotenv
 
 from moray.config import get_settings
 from moray.evaluation.gold import load_gold_dir
-from moray.evaluation.metrics import macro_average
+from moray.evaluation.metrics import evaluate, macro_average
 from moray.evaluation.stress import (
     aggregate_cases,
     evaluate_budget_gate,
     evaluate_case,
     load_stress_dir,
+    normalize_entity_name_aliases,
     relation_chunk_profile,
 )
 from moray.extraction import Chunker, Document, Extractor
@@ -131,6 +134,95 @@ def _max(values) -> float | None:
     return max(vals) if vals else None
 
 
+# 双侧 95% t 临界值（小样本重复次数；n>10 用正态 1.96 近似）。
+_T95 = {2: 12.706, 3: 4.303, 4: 3.182, 5: 2.776, 6: 2.571,
+        7: 2.447, 8: 2.365, 9: 2.306, 10: 2.262}
+
+
+def _delta_summary_pt(values: list[float]) -> dict:
+    """N 轮独立重复的均值差 + 95% CI + 最坏轮。
+
+    评审 r1 S5：两档是**先后独立跑**的，没有 seed，不能叫“配对”；这里
+    保留 round-aligned 的最坏轮（worst-of-N），同时明确标注 unpaired。
+    """
+    vals = [float(v) for v in values]
+    n = len(vals)
+    if not n:
+        return {"values": [], "n": 0, "mean_pt": None, "sd_pt": None,
+                "ci95_low_pt": None, "ci95_high_pt": None,
+                "min_pt": None, "max_pt": None,
+                "label": "unpaired independent repeats"}
+    mean = round(statistics.mean(vals), 4)
+    sd = round(statistics.stdev(vals), 4) if n > 1 else 0.0
+    half = (_T95.get(n, 1.96) * sd / math.sqrt(n)) if n > 1 else None
+    return {
+        "values": [round(v, 4) for v in vals],
+        "n": n,
+        "mean_pt": mean,
+        "sd_pt": sd,
+        "ci95_low_pt": round(mean - half, 4) if half is not None else None,
+        "ci95_high_pt": round(mean + half, 4) if half is not None else None,
+        "min_pt": round(min(vals), 4),
+        "max_pt": round(max(vals), 4),
+        "label": ("unpaired independent repeats; worst-of-N = min over "
+                  "round-aligned repeats (no seed, not a paired test)"),
+    }
+
+
+def _real_doc_coverage(real_docs: dict, *, candidate_budget: int) -> dict:
+    """真实文档批次是否真的把候选预算压到了（评审 r1 S2）。"""
+    rows = real_docs.get("rows", [])
+    max_units = max(
+        (int(r.get("max_chunk_units", 0) or 0) for r in rows),
+        default=int(real_docs.get("max_chunk_units", 0) or 0),
+    )
+    exercises = max_units >= candidate_budget
+    note = (
+        f"真实文档批次已压到候选预算 {candidate_budget}（最大块 {max_units} units）"
+        if exercises else
+        f"真实文档批次未包含超过候选预算 {candidate_budget} 的文档："
+        f"最大块仅 {max_units} units，本批次只验证 <=1500-unit 文档的截断"
+        f"与最大真实 token，{candidate_budget} 档在真实文档上的分块未被压到。"
+    )
+    return {
+        "documents": len(rows),
+        "max_chunk_units": max_units,
+        "candidate_budget": candidate_budget,
+        "exercises_candidate_budget": exercises,
+        "note": note,
+    }
+
+
+def _doc_row(doc, chunks, out, wall_s: float) -> dict:
+    """压力语料与真实文档共用的逐篇行（评审 r1 N2：只此一份）。"""
+    metrics = out.document_metrics
+    summary = metrics.summary() if metrics is not None else {}
+    records = list(metrics.chunks) if metrics is not None else []
+    return {
+        "n_chunks": len(chunks),
+        "chunk_calls": int(summary.get("chunk_calls", 0) or 0),
+        "input_tokens": int(summary.get("input_tokens", 0) or 0),
+        "output_tokens": int(summary.get("output_tokens", 0) or 0),
+        "cached_input_tokens": int(
+            summary.get("cached_input_tokens", 0) or 0),
+        "truncated_chunks": int(
+            summary.get("truncated_chunks", 0) or 0),
+        "truncation_signals": int(
+            summary.get("truncation_signals", 0) or 0),
+        "reworked_chunks": int(
+            summary.get("reworked_chunks", 0) or 0),
+        "failed_chunks": sum(1 for c in records if c.error),
+        "max_chunk_input_tokens": max(
+            (c.input_tokens for c in records), default=0),
+        "max_chunk_output_tokens": max(
+            (c.output_tokens for c in records), default=0),
+        "max_chunk_units": max((c.n_units for c in chunks), default=0),
+        "max_chunk_chars": max((len(c.text) for c in chunks), default=0),
+        "overlap_pairs": _chunk_pair_overlaps(chunks),
+        "wall_s": round(wall_s, 3),
+    }
+
+
 async def _run_corpus(
     cases,
     *,
@@ -146,6 +238,7 @@ async def _run_corpus(
     }
     rounds: list[dict] = []
     all_evals = []
+    all_raw_reports = []
 
     extractor = Extractor(domain, max_retries=2, local_backfill=True)
     pipeline = ChunkedExtractionPipeline(extractor, concurrency=concurrency)
@@ -153,6 +246,7 @@ async def _run_corpus(
     for r in range(max(1, repeat)):
         rows = []
         evals = []
+        raw_reports = []
         for case in cases:
             doc = Document(id=case.name, text=case.text,
                            source="stress-gold", domain_code=domain.code)
@@ -162,52 +256,57 @@ async def _run_corpus(
                 doc, chunks, raise_on_chunk_error=False)
             wall_s = time.perf_counter() - started
 
-            metrics = out.document_metrics
-            summary = metrics.summary() if metrics is not None else {}
-            chunk_records = list(metrics.chunks) if metrics is not None else []
-            ev = evaluate_case(case.name, case.seed, out.result, case.gold)
+            ev = evaluate_case(
+                case.name, case.seed, out.result, case.gold, text=case.text)
+            raw_report = evaluate(out.result, case.gold)
             evals.append(ev)
             all_evals.append(ev)
+            raw_reports.append(raw_report)
+            all_raw_reports.append(raw_report)
 
-            rows.append({
+            row = {
                 "name": case.name,
                 "seed": case.seed,
-                "n_chunks": len(chunks),
-                "chunk_calls": int(summary.get("chunk_calls", 0) or 0),
-                "input_tokens": int(summary.get("input_tokens", 0) or 0),
-                "output_tokens": int(summary.get("output_tokens", 0) or 0),
-                "cached_input_tokens": int(
-                    summary.get("cached_input_tokens", 0) or 0),
-                "truncated_chunks": int(
-                    summary.get("truncated_chunks", 0) or 0),
-                "truncation_signals": int(
-                    summary.get("truncation_signals", 0) or 0),
-                "reworked_chunks": int(
-                    summary.get("reworked_chunks", 0) or 0),
-                "failed_chunks": sum(1 for c in chunk_records if c.error),
-                "max_chunk_input_tokens": max(
-                    (c.input_tokens for c in chunk_records), default=0),
-                "max_chunk_output_tokens": max(
-                    (c.output_tokens for c in chunk_records), default=0),
-                "max_chunk_units": max((c.n_units for c in chunks), default=0),
-                "max_chunk_chars": max(
-                    (len(c.text) for c in chunks), default=0),
-                "overlap_pairs": _chunk_pair_overlaps(chunks),
-                "wall_s": round(wall_s, 3),
+                **_doc_row(doc, chunks, out, wall_s),
                 "entity_relaxed_f1": ev.report.entity_relaxed.f1,
                 "entity_relaxed_prf": ev.report.entity_relaxed.as_dict(),
+                # 未归一化的原始口径也留下，报告双口径并列
+                "raw_entity_relaxed_f1": raw_report.entity_relaxed.f1,
+                "raw_entity_relaxed_prf": raw_report.entity_relaxed.as_dict(),
                 "entity_strict_f1": ev.report.entity_strict.f1,
                 "relation_f1": ev.report.relation.f1,
                 "relation_prf": ev.report.relation.as_dict(),
-            })
+                "relation_covered_prf": (
+                    ev.relation_covered.as_dict()
+                    if ev.relation_covered is not None else None),
+                "gold_covered_sentences": ev.gold_covered_sentences,
+                # S1：逐篇预测面落盘，FP 归因可审计（不只给聚合 PRF）
+                "predicted_entities": [
+                    {"type": e.type, "name": e.name,
+                     "normalized_name": normalize_entity_name_aliases(
+                         e.name, e.type)}
+                    for e in out.result.entities
+                ],
+                "predicted_relations": [
+                    {"head": rel.head, "predicate": rel.predicate,
+                     "tail": rel.tail}
+                    for rel in out.result.relations
+                ],
+            }
+            rows.append(row)
 
         agg = aggregate_cases(evals)
         mac = macro_average([e.report for e in evals])
+        raw_mac = macro_average(raw_reports)
+        covered = agg.get("relation_covered", {})
         rounds.append({
             "round": r + 1,
             "cases": rows,
             "micro": agg,
             "macro": mac,
+            "raw_macro": raw_mac,
+            "relation_covered_recall": covered.get("recall"),
+            "relation_covered_precision": covered.get("precision"),
             "chunk_calls_total": sum(row["chunk_calls"] for row in rows),
             "input_tokens_total": sum(row["input_tokens"] for row in rows),
             "output_tokens_total": sum(row["output_tokens"] for row in rows),
@@ -219,9 +318,15 @@ async def _run_corpus(
     def _round_value(round_, key):
         return round_["macro"].get(key, {}).get("f1", 0.0)
 
+    def _round_raw_value(round_, key):
+        return round_["raw_macro"].get(key, {}).get("f1", 0.0)
+
     entity_means = [_round_value(r, "entity_relaxed") for r in rounds]
+    raw_entity_means = [_round_raw_value(r, "entity_relaxed") for r in rounds]
     entity_stricts = [_round_value(r, "entity_strict") for r in rounds]
     relation_means = [_round_value(r, "relation") for r in rounds]
+    covered_recalls = [r["relation_covered_recall"] for r in rounds]
+    covered_precisions = [r["relation_covered_precision"] for r in rounds]
     n_docs = len(cases)
     n_rounds = len(rounds)
     all_rows = [row for r in rounds for row in r["cases"]]
@@ -235,9 +340,26 @@ async def _run_corpus(
         "rounds": rounds,
         "entity_macro_f1_mean": _mean(entity_means),
         "entity_macro_f1_worst": _min(entity_means),
+        "raw_entity_macro_f1_mean": _mean(raw_entity_means),
+        "raw_entity_macro_f1_worst": _min(raw_entity_means),
         "entity_strict_f1_mean": _mean(entity_stricts),
         "relation_f1_mean": _mean(relation_means),
         "relation_f1_worst": _min(relation_means),
+        "relation_covered_recall_mean": _mean(covered_recalls),
+        "relation_covered_recall_worst": _min(covered_recalls),
+        "relation_covered_precision_mean": _mean(covered_precisions),
+        "relation_covered_precision_worst": _min(covered_precisions),
+        "relation_covered_tp_total": sum(
+            row["relation_covered_prf"]["tp"] for row in all_rows
+            if row["relation_covered_prf"] is not None),
+        "relation_covered_fp_total": sum(
+            row["relation_covered_prf"]["fp"] for row in all_rows
+            if row["relation_covered_prf"] is not None),
+        "relation_covered_fn_total": sum(
+            row["relation_covered_prf"]["fn"] for row in all_rows
+            if row["relation_covered_prf"] is not None),
+        "gold_covered_sentences_total": sum(
+            row["gold_covered_sentences"] for row in all_rows),
         "relation_tp_total": sum(
             row["relation_prf"]["tp"] for row in all_rows),
         "relation_fp_total": sum(
@@ -261,6 +383,7 @@ async def _run_corpus(
             "entity_relaxed": pooled["entity_relaxed"],
             "entity_strict": pooled["entity_strict"],
             "relation": pooled["relation"],
+            "relation_covered": pooled.get("relation_covered"),
         },
         "chunk_calls_total_mean": _mean(
             [r["chunk_calls_total"] for r in rounds]),
@@ -339,27 +462,7 @@ async def _run_real_docs(
         started = time.perf_counter()
         out = await pipeline.run(doc, chunks, raise_on_chunk_error=False)
         wall_s = time.perf_counter() - started
-        metrics = out.document_metrics
-        summary = metrics.summary() if metrics is not None else {}
-        records = list(metrics.chunks) if metrics is not None else []
-        rows.append({
-            "id": doc.id,
-            "n_chunks": len(chunks),
-            "chunk_calls": int(summary.get("chunk_calls", 0) or 0),
-            "input_tokens": int(summary.get("input_tokens", 0) or 0),
-            "output_tokens": int(summary.get("output_tokens", 0) or 0),
-            "truncated_chunks": int(
-                summary.get("truncated_chunks", 0) or 0),
-            "truncation_signals": int(
-                summary.get("truncation_signals", 0) or 0),
-            "failed_chunks": sum(1 for c in records if c.error),
-            "max_chunk_input_tokens": max(
-                (c.input_tokens for c in records), default=0),
-            "max_chunk_output_tokens": max(
-                (c.output_tokens for c in records), default=0),
-            "max_chunk_units": max((c.n_units for c in chunks), default=0),
-            "wall_s": round(wall_s, 3),
-        })
+        rows.append({"id": doc.id, **_doc_row(doc, chunks, out, wall_s)})
     return {
         "documents": len(rows),
         "rows": rows,
@@ -371,18 +474,37 @@ async def _run_real_docs(
             (r["max_chunk_input_tokens"] for r in rows), default=0),
         "max_chunk_output_tokens": max(
             (r["max_chunk_output_tokens"] for r in rows), default=0),
+        "max_chunk_units": max(
+            (r["max_chunk_units"] for r in rows), default=0),
         "chunk_calls_total": sum(r["chunk_calls"] for r in rows),
     }
 
 
-def _paired_round_delta_pt(baseline: dict, candidate: dict,
-                           family: str) -> list[float]:
-    """逐轮配对差（百分点）：worst-of-N 用最坏的一轮，而不是两档各自最差值。"""
+def _round_aligned_delta_pt(baseline: dict, candidate: dict,
+                            family: str) -> list[float]:
+    """逐轮对齐差（百分点）：worst-of-N 取最坏一轮。
+
+    评审 r1 S5：两档是先后独立跑、无 seed，**不是配对检验**；这里只做
+    轮次对齐，供 worst-of-N 与“同一轮次最坏”展示，CI 在报告里按独立重复
+    （unpaired）计算。
+    """
     out = []
     for base_round, cand_round in zip(baseline["rounds"], candidate["rounds"]):
         base_f1 = base_round["macro"][family]["f1"]
         cand_f1 = cand_round["macro"][family]["f1"]
         out.append(round((cand_f1 - base_f1) * 100, 4))
+    return out
+
+
+def _round_aligned_covered_delta_pt(baseline: dict, candidate: dict,
+                                    field: str) -> list[float]:
+    out = []
+    for base_round, cand_round in zip(baseline["rounds"], candidate["rounds"]):
+        base_v = base_round.get(field)
+        cand_v = cand_round.get(field)
+        if base_v is None or cand_v is None:
+            continue
+        out.append(round((cand_v - base_v) * 100, 4))
     return out
 
 
@@ -435,7 +557,7 @@ async def main() -> int:
     ap.add_argument("--budgets", default="1500,3500")
     ap.add_argument("--overlap-units", type=int, default=DEFAULT_OVERLAP_UNITS)
     ap.add_argument("--concurrency", type=int, default=6)
-    ap.add_argument("--repeat", type=int, default=3)
+    ap.add_argument("--repeat", type=int, default=5)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--json-out", default="")
@@ -493,39 +615,91 @@ async def main() -> int:
 
     gate_baseline = {
         "budget": budgets[0],
-        "overlap_units": baseline["overlap_units"],
+        # 评审 r1 S3：基线 overlap 用**冻结常量**，不再两档都从同一个
+        # args.overlap_units 取值自证；候选档必须仍然等于 200。
+        "overlap_units": DEFAULT_OVERLAP_UNITS,
+        "overlap_pairs_min": baseline["overlap_pairs_min"],
         "chunk_calls": baseline["chunk_calls_total_mean"],
         "truncated_chunks": (
             baseline["truncated_chunks_max"]
             + base_real["truncated_chunks_total"]),
         "entity_macro_f1_mean": baseline["entity_macro_f1_mean"],
         "entity_macro_f1_worst": baseline["entity_macro_f1_worst"],
+        "relation_covered_recall_mean": baseline[
+            "relation_covered_recall_mean"],
+        "relation_covered_recall_worst": baseline[
+            "relation_covered_recall_worst"],
+        "relation_covered_precision_mean": baseline[
+            "relation_covered_precision_mean"],
+        "relation_covered_precision_worst": baseline[
+            "relation_covered_precision_worst"],
         "relation_f1_mean": baseline["relation_f1_mean"],
         "relation_f1_worst": baseline["relation_f1_worst"],
     }
     gate_candidate = {
         "budget": budgets[-1],
         "overlap_units": candidate["overlap_units"],
+        "overlap_pairs_min": candidate["overlap_pairs_min"],
         "chunk_calls": candidate["chunk_calls_total_mean"],
         "truncated_chunks": (
             candidate["truncated_chunks_max"]
             + cand_real["truncated_chunks_total"]),
         "entity_macro_f1_mean": candidate["entity_macro_f1_mean"],
         "entity_macro_f1_worst": candidate["entity_macro_f1_worst"],
+        "relation_covered_recall_mean": candidate[
+            "relation_covered_recall_mean"],
+        "relation_covered_recall_worst": candidate[
+            "relation_covered_recall_worst"],
+        "relation_covered_precision_mean": candidate[
+            "relation_covered_precision_mean"],
+        "relation_covered_precision_worst": candidate[
+            "relation_covered_precision_worst"],
         "relation_f1_mean": candidate["relation_f1_mean"],
         "relation_f1_worst": candidate["relation_f1_worst"],
     }
-    # worst-of-N 用逐轮配对差（更严格）：两档各自的最差值相减会漏掉
+    # worst-of-N 用逐轮对齐差（更严格）：两档各自的最差值相减会漏掉
     # “某一轮单独崩、另一轮恰好很好”的情况。
-    entity_paired = _paired_round_delta_pt(
+    entity_aligned = _round_aligned_delta_pt(
         baseline, candidate, "entity_relaxed")
-    relation_paired = _paired_round_delta_pt(
+    relation_full_aligned = _round_aligned_delta_pt(
         baseline, candidate, "relation")
-    gate_candidate["entity_macro_f1_worst_delta_pt"] = min(entity_paired)
-    gate_candidate["relation_f1_worst_delta_pt"] = min(relation_paired)
+    covered_recall_aligned = _round_aligned_covered_delta_pt(
+        baseline, candidate, "relation_covered_recall")
+    covered_precision_aligned = _round_aligned_covered_delta_pt(
+        baseline, candidate, "relation_covered_precision")
+    gate_candidate["entity_macro_f1_worst_delta_pt"] = min(entity_aligned)
+    gate_candidate["relation_f1_worst_delta_pt"] = min(relation_full_aligned)
+    gate_candidate["relation_covered_recall_worst_delta_pt"] = min(
+        covered_recall_aligned)
+    gate_candidate["relation_covered_precision_worst_delta_pt"] = min(
+        covered_precision_aligned)
     gate = evaluate_budget_gate(gate_baseline, gate_candidate)
     gate["real_docs_truncated_chunks"] = cand_real["truncated_chunks_total"]
     gate["stress_truncated_chunks"] = candidate["truncated_chunks_max"]
+    gate["real_doc_coverage"] = _real_doc_coverage(
+        cand_real, candidate_budget=budgets[-1])
+
+    delta_summary = {
+        "entity_macro_f1": _delta_summary_pt(entity_aligned),
+        "relation_full": _delta_summary_pt(relation_full_aligned),
+        "relation_covered_recall": _delta_summary_pt(covered_recall_aligned),
+        "relation_covered_precision": _delta_summary_pt(
+            covered_precision_aligned),
+        "note": ("mean/95% CI 按 N 轮独立重复计算（无 seed，unpaired）；"
+                 "min_pt 是 round-aligned worst-of-N，不冒充配对检验"),
+    }
+    real_doc_coverage = {
+        str(b): _real_doc_coverage(real_results[str(b)],
+                                   candidate_budget=budgets[-1])
+        for b in budgets
+    }
+    gate_frozen_overlap = {
+        "baseline_frozen_overlap_units": DEFAULT_OVERLAP_UNITS,
+        "candidate_config_overlap_units": candidate["overlap_units"],
+        "baseline_observed_overlap_pairs_min": baseline["overlap_pairs_min"],
+        "candidate_observed_overlap_pairs_min": candidate["overlap_pairs_min"],
+        "unchanged": (candidate["overlap_units"] == DEFAULT_OVERLAP_UNITS),
+    }
 
     residual = {
         str(b): relation_chunk_profile(
@@ -554,7 +728,8 @@ async def main() -> int:
             "repeat": args.repeat,
             "temperature": args.temperature if args.temperature >= 0 else None,
             "seed": None,
-            "note": ("temperature 固定；provider 不暴露 seed，用多轮重复报 mean/worst"),
+            "note": ("temperature 固定；provider 不暴露 seed，用多轮独立重复报 "
+                     "mean/95% CI/worst；两档先后独立跑，不是配对检验"),
         },
         "corpus": {
             "stress_path": args.gold,
@@ -574,23 +749,45 @@ async def main() -> int:
         },
         "thresholds": {
             "entity_macro_f1_max_drop_pt": 0.5,
-            "relation_f1": "mean/worst 都不下降",
+            "entity_macro_f1_note": "实体名按类型前缀标签归一化后比较",
+            "relation_gate": ("金标覆盖子集 recall mean/worst 不下降；"
+                              "precision mean/worst 跌幅 <=0.5pt"),
+            "relation_full_scope": ("全量口径（含 02 金标刻意未标注句面的 FP）"
+                                    "只列报，不参与放行"),
             "truncated_chunks": "候选档必须为 0（压力语料 + 真实文档）",
-            "overlap": "配置值与实际重叠行为都不变",
+            "overlap": "冻结基线 200 不变，且实际重叠对数 >0",
             "chunk_calls": "候选档必须下降",
         },
         "budgets": results,
         "real_docs": real_results,
+        "real_doc_coverage": real_doc_coverage,
         "calls_drop_pct": calls_drop_pct,
-        "paired_round_deltas_pt": {
-            "entity_macro_f1": entity_paired,
-            "relation_f1": relation_paired,
-            "note": "候选减基线，逐轮配对；worst-of-N = 本数组最小值",
+        "delta_summary": delta_summary,
+        "round_aligned_deltas_pt": {
+            "entity_macro_f1": entity_aligned,
+            "relation_full": relation_full_aligned,
+            "relation_covered_recall": covered_recall_aligned,
+            "relation_covered_precision": covered_precision_aligned,
+            "note": ("候选减基线，仅按轮次对齐；两档独立跑、无 seed，"
+                     "不构成配对检验"),
         },
+        "overlap_frozen_baseline": gate_frozen_overlap,
         "residual_cross_chunk": residual,
         "safety_margin": safety,
         "gate": gate,
-        "cost_note": "只记录 provider 真实 token；金额以账单为准，脚本不估算价格",
+        "gold_gap": {
+            "note": ("02 压力集是刻意 gold 子集：3500 档读到更多真实句面时，"
+                     "未标注的涉案人/法定代表人关系会被记全量 FP；本单不改 "
+                     "02 金标，建议后续单独开工单扩标。"),
+            "full_relation_fp_increase": (
+                int(candidate["relation_fp_total"] or 0)
+                - int(baseline["relation_fp_total"] or 0)),
+            "full_entity_fp_increase": (
+                int(candidate["entity_fp_total"] or 0)
+                - int(baseline["entity_fp_total"] or 0)),
+        },
+        "cost_note": ("只记录 provider 真实 token；金额以账单为准。"
+                      "token 为抽取请求本身，不含本地评测计算开销"),
     }
     if args.json_out:
         _write_report(args.json_out, payload)

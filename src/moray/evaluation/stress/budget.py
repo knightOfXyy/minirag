@@ -7,10 +7,14 @@
   并单独统计「头尾首次出现相隔超过一个块预算」的文档级远距类别。残余项
   逐条列出，供报告如实披露；本单明确不处理它们，也不能静默丢弃。
 * :func:`evaluate_budget_gate` —— 把 1500/3500 两档的指标塞进同一套门槛：
-  实体 macro-F1 的 mean/worst 跌幅都 ≤0.5pt、关系 F1 的 mean/worst 都不下降、
-  候选档截断块为 0、overlap 配置不变、单文档调用数下降。任一不满足即
-  ``passed=False``，并逐项给出失败原因——门槛写在代码里，不能靠报告手写
-  一句“达标”放行。
+  实体（类型前缀标签归一化后）macro-F1 的 mean/worst 跌幅都 ≤0.5pt、
+  **关系「金标覆盖子集」的 recall mean/worst 不下降、precision mean/worst
+  跌幅 ≤0.5pt**、候选档截断块为 0、overlap 配置不变且实际仍发生重叠、
+  单文档调用数下降。任一不满足即 ``passed=False``，并逐项给出失败原因——
+  门槛写在代码里，不能靠报告手写一句“达标”放行。
+
+  关系的**全量口径**（含 02 金标刻意未标注句面上的 FP）只作为 ``*_full_*``
+  字段列报，不参与放行；两个口径在报告里必须并列，不能只报修正后的数。
 
 口径说明（与工单 02/01 对齐）：
 
@@ -27,9 +31,10 @@ from typing import Any, Iterable
 
 from ...extraction.chunking import Chunker, estimate_tokens
 
-# 实体 macro-F1 允许的最大跌幅（百分点）。写死在代码里，避免报告/工具
-# 各写一份、评审时被悄悄放宽。
+# 实体 macro-F1 与关系覆盖子集 precision 允许的最大跌幅（百分点）。
+# 写死在代码里，避免报告/工具各写一份、评审时被悄悄放宽。
 MAX_ENTITY_F1_DROP_PT = 0.5
+MAX_RELATION_PRECISION_DROP_PT = 0.5
 
 
 def _occurrences(text: str, needle: str) -> list[int]:
@@ -67,17 +72,21 @@ def relation_chunk_profile(
     ``cases`` 需要具备 ``name``/``text``/``relations`` 三个属性，关系元素
     具备 ``head``/``predicate``/``tail``（与工单 02 的 ``StressGoldCase``
     同形；测试里用轻量 dataclass 也可以）。
+
+    评审 r1 S4：``cases`` 声明为 ``Iterable`` 就必须只消费一次（生成器也能用），
+    且块按**序号**归属，不能拿可能重名的 ``case.name`` 当 dict key 互相覆盖。
     """
-    chunks_by_case = {
-        case.name: Chunker(max_units, overlap_units).chunk_text(case.text)
-        for case in cases
-    }
+    case_list = list(cases)
+    chunks_by_index = [
+        Chunker(max_units, overlap_units).chunk_text(case.text)
+        for case in case_list
+    ]
     total = co_chunk = far_first = 0
     residual: list[dict[str, Any]] = []
     far_examples: list[dict[str, Any]] = []
 
-    for case in cases:
-        chunks = chunks_by_case[case.name]
+    for index, case in enumerate(case_list):
+        chunks = chunks_by_index[index]
         # 头/尾出现位置在整篇里是固定的，逐关系找即可（纯离线，规模有限）。
         for relation in case.relations:
             total += 1
@@ -126,7 +135,7 @@ def relation_chunk_profile(
 
     return {
         "budget": {"max_units": max_units, "overlap_units": overlap_units},
-        "documents": len(chunks_by_case),
+        "documents": len(case_list),
         "total_relations": total,
         "co_chunk_relations": co_chunk,
         "cross_chunk_relations": total - co_chunk,
@@ -143,6 +152,14 @@ def relation_chunk_profile(
     }
 
 
+_REQUIRED_GATE_KEYS = (
+    "budget", "overlap_units", "overlap_pairs_min", "chunk_calls",
+    "truncated_chunks", "entity_macro_f1_mean", "entity_macro_f1_worst",
+    "relation_covered_recall_mean", "relation_covered_recall_worst",
+    "relation_covered_precision_mean", "relation_covered_precision_worst",
+)
+
+
 def evaluate_budget_gate(
     baseline: dict[str, Any],
     candidate: dict[str, Any],
@@ -151,46 +168,82 @@ def evaluate_budget_gate(
 ) -> dict[str, Any]:
     """按工单 04 的放量门槛判定候选块预算能否切换默认值。
 
-    ``baseline``/``candidate`` 至少包含：
-    ``budget``、``overlap_units``、``chunk_calls``、``truncated_chunks``、
-    ``entity_macro_f1_mean``、``entity_macro_f1_worst``、
-    ``relation_f1_mean``、``relation_f1_worst``。
-    指标是 0–1 的比例，报告里的“百分点”由本函数换算。
+    放行条件（全部满足）：
+    * 实体（类型前缀标签归一化后）macro-F1 的 mean/worst 跌幅 ≤0.5pt；
+    * 关系「金标覆盖子集」recall 的 mean/worst 不下降；
+    * 关系「金标覆盖子集」precision 的 mean/worst 跌幅 ≤0.5pt；
+    * 候选档截断块为 0；
+    * overlap 配置不变（冻结基线，不接受调用方自证）且实际仍有重叠；
+    * 单文档调用数下降。
 
-    ``candidate`` 如显式提供 ``entity_macro_f1_worst_delta_pt`` /
-    ``relation_f1_worst_delta_pt``（逐轮配对差的最坏值），优先使用它；
-    否则退回“两档各自最差值相减”。配对差更严格，A/B 工具始终显式传入。
+    关系的**全量口径**只以 ``relation_full_*`` 列报，不参与放行。指标是
+    0–1 的比例，报告里的“百分点”由本函数换算。
+
+    ``candidate`` 如显式提供 ``entity_macro_f1_worst_delta_pt`` 等逐轮
+    最坏差，优先使用它；否则退回“两档各自最差值相减”。门槛参数只能收紧，
+    不能放宽（``max_entity_drop_pt > 0.5`` 直接报错）。
     """
+    if max_entity_drop_pt > MAX_ENTITY_F1_DROP_PT:
+        raise ValueError(
+            f"max_entity_drop_pt={max_entity_drop_pt} 超过硬上限 "
+            f"{MAX_ENTITY_F1_DROP_PT}；门槛不可放宽")
+    missing = [key for key in _REQUIRED_GATE_KEYS
+               if key not in baseline or key not in candidate]
+    if missing:
+        raise ValueError(f"gate 缺少字段: {sorted(set(missing))}")
+
     def _pt(before: float, after: float) -> float:
         return round((after - before) * 100, 4)
 
-    entity_mean_delta = _pt(
-        baseline["entity_macro_f1_mean"], candidate["entity_macro_f1_mean"])
-    entity_worst_delta = candidate.get("entity_macro_f1_worst_delta_pt")
-    if entity_worst_delta is None:
-        entity_worst_delta = _pt(
-            baseline["entity_macro_f1_worst"],
-            candidate["entity_macro_f1_worst"])
-    relation_mean_delta = _pt(
-        baseline["relation_f1_mean"], candidate["relation_f1_mean"])
-    relation_worst_delta = candidate.get("relation_f1_worst_delta_pt")
-    if relation_worst_delta is None:
-        relation_worst_delta = _pt(
-            baseline["relation_f1_worst"], candidate["relation_f1_worst"])
-    entity_worst_delta = round(entity_worst_delta, 4)
-    relation_worst_delta = round(relation_worst_delta, 4)
+    def _delta(low_key: str, high_key: str,
+               explicit_key: str | None = None) -> float:
+        if explicit_key and candidate.get(explicit_key) is not None:
+            return round(candidate[explicit_key], 4)
+        return _pt(baseline[low_key], candidate[high_key])
+
+    entity_mean_delta = _delta(
+        "entity_macro_f1_mean", "entity_macro_f1_mean")
+    entity_worst_delta = _delta(
+        "entity_macro_f1_worst", "entity_macro_f1_worst",
+        "entity_macro_f1_worst_delta_pt")
+    covered_recall_mean_delta = _delta(
+        "relation_covered_recall_mean", "relation_covered_recall_mean")
+    covered_recall_worst_delta = _delta(
+        "relation_covered_recall_worst", "relation_covered_recall_worst",
+        "relation_covered_recall_worst_delta_pt")
+    covered_precision_mean_delta = _delta(
+        "relation_covered_precision_mean", "relation_covered_precision_mean")
+    covered_precision_worst_delta = _delta(
+        "relation_covered_precision_worst",
+        "relation_covered_precision_worst",
+        "relation_covered_precision_worst_delta_pt")
+
+    # 全量口径：只在双方都提供时列报，不参与放行。
+    full_mean_delta = full_worst_delta = None
+    if ("relation_f1_mean" in baseline and "relation_f1_mean" in candidate):
+        full_mean_delta = _pt(
+            baseline["relation_f1_mean"], candidate["relation_f1_mean"])
+        full_worst_delta = _delta(
+            "relation_f1_worst", "relation_f1_worst",
+            "relation_f1_worst_delta_pt")
 
     overlap_unchanged = (
-        candidate.get("overlap_units") == baseline.get("overlap_units"))
+        candidate["overlap_units"] == baseline["overlap_units"])
+    overlap_observed = int(candidate["overlap_pairs_min"]) > 0
     checks = {
         "entity_mean_within_0_5pt": entity_mean_delta >= -max_entity_drop_pt,
         "entity_worst_within_0_5pt": entity_worst_delta >= -max_entity_drop_pt,
-        "relation_mean_not_lower": relation_mean_delta >= 0.0,
-        "relation_worst_not_lower": relation_worst_delta >= 0.0,
-        "truncated_chunks_zero": int(candidate.get("truncated_chunks", 0)) == 0,
+        "relation_covered_recall_mean_not_lower": covered_recall_mean_delta >= 0.0,
+        "relation_covered_recall_worst_not_lower": covered_recall_worst_delta >= 0.0,
+        "relation_covered_precision_mean_within_0_5pt": (
+            covered_precision_mean_delta >= -MAX_RELATION_PRECISION_DROP_PT),
+        "relation_covered_precision_worst_within_0_5pt": (
+            covered_precision_worst_delta >= -MAX_RELATION_PRECISION_DROP_PT),
+        "truncated_chunks_zero": int(candidate["truncated_chunks"]) == 0,
         "overlap_unchanged": overlap_unchanged,
+        "overlap_observed": overlap_observed,
         "chunk_calls_decreased": (
-            candidate.get("chunk_calls", 0) < baseline.get("chunk_calls", 0)),
+            candidate["chunk_calls"] < baseline["chunk_calls"]),
     }
     failures = [name for name, ok in checks.items() if not ok]
     return {
@@ -199,10 +252,17 @@ def evaluate_budget_gate(
         "failures": failures,
         "entity_macro_f1_mean_delta_pt": entity_mean_delta,
         "entity_macro_f1_worst_delta_pt": entity_worst_delta,
-        "relation_f1_mean_delta_pt": relation_mean_delta,
-        "relation_f1_worst_delta_pt": relation_worst_delta,
+        "relation_covered_recall_mean_delta_pt": covered_recall_mean_delta,
+        "relation_covered_recall_worst_delta_pt": covered_recall_worst_delta,
+        "relation_covered_precision_mean_delta_pt": covered_precision_mean_delta,
+        "relation_covered_precision_worst_delta_pt": covered_precision_worst_delta,
+        # 全量口径：与上面并列列报，但不参与 checks。
+        "relation_full_mean_delta_pt": full_mean_delta,
+        "relation_full_worst_delta_pt": full_worst_delta,
         "overlap_unchanged": overlap_unchanged,
+        "overlap_observed": overlap_observed,
         "max_entity_drop_pt": max_entity_drop_pt,
+        "max_relation_precision_drop_pt": MAX_RELATION_PRECISION_DROP_PT,
         "budgets": {
             "baseline": baseline.get("budget"),
             "candidate": candidate.get("budget"),
