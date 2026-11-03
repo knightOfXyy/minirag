@@ -27,3 +27,5 @@
 | L15 | `l15_evaluation.py` | 评测收官：黄金集（tagged 语料 + 关系 sidecar）、严格/宽松实体匹配与关系三元组 P/R/F1、宏/微平均、baseline→improved 可复现对比（`--live` 评 LLM），CI/Dockerfile/部署文档 |
 | 进阶 | `multiworker_demo.py` | 多 worker 机制：租约（locked_by/locked_at/expires_at）、心跳续租、过期接管、优雅停机、进程内并发；生产入口 `python -m moray.jobs.worker` |
 | 进阶 | `dynamic_domain_config.py` | 动态领域配置（PostgreSQL 配置中心）：`domain_configs` 表热更实体类型/属性规格、按版本缓存解析、动态结构化模型、必填/类型/枚举属性校验；CLI `moray.config_center.cli` |
+| 进阶 | `gen_stress_gold.py` | 确定性压力案卷黄金语料：固定种子生成超长合成案卷（正文 >5× 生产块预算）+ 带类型实体清单/关系标准答案，正文未出现的实体与头尾不可定位的关系自动剔除，产物落 `data/gold/stress/`（离线回归资产） |
+| 进阶 | `eval_stress_gold.py` | 压力语料分块 A/B：确定性规则抽取路径按多组 (块预算/重叠) 复跑同一语料，输出实体 strict/relaxed + 按类型、关系三元组的 P/R/F1 并落 `eval_grid_report.json`（零 LLM 请求） |

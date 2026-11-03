@@ -1,0 +1,918 @@
+{
+  "seed": 20261103,
+  "name": "stress_seed20261103",
+  "entities": [
+    {
+      "name": "张海燕",
+      "type": "PER"
+    },
+    {
+      "name": "杨俊杰",
+      "type": "PER"
+    },
+    {
+      "name": "赵海燕",
+      "type": "PER"
+    },
+    {
+      "name": "李思远",
+      "type": "PER"
+    },
+    {
+      "name": "周思远",
+      "type": "PER"
+    },
+    {
+      "name": "谢思远",
+      "type": "PER"
+    },
+    {
+      "name": "刘俊杰",
+      "type": "PER"
+    },
+    {
+      "name": "高丽娟",
+      "type": "PER"
+    },
+    {
+      "name": "徐思远",
+      "type": "PER"
+    },
+    {
+      "name": "杨立军",
+      "type": "PER"
+    },
+    {
+      "name": "徐小雪",
+      "type": "PER"
+    },
+    {
+      "name": "谢立军",
+      "type": "PER"
+    },
+    {
+      "name": "黄思远",
+      "type": "PER"
+    },
+    {
+      "name": "刘建国",
+      "type": "PER"
+    },
+    {
+      "name": "张桂芳",
+      "type": "PER"
+    },
+    {
+      "name": "赵思远",
+      "type": "PER"
+    },
+    {
+      "name": "林德海",
+      "type": "PER"
+    },
+    {
+      "name": "刘春梅",
+      "type": "PER"
+    },
+    {
+      "name": "孙国庆",
+      "type": "PER"
+    },
+    {
+      "name": "张浩然",
+      "type": "PER"
+    },
+    {
+      "name": "陈丽娟",
+      "type": "PER"
+    },
+    {
+      "name": "马桂芳",
+      "type": "PER"
+    },
+    {
+      "name": "周国庆",
+      "type": "PER"
+    },
+    {
+      "name": "马志强",
+      "type": "PER"
+    },
+    {
+      "name": "徐丽娟",
+      "type": "PER"
+    },
+    {
+      "name": "朱德海",
+      "type": "PER"
+    },
+    {
+      "name": "韩浩然",
+      "type": "PER"
+    },
+    {
+      "name": "王浩然",
+      "type": "PER"
+    },
+    {
+      "name": "杨国庆",
+      "type": "PER"
+    },
+    {
+      "name": "冯海燕",
+      "type": "PER"
+    },
+    {
+      "name": "于思远",
+      "type": "PER"
+    },
+    {
+      "name": "刘思远",
+      "type": "PER"
+    },
+    {
+      "name": "刘永刚",
+      "type": "PER"
+    },
+    {
+      "name": "萧海燕",
+      "type": "PER"
+    },
+    {
+      "name": "董国庆",
+      "type": "PER"
+    },
+    {
+      "name": "冯国庆",
+      "type": "PER"
+    },
+    {
+      "name": "赵俊杰",
+      "type": "PER"
+    },
+    {
+      "name": "萧思远",
+      "type": "PER"
+    },
+    {
+      "name": "朱国庆",
+      "type": "PER"
+    },
+    {
+      "name": "孙晓峰",
+      "type": "PER"
+    },
+    {
+      "name": "锦江华诚物流有限责任公司",
+      "type": "ORG"
+    },
+    {
+      "name": "云岭金鼎运输有限公司",
+      "type": "ORG"
+    },
+    {
+      "name": "桥南顺达机械制造有限公司",
+      "type": "ORG"
+    },
+    {
+      "name": "桥南顺达运输有限公司",
+      "type": "ORG"
+    },
+    {
+      "name": "云岭金鼎实业集团有限公司",
+      "type": "ORG"
+    },
+    {
+      "name": "东港联合实业集团有限公司",
+      "type": "ORG"
+    },
+    {
+      "name": "城南信达机械制造有限公司",
+      "type": "ORG"
+    },
+    {
+      "name": "裕民广泰建筑工程有限公司",
+      "type": "ORG"
+    },
+    {
+      "name": "裕民广泰运输有限公司",
+      "type": "ORG"
+    },
+    {
+      "name": "西江盛通实业集团有限公司",
+      "type": "ORG"
+    },
+    {
+      "name": "临江宏远商贸有限公司",
+      "type": "ORG"
+    },
+    {
+      "name": "云岭金鼎商贸有限公司",
+      "type": "ORG"
+    },
+    {
+      "name": "西江盛通运输有限公司",
+      "type": "ORG"
+    },
+    {
+      "name": "裕民广泰商贸有限公司",
+      "type": "ORG"
+    },
+    {
+      "name": "桥南顺达建筑工程有限公司",
+      "type": "ORG"
+    },
+    {
+      "name": "西江盛通物流有限责任公司",
+      "type": "ORG"
+    },
+    {
+      "name": "云岭金鼎物流有限责任公司",
+      "type": "ORG"
+    },
+    {
+      "name": "北辰恒泰商贸有限公司",
+      "type": "ORG"
+    },
+    {
+      "name": "临江区",
+      "type": "LOC"
+    },
+    {
+      "name": "桥南区",
+      "type": "LOC"
+    },
+    {
+      "name": "云岭市",
+      "type": "LOC"
+    },
+    {
+      "name": "东港新区",
+      "type": "LOC"
+    },
+    {
+      "name": "西江县城",
+      "type": "LOC"
+    },
+    {
+      "name": "北辰街道",
+      "type": "LOC"
+    },
+    {
+      "name": "昌平市",
+      "type": "LOC"
+    },
+    {
+      "name": "江景路",
+      "type": "LOC"
+    },
+    {
+      "name": "海丰大道",
+      "type": "LOC"
+    },
+    {
+      "name": "锦城巷",
+      "type": "LOC"
+    },
+    {
+      "name": "望江路",
+      "type": "LOC"
+    },
+    {
+      "name": "青云镇",
+      "type": "LOC"
+    },
+    {
+      "name": "白石桥",
+      "type": "LOC"
+    },
+    {
+      "name": "铜官山区",
+      "type": "LOC"
+    },
+    {
+      "name": "玉泉街道",
+      "type": "LOC"
+    },
+    {
+      "name": "A2024-001",
+      "type": "EVENT"
+    },
+    {
+      "name": "A2024-002",
+      "type": "EVENT"
+    },
+    {
+      "name": "A2024-003",
+      "type": "EVENT"
+    },
+    {
+      "name": "A2024-004",
+      "type": "EVENT"
+    },
+    {
+      "name": "A2024-005",
+      "type": "EVENT"
+    },
+    {
+      "name": "A2024-006",
+      "type": "EVENT"
+    },
+    {
+      "name": "A2024-007",
+      "type": "EVENT"
+    },
+    {
+      "name": "A2024-008",
+      "type": "EVENT"
+    },
+    {
+      "name": "液压剪",
+      "type": "MISC"
+    },
+    {
+      "name": "改装电动车",
+      "type": "MISC"
+    },
+    {
+      "name": "伪造公章",
+      "type": "MISC"
+    },
+    {
+      "name": "现金赃款",
+      "type": "MISC"
+    },
+    {
+      "name": "作案手机",
+      "type": "MISC"
+    },
+    {
+      "name": "手套鞋印",
+      "type": "MISC"
+    },
+    {
+      "name": "监控视频片段",
+      "type": "MISC"
+    },
+    {
+      "name": "银行流水单",
+      "type": "MISC"
+    },
+    {
+      "name": "出入门禁记录",
+      "type": "MISC"
+    }
+  ],
+  "relations": [
+    {
+      "head": "张海燕",
+      "predicate": "供职于",
+      "tail": "锦江华诚物流有限责任公司"
+    },
+    {
+      "head": "张海燕",
+      "predicate": "户籍在",
+      "tail": "昌平市"
+    },
+    {
+      "head": "杨俊杰",
+      "predicate": "供职于",
+      "tail": "云岭金鼎运输有限公司"
+    },
+    {
+      "head": "杨俊杰",
+      "predicate": "户籍在",
+      "tail": "北辰街道"
+    },
+    {
+      "head": "赵海燕",
+      "predicate": "供职于",
+      "tail": "桥南顺达机械制造有限公司"
+    },
+    {
+      "head": "赵海燕",
+      "predicate": "户籍在",
+      "tail": "桥南区"
+    },
+    {
+      "head": "李思远",
+      "predicate": "供职于",
+      "tail": "桥南顺达运输有限公司"
+    },
+    {
+      "head": "李思远",
+      "predicate": "户籍在",
+      "tail": "昌平市"
+    },
+    {
+      "head": "周思远",
+      "predicate": "供职于",
+      "tail": "云岭金鼎实业集团有限公司"
+    },
+    {
+      "head": "周思远",
+      "predicate": "户籍在",
+      "tail": "昌平市"
+    },
+    {
+      "head": "谢思远",
+      "predicate": "供职于",
+      "tail": "东港联合实业集团有限公司"
+    },
+    {
+      "head": "谢思远",
+      "predicate": "户籍在",
+      "tail": "海丰大道"
+    },
+    {
+      "head": "刘俊杰",
+      "predicate": "供职于",
+      "tail": "城南信达机械制造有限公司"
+    },
+    {
+      "head": "刘俊杰",
+      "predicate": "户籍在",
+      "tail": "云岭市"
+    },
+    {
+      "head": "高丽娟",
+      "predicate": "供职于",
+      "tail": "裕民广泰建筑工程有限公司"
+    },
+    {
+      "head": "高丽娟",
+      "predicate": "户籍在",
+      "tail": "临江区"
+    },
+    {
+      "head": "徐思远",
+      "predicate": "供职于",
+      "tail": "裕民广泰运输有限公司"
+    },
+    {
+      "head": "徐思远",
+      "predicate": "户籍在",
+      "tail": "东港新区"
+    },
+    {
+      "head": "杨立军",
+      "predicate": "供职于",
+      "tail": "西江盛通实业集团有限公司"
+    },
+    {
+      "head": "杨立军",
+      "predicate": "户籍在",
+      "tail": "海丰大道"
+    },
+    {
+      "head": "徐小雪",
+      "predicate": "供职于",
+      "tail": "临江宏远商贸有限公司"
+    },
+    {
+      "head": "徐小雪",
+      "predicate": "户籍在",
+      "tail": "海丰大道"
+    },
+    {
+      "head": "谢立军",
+      "predicate": "供职于",
+      "tail": "云岭金鼎商贸有限公司"
+    },
+    {
+      "head": "谢立军",
+      "predicate": "户籍在",
+      "tail": "玉泉街道"
+    },
+    {
+      "head": "黄思远",
+      "predicate": "供职于",
+      "tail": "西江盛通运输有限公司"
+    },
+    {
+      "head": "黄思远",
+      "predicate": "户籍在",
+      "tail": "北辰街道"
+    },
+    {
+      "head": "刘建国",
+      "predicate": "供职于",
+      "tail": "裕民广泰商贸有限公司"
+    },
+    {
+      "head": "刘建国",
+      "predicate": "户籍在",
+      "tail": "桥南区"
+    },
+    {
+      "head": "张桂芳",
+      "predicate": "供职于",
+      "tail": "桥南顺达建筑工程有限公司"
+    },
+    {
+      "head": "张桂芳",
+      "predicate": "户籍在",
+      "tail": "桥南区"
+    },
+    {
+      "head": "赵思远",
+      "predicate": "供职于",
+      "tail": "西江盛通物流有限责任公司"
+    },
+    {
+      "head": "赵思远",
+      "predicate": "户籍在",
+      "tail": "昌平市"
+    },
+    {
+      "head": "林德海",
+      "predicate": "供职于",
+      "tail": "云岭金鼎物流有限责任公司"
+    },
+    {
+      "head": "林德海",
+      "predicate": "户籍在",
+      "tail": "江景路"
+    },
+    {
+      "head": "刘春梅",
+      "predicate": "供职于",
+      "tail": "北辰恒泰商贸有限公司"
+    },
+    {
+      "head": "刘春梅",
+      "predicate": "户籍在",
+      "tail": "江景路"
+    },
+    {
+      "head": "孙国庆",
+      "predicate": "供职于",
+      "tail": "锦江华诚物流有限责任公司"
+    },
+    {
+      "head": "孙国庆",
+      "predicate": "户籍在",
+      "tail": "江景路"
+    },
+    {
+      "head": "张浩然",
+      "predicate": "供职于",
+      "tail": "云岭金鼎运输有限公司"
+    },
+    {
+      "head": "张浩然",
+      "predicate": "户籍在",
+      "tail": "临江区"
+    },
+    {
+      "head": "陈丽娟",
+      "predicate": "供职于",
+      "tail": "桥南顺达机械制造有限公司"
+    },
+    {
+      "head": "陈丽娟",
+      "predicate": "户籍在",
+      "tail": "云岭市"
+    },
+    {
+      "head": "马桂芳",
+      "predicate": "供职于",
+      "tail": "桥南顺达运输有限公司"
+    },
+    {
+      "head": "马桂芳",
+      "predicate": "户籍在",
+      "tail": "桥南区"
+    },
+    {
+      "head": "周国庆",
+      "predicate": "供职于",
+      "tail": "云岭金鼎实业集团有限公司"
+    },
+    {
+      "head": "周国庆",
+      "predicate": "户籍在",
+      "tail": "昌平市"
+    },
+    {
+      "head": "马志强",
+      "predicate": "供职于",
+      "tail": "东港联合实业集团有限公司"
+    },
+    {
+      "head": "马志强",
+      "predicate": "户籍在",
+      "tail": "北辰街道"
+    },
+    {
+      "head": "徐丽娟",
+      "predicate": "供职于",
+      "tail": "城南信达机械制造有限公司"
+    },
+    {
+      "head": "徐丽娟",
+      "predicate": "户籍在",
+      "tail": "玉泉街道"
+    },
+    {
+      "head": "朱德海",
+      "predicate": "供职于",
+      "tail": "裕民广泰建筑工程有限公司"
+    },
+    {
+      "head": "朱德海",
+      "predicate": "户籍在",
+      "tail": "江景路"
+    },
+    {
+      "head": "韩浩然",
+      "predicate": "供职于",
+      "tail": "裕民广泰运输有限公司"
+    },
+    {
+      "head": "韩浩然",
+      "predicate": "户籍在",
+      "tail": "东港新区"
+    },
+    {
+      "head": "王浩然",
+      "predicate": "供职于",
+      "tail": "西江盛通实业集团有限公司"
+    },
+    {
+      "head": "王浩然",
+      "predicate": "户籍在",
+      "tail": "西江县城"
+    },
+    {
+      "head": "杨国庆",
+      "predicate": "供职于",
+      "tail": "临江宏远商贸有限公司"
+    },
+    {
+      "head": "杨国庆",
+      "predicate": "户籍在",
+      "tail": "玉泉街道"
+    },
+    {
+      "head": "冯海燕",
+      "predicate": "供职于",
+      "tail": "云岭金鼎商贸有限公司"
+    },
+    {
+      "head": "冯海燕",
+      "predicate": "户籍在",
+      "tail": "云岭市"
+    },
+    {
+      "head": "于思远",
+      "predicate": "供职于",
+      "tail": "西江盛通运输有限公司"
+    },
+    {
+      "head": "于思远",
+      "predicate": "户籍在",
+      "tail": "临江区"
+    },
+    {
+      "head": "刘思远",
+      "predicate": "供职于",
+      "tail": "裕民广泰商贸有限公司"
+    },
+    {
+      "head": "刘思远",
+      "predicate": "户籍在",
+      "tail": "海丰大道"
+    },
+    {
+      "head": "刘永刚",
+      "predicate": "供职于",
+      "tail": "桥南顺达建筑工程有限公司"
+    },
+    {
+      "head": "刘永刚",
+      "predicate": "户籍在",
+      "tail": "云岭市"
+    },
+    {
+      "head": "萧海燕",
+      "predicate": "供职于",
+      "tail": "西江盛通物流有限责任公司"
+    },
+    {
+      "head": "萧海燕",
+      "predicate": "户籍在",
+      "tail": "玉泉街道"
+    },
+    {
+      "head": "董国庆",
+      "predicate": "供职于",
+      "tail": "云岭金鼎物流有限责任公司"
+    },
+    {
+      "head": "董国庆",
+      "predicate": "户籍在",
+      "tail": "桥南区"
+    },
+    {
+      "head": "冯国庆",
+      "predicate": "供职于",
+      "tail": "北辰恒泰商贸有限公司"
+    },
+    {
+      "head": "冯国庆",
+      "predicate": "户籍在",
+      "tail": "临江区"
+    },
+    {
+      "head": "锦江华诚物流有限责任公司",
+      "predicate": "注册地位于",
+      "tail": "桥南区"
+    },
+    {
+      "head": "云岭金鼎运输有限公司",
+      "predicate": "注册地位于",
+      "tail": "江景路"
+    },
+    {
+      "head": "桥南顺达机械制造有限公司",
+      "predicate": "注册地位于",
+      "tail": "北辰街道"
+    },
+    {
+      "head": "桥南顺达运输有限公司",
+      "predicate": "注册地位于",
+      "tail": "北辰街道"
+    },
+    {
+      "head": "云岭金鼎实业集团有限公司",
+      "predicate": "注册地位于",
+      "tail": "北辰街道"
+    },
+    {
+      "head": "东港联合实业集团有限公司",
+      "predicate": "注册地位于",
+      "tail": "江景路"
+    },
+    {
+      "head": "城南信达机械制造有限公司",
+      "predicate": "注册地位于",
+      "tail": "玉泉街道"
+    },
+    {
+      "head": "裕民广泰建筑工程有限公司",
+      "predicate": "注册地位于",
+      "tail": "锦城巷"
+    },
+    {
+      "head": "裕民广泰运输有限公司",
+      "predicate": "注册地位于",
+      "tail": "海丰大道"
+    },
+    {
+      "head": "西江盛通实业集团有限公司",
+      "predicate": "注册地位于",
+      "tail": "玉泉街道"
+    },
+    {
+      "head": "临江宏远商贸有限公司",
+      "predicate": "注册地位于",
+      "tail": "玉泉街道"
+    },
+    {
+      "head": "云岭金鼎商贸有限公司",
+      "predicate": "注册地位于",
+      "tail": "海丰大道"
+    },
+    {
+      "head": "西江盛通运输有限公司",
+      "predicate": "注册地位于",
+      "tail": "云岭市"
+    },
+    {
+      "head": "裕民广泰商贸有限公司",
+      "predicate": "注册地位于",
+      "tail": "玉泉街道"
+    },
+    {
+      "head": "桥南顺达建筑工程有限公司",
+      "predicate": "注册地位于",
+      "tail": "北辰街道"
+    },
+    {
+      "head": "西江盛通物流有限责任公司",
+      "predicate": "注册地位于",
+      "tail": "西江县城"
+    },
+    {
+      "head": "云岭金鼎物流有限责任公司",
+      "predicate": "注册地位于",
+      "tail": "临江区"
+    },
+    {
+      "head": "北辰恒泰商贸有限公司",
+      "predicate": "注册地位于",
+      "tail": "江景路"
+    },
+    {
+      "head": "赵俊杰",
+      "predicate": "关联物证",
+      "tail": "手套鞋印"
+    },
+    {
+      "head": "萧思远",
+      "predicate": "关联物证",
+      "tail": "监控视频片段"
+    },
+    {
+      "head": "朱国庆",
+      "predicate": "关联物证",
+      "tail": "银行流水单"
+    },
+    {
+      "head": "孙晓峰",
+      "predicate": "关联物证",
+      "tail": "出入门禁记录"
+    },
+    {
+      "head": "孙国庆",
+      "predicate": "涉案关联",
+      "tail": "A2024-001"
+    },
+    {
+      "head": "杨俊杰",
+      "predicate": "涉案关联",
+      "tail": "A2024-002"
+    },
+    {
+      "head": "林德海",
+      "predicate": "涉案关联",
+      "tail": "A2024-003"
+    },
+    {
+      "head": "刘思远",
+      "predicate": "涉案关联",
+      "tail": "A2024-004"
+    },
+    {
+      "head": "杨立军",
+      "predicate": "涉案关联",
+      "tail": "A2024-005"
+    },
+    {
+      "head": "陈丽娟",
+      "predicate": "涉案关联",
+      "tail": "A2024-006"
+    },
+    {
+      "head": "徐丽娟",
+      "predicate": "涉案关联",
+      "tail": "A2024-007"
+    },
+    {
+      "head": "刘春梅",
+      "predicate": "涉案关联",
+      "tail": "A2024-008"
+    },
+    {
+      "head": "锦江华诚物流有限责任公司",
+      "predicate": "办案地位于",
+      "tail": "望江路"
+    },
+    {
+      "head": "锦江华诚物流有限责任公司",
+      "predicate": "追赃方向指向",
+      "tail": "望江路"
+    },
+    {
+      "head": "云岭金鼎运输有限公司",
+      "predicate": "办案地位于",
+      "tail": "青云镇"
+    },
+    {
+      "head": "云岭金鼎运输有限公司",
+      "predicate": "追赃方向指向",
+      "tail": "青云镇"
+    },
+    {
+      "head": "桥南顺达机械制造有限公司",
+      "predicate": "办案地位于",
+      "tail": "白石桥"
+    },
+    {
+      "head": "桥南顺达机械制造有限公司",
+      "predicate": "追赃方向指向",
+      "tail": "白石桥"
+    },
+    {
+      "head": "桥南顺达运输有限公司",
+      "predicate": "办案地位于",
+      "tail": "铜官山区"
+    },
+    {
+      "head": "桥南顺达运输有限公司",
+      "predicate": "追赃方向指向",
+      "tail": "铜官山区"
+    }
+  ]
+}
