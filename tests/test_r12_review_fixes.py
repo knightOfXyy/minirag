@@ -358,8 +358,10 @@ def test_serialize_backfill_deep_copies_every_nested_container():
             "surface": "苹果", "start": 0, "end": 2,
             "candidates": ["a"], "chunk_ids": ["c0"],
         }],
-        "relations_without_evidence": [{"head": "A", "tail": "B"}],
-        "relation_evidence_candidates": {"k": [{"head_start": 0}]},
+        "relations_without_evidence": [
+            {"head": "A", "tail": "B", "chunk_ids": ["c0"]}],
+        "relation_evidence_candidates": {
+            "k": [{"head_start": 0, "chunk_ids": ["c0"]}]},
     }
     out = lb.serialize_backfill_for_output(original)
 
@@ -369,7 +371,9 @@ def test_serialize_backfill_deep_copies_every_nested_container():
     out["ambiguous_mentions"][0]["candidates"].append("b")
     out["ambiguous_mentions"][0]["chunk_ids"].append("c1")
     out["relations_without_evidence"][0]["head"] = "X"
+    out["relations_without_evidence"][0]["chunk_ids"].append("c1")
     out["relation_evidence_candidates"]["k"][0]["head_start"] = 99
+    out["relation_evidence_candidates"]["k"][0]["chunk_ids"].append("c1")
 
     assert original["matched_literals"] == {"k": 1}
     assert original["seen_literals"] == ["华为"]
@@ -377,7 +381,9 @@ def test_serialize_backfill_deep_copies_every_nested_container():
     assert original["ambiguous_mentions"][0]["candidates"] == ["a"]
     assert original["ambiguous_mentions"][0]["chunk_ids"] == ["c0"]
     assert original["relations_without_evidence"][0]["head"] == "A"
+    assert original["relations_without_evidence"][0]["chunk_ids"] == ["c0"]
     assert original["relation_evidence_candidates"]["k"][0]["head_start"] == 0
+    assert original["relation_evidence_candidates"]["k"][0]["chunk_ids"] == ["c0"]
 
 
 # ---------------------------------------------------------------------------

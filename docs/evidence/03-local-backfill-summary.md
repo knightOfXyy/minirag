@@ -1,8 +1,9 @@
 # 工单 03 证据汇总：结构化输出瘦身 + mention/span 确定性本地回填
 
 > 第 4 轮评审修复（缓存键含回填模式、整篇别名口径、验收 8 可判域重跑、
-> N1/N4/N5/N6/N7）见 `03-r4-fix-evidence.md`；验收 8/9 以
-> `03-r3-stress-ab.json` 的最新多轮重跑为准。本文件下方 r2 记录保留为历史。
+> N1/N4/N5/N6/N7）见 `03-r4-fix-evidence.md`。验收 8/9 的当前权威证据是
+> `03-r13-stress-ab.json`（HEAD `0df406c`，3 轮）；`03-r3-stress-ab.json`
+> 只作历史对照。本文件下方 r2 记录保留为历史。
 >
 > **第 13 轮评审修复（r13：S1 缓存键含 attributes/description/confidence、
 > S2 验收 8 HEAD 重放与旧文档纠正、N1/N3/N4/N5/N6、N2 口径收窄）见
@@ -11,11 +12,15 @@
 >
 > **第 10 轮评审修复（r10：S1 吸收字面作关系端点、S2 重叠块同 span 歧义对账、
 > N1–N11）见 `03-r10-fix-evidence.md`；第 11 轮（r11：F1 分块候选全量传递、
-> F2 验收 8 口径、N1–N11）见 `03-r11-fix-evidence.md`。** 验收 8 **未达成**：
-> 唯一快照 `9f95ed4` 的 mean-of-3 = +0.0733pt 虽在门槛内，但 worst-of-N 单轮
-> 最低 −1.30pt、seed20261104 逐篇均值 −2.88pt 均超过 ≤0.5pt 门槛，且 HEAD
-> 未重放（本机无真实 LLM 凭证，不伪造新数值）。**翻默认开关前必须用 HEAD
-> 重放 full/slim A/B 并同时报告 mean-of-N 与 worst-of-N。**
+> F2 验收 8 口径、N1–N11）见 `03-r11-fix-evidence.md`。**
+>
+> **验收 8 状态（r13 更新）**：HEAD `0df406c` 用 02 压力语料重放 full/slim
+> 3 轮（`03-r13-stress-ab.json`，working tree clean）**达成**：
+> 实体 macro relaxed F1 0.8947→0.9050，mean-of-N +1.0333pt、**worst-of-N
+> −0.28pt**（≤0.5pt 门槛内）；关系 F1 0.4255→0.6782（不下降）；span 一致率
+> min/mean 0.0087/0.0148→1.0/1.0；单块 output token 2783.56→610.20
+> （−77.73%）；截断块 6→0。历史快照 `9f95ed4` 的 worst-of-N −1.30pt 只说明
+> 当时未达成，不再作为 HEAD 结论。默认开关仍保持关闭。
 
 开关：环境变量 `MORAY_LOCAL_BACKFILL`（`1/true/yes/on` 打开），**默认关闭**。
 关闭时：full schema / 提示词 / 归并语义保持 262319b（schema+结果逐字段 golden）。
@@ -30,8 +35,8 @@
 | 2 | should `_is_free` 语义反了，部分重叠短名漏进长名 | 改为整段全空闲才接受（`_interval_all_free`），部分重叠用例覆盖 | `test_partial_overlap_short_name_does_not_leak_into_long_name`、`test_partial_overlap_does_not_block_independent_occurrence` |
 | 3 | should 英文句号不切句、开头空白句列表为空 | `split_sentences(ascii_period=True)` 供关系证据使用（不切 3.14）；开头空白不再返回空；证据 span 裁掉句首尾空白。默认分块路径只改变「开头是空白/结束符」这一原先返回 0 块的边界情形 | `test_relation_evidence_splits_ascii_period_sentences`、`test_relation_evidence_handles_document_starting_with_whitespace` |
 | 4 | should 关闭开关仍改变归并输出 | `naive_merge(merge_relation_duplicates=...)`：pipeline 仅在开关打开时合并后见证据/置信度/description；关闭走 262319b 旧语义 | `test_switch_off_merge_matches_pre_change_full_field_golden`（golden 由 262319b 源码生成）、`test_chunked_pipeline_gates_relation_merge_by_switch` |
-| 5 | should 验收 8 未在 02 压力语料验证、文件名误导 | 误导文件改名 `03-stress-corpus-eval.txt` → `03-baseline-ab.txt`；明确标注压力集 LLM 复跑**r2 时未闭环**（r3 已用 `03-r3-stress-ab.json` 闭环），写清合入后的复跑命令 | `03-baseline-ab.txt`、`tools/backfill_ab_eval.py` docstring |
-| 6 | should 验收 9 用 per-document 与 attempts 冒充 | 证据文件**r2 时**明确「验收 9 未闭环」（r3 已闭环），列出 01 chunk_metrics/截断口径与后续命令；不再声称达标 | `03-output-token-reduction.txt`、`03-baseline-ab.txt` |
+| 5 | should 验收 8 未在 02 压力语料验证、文件名误导 | 误导文件改名 `03-stress-corpus-eval.txt` → `03-baseline-ab.txt`；明确标注压力集 LLM 复跑**r2 时未闭环**；r3 的快照后来经 r11/r13 复核为 worst −1.30pt（当时未达成），当前 HEAD 重放已达成（见上方 r13 段） | `03-baseline-ab.txt`、`tools/backfill_ab_eval.py` docstring |
+| 6 | should 验收 9 用 per-document 与 attempts 冒充 | 证据文件**r2 时**明确「验收 9 未闭环」，列出 01 chunk_metrics/截断口径与后续命令；r3 起有快照，当前 HEAD 重放见上方 r13 段 | `03-output-token-reduction.txt`、`03-baseline-ab.txt` |
 | 7 | should 质量中间件 slim 恒 1.0、无下游消费回填 | 中间件对无 mention 的 slim 输出跑本地回填，用命中率替代空转 span 1.0；`ExtractionMetrics`/`RunRecorder`/`pipeline_runs` 记录 block_confidence/命中数/证据率/歧义数 | `test_slim_output_with_ungrounded_entity_lowers_quality_score`、`test_from_pipeline_carries_backfill_grounding_signal`、`test_summary_includes_backfill_signals` |
 | 8 | nit 被长名吸收的别名误报幻觉 | 别名改用「正文中字面存在性」判定 | `test_unmatched_aliases_absorbed_by_longer_name_is_not_hallucination` |
 | 9 | nit 信号键只用 name，同名异型覆盖 | 统计键/歧义候选改为 JSON `[type, name]`（`entity_signal_key`） | `test_signal_keys_keep_type_so_same_name_different_type_does_not_collide` |
@@ -61,8 +66,8 @@
 | 5 | 同句共现回填证据；跨句/跨块不臆造；保留全部候选 | **有条件达成（r13 N2 口径收窄）**：证据定位达成（中文/英文/开头空白；r10 N1/N2 修候选边界与全局 selected；r11 F1 修分块路径截断：块间/内存保留全量，只在 API/作业落盘按 20 裁剪）。但进程内仍有单条关系 **≤2000 条**软上限（r12 N2），极端单句（如 50×50 共现）不再保留全部候选——这是对验收 5 的明确收窄，不再声称无条件「保留全部候选」 | `test_relation_evidence_splits_ascii_period_sentences`、`test_relation_evidence_handles_document_starting_with_whitespace`、`test_relation_evidence_not_fabricated_across_chunks`、`test_selected_candidate_bounds_match_evidence_span_after_trim`、`test_chunked_pipeline_preserves_all_relation_evidence_candidates`、`test_extract_endpoint_caps_backfill_candidates`、`test_real_extractor_caps_internal_candidates_above_soft_limit` |
 | 6 | 同名歧义未归属 | 达成（单块 + r10 S2 重叠块同一全局 span 对账） | `test_same_name_different_type_is_ambiguous_and_unattributed`、`test_alias_ownership_conflict_is_ambiguous`、`test_overlap_same_span_owned_by_two_entities_is_unattributed` |
 | 7 | 开关关闭逐字段一致 + 默认关 | **达成（口径已讲清）**：schema/prompt 对 262319b 逐字节；归并结果对 262319b 全字段 golden；默认关 | `test_full_schema_and_prompt_match_pre_change_golden`、`test_switch_off_merge_matches_pre_change_full_field_golden` |
-| 8 | 02 扩展语料实体 F1 不跌、关系不降 | **未达成**：唯一快照 `9f95ed4` 的 mean-of-3 = +0.0733pt（3 轮 +1.00 / −1.30 / +0.52pt），但 worst-of-N 单轮 −1.30pt、seed20261104 逐篇均值 −2.88pt 均超过 ≤0.5pt 门槛；HEAD 未重放。默认开关保持关闭，翻开关前必须用 HEAD 重放并同时报 mean-of-N 与 worst-of-N（r11 F2） | `03-r3-stress-ab.json`、`03-r11-fix-evidence.md` |
-| 9 | 单块 output token ≥30% 降、截断不增 | **达成（同一快照 `9f95ed4`）**：2365.98 → 582.13 tokens/块（−75.32%），截断块 6 → 0 | `03-r3-stress-ab.json` 的 `delta`、`03-output-token-reduction.txt` |
+| 8 | 02 扩展语料实体 F1 不跌、关系不降 | **达成（HEAD `0df406c` 重放）**：02 压力语料 3 轮 full/slim，实体 macro relaxed F1 0.8947→0.9050，mean-of-N +1.0333pt、worst-of-N −0.28pt（单轮 +2.04 / −0.28 / +1.34pt，均在 ≤0.5pt 门槛内）；关系 F1 0.4255→0.6782（不下降）；span 一致率 min/mean 0.0087/0.0148→1.0/1.0。历史快照 `9f95ed4` 的 worst −1.30pt 仅说明当时未达成。默认开关保持关闭 | `03-r13-stress-ab.json`（git_sha=0df406c、git_dirty=false）、`03-r13-fix-evidence.md` |
+| 9 | 单块 output token ≥30% 降、截断不增 | **达成（HEAD `0df406c`）**：2783.56 → 610.20 tokens/块（−77.73%），截断块 6 → 0；历史 `9f95ed4` 的 2365.98→582.13（−75.32%）、6→0 同样达成 | `03-r13-stress-ab.json` 的 `delta`、`03-output-token-reduction.txt` |
 | 10 | 纯本地确定性、每块只扫一遍（线性） | 达成（口径已讲清）：块扫描每块一趟；单块文档不再做第二次整篇别名补扫（r11 N8），多块时整篇补扫一次仍是线性、且与块扫描用途不同 | `test_scan_is_single_linear_pass_independent_of_pattern_count`、`test_single_chunk_merge_skips_document_alias_rescan`、20k 性能回归 |
 
 ## 测试
