@@ -45,8 +45,14 @@ def _logical_model_output():
     }
 
 
-def test_default_switch_off_is_identical_to_before():
-    """开关默认关闭：schema/提示词/结果口径与改造前逐字段一致（固定桩）。"""
+def test_default_switch_off_selects_full_schema_and_keeps_flag_off():
+    """开关默认关闭：选全量 schema、提示词与显式关闭一致。
+
+    本用例只比 schema/提示词/默认 flag；「结果与改造前逐字段一致」由
+    ``test_switch_off_extraction_output_matches_262319b_golden`` 与
+    ``test_switch_off_chunked_output_matches_262319b_golden`` 的完整输出
+    golden 负责（r4 N7：旧名字宣称了本用例没有检查的结果一致性）。
+    """
     # 默认构造：仍是含 mentions/confidence/evidence 的「全量」schema
     default = Extractor("general", max_retries=0)
     full = Extractor("general", max_retries=0, local_backfill=False)

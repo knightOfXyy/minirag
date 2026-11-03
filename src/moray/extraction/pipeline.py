@@ -93,7 +93,9 @@ def remap_spans(result: ExtractionResult, chunk: Chunk) -> ExtractionResult:
 
 
 def naive_merge(
-    partials: list[ExtractionResult], *, merge_relation_duplicates: bool = False
+    partials: list[ExtractionResult], *,
+    merge_relation_duplicates: bool = False,
+    fill_description: bool = False,
 ) -> ExtractionResult:
     """朴素归并（L09 会升级为向量+LLM 共指消解）。
 
@@ -105,6 +107,11 @@ def naive_merge(
     并进首见条目。默认 **False**，即 262319b 的「先见赢家」旧语义——本函数
     是公开 helper（``extraction/__init__`` 导出、lessons 直接调用），默认值
     不能悄悄改变直接调用方的输出。分块流水线只在瘦身开关打开时显式传 True。
+
+    ``fill_description``：是否用后见条目的 description 补全空描述。与关系
+    合并是两个独立行为（r4 N6）：此前它隐式跟随
+    ``merge_relation_duplicates``，改关系口径会莫名改变实体描述。默认
+    False，保持 262319b 旧输出；分块流水线在瘦身开关打开时显式传 True。
     """
     bucket: dict[tuple[str, str], Entity] = {}
     for part in partials:
@@ -119,9 +126,8 @@ def naive_merge(
             ent = bucket[key]
             # 与 local_backfill 共用同一套元数据合并规则（别名并集/属性首见/
             # 置信度取大），避免两处逻辑漂移；mention 在归并层必须全量保留。
-            # description 补全也是新行为：开关关闭时必须保持 262319b 旧输出。
-            merge_entity_metadata(
-                ent, e, fill_description=merge_relation_duplicates)
+            # description 补全由独立开关控制：开关关闭时必须保持 262319b 旧输出。
+            merge_entity_metadata(ent, e, fill_description=fill_description)
             ent.mentions.extend(e.mentions)
 
     rel_index: dict[tuple[str, str, str], Relation] = {}
@@ -186,10 +192,14 @@ class ChunkedExtractionPipeline:
         不再依赖人手递增 ``_PROMPT_TEMPLATE_VERSION``（nit-2）。
         """
         domain = getattr(self.extractor, "domain", None)
+        # 回填模式（slim/full）换 prompt 与 schema，产物形状不同，必须进指纹；
+        # 否则共享缓存会把 slim 的实体/backfill 发给关闭态（r4 B1）。
+        slim = bool(getattr(self.extractor, "local_backfill", False))
         if isinstance(domain, DomainSpec):
-            base = domain_fingerprint(domain)
+            base = domain_fingerprint(domain, slim=slim)
         else:
-            base = f"code:{getattr(domain, 'code', 'unknown')}|repr:{domain!r}"
+            base = (f"code:{getattr(domain, 'code', 'unknown')}"
+                    f"|backfill={slim}|repr:{domain!r}")
         lead_in = getattr(self.extractor, "_LEAD_IN", "")
         retry_prompt = getattr(self.extractor, "_retry_prompt", None)
         retry_sample = retry_prompt("{error}") if callable(retry_prompt) else ""
@@ -425,15 +435,19 @@ class ChunkedExtractionPipeline:
         # 归并口径跟抽取器开关走：关开关时保持 262319b 的旧语义
         # （同一三元组首见赢家），打开才合并后见证据/更高置信度（03 r2）。
         # 抽取器没有该属性时按「关」处理，保证旧对象逐字段等于改造前。
+        slim = bool(getattr(self.extractor, "local_backfill", False))
         merged = naive_merge(
             partials,
-            merge_relation_duplicates=getattr(
-                self.extractor, "local_backfill", False))
+            merge_relation_duplicates=slim,
+            fill_description=slim)
         # 分块回填信号必须汇总后继续往上层传，不能在 pipeline 这里丢掉。
         # 关开关时所有块都是 None -> 保持 None（与改造前一致）。
         # 块内偏移的平移由 merge_backfill_reports 按各块 chunk_start 统一完成。
-        backfill = (merge_backfill_reports(backfill_reports).to_dict()
-                    if backfill_reports else None)
+        # document_text 用于整篇口径的别名幻觉判定：某块漏抽实体时，仍按
+        # 整篇正文确认别名是否真实存在（r4 S1）。
+        backfill = (merge_backfill_reports(
+            backfill_reports, document_text=document.text).to_dict()
+            if backfill_reports else None)
         # attempts 口径（should-2，写死避免再漂移）：
         #   · result_cache is None：与历史实现完全一致 = 块数（默认配置不改语义）；
         #   · 开缓存：真实模型尝试次数累计，命中块计 0（全命中为 0）。

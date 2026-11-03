@@ -59,6 +59,17 @@
   新读者从 `backfill_provenance` / `merge_backfill_reports` 两个入口读即可。
 - 偏移：块内回填 -> `pipeline.remap_spans` 平移到全局；跨块信号汇总时
   `merge_backfill_reports` 再按 `chunk_start` 平移并带 `chunk_id`。
+- 缓存键：`domain_fingerprint(domain, slim=...)` 把回填模式一起 hash 进
+  prompt+schema 指纹。slim/full 的产物形状与语义不同，05 内容缓存绝不能
+  共用键（否则关闭态会拿到 slim 的实体与 `backfill`）。
+- 整篇别名口径：`unmatched_aliases` 先取各块 `seen_literals` 并集；`pipeline`
+  再把 `document.text` 传给 `merge_backfill_reports`，对候选别名补一次线性
+  AC 扫描。某块漏抽实体但正文里真实存在该别名时，不算幻觉。
+- 计数口径：`entities_total/matched_literals/...` 跨块按块相加，是
+  **chunk-weighted** 计数（重叠块对同一原文各计一次），不是文档级去重值；
+  需要文档级计数时由消费方按 `(entity_key, span)` 收敛。
+- 审校口径：`rule_review` 的关系端点与回填一致——标准名或「唯一归属」的
+  别名都认；同一字面归属多个实体时不猜，仍报端点未知。
 - 置信度：模型自报语义不变；slim 模式不自报 = `None`/SQL NULL（未知），
   不能被 0.0 冒充。下游（审校/看板/API）消费 `BackfillReport.block_confidence`
   等确定性信号。

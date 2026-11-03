@@ -14,9 +14,14 @@
 
     PYTHONPATH=src python tools/backfill_stress_ab.py \
       --gold data/gold/stress --env-file ../moray/.env \
+      --repeat 3 --temperature 0 \
       --json-out docs/evidence/03-r3-stress-ab.json
 
-脚本会真实调用模型；没有密钥时直接失败，不会用规则模式冒充。
+默认 ``--domain stress``：在 general 类型表上并入 02 gold 的规范谓词，
+让关系轴 baseline 可判（非零）。每轮 full/slim 各跑一遍，共 ``--repeat``
+轮，证据里同时给逐轮明细与均值/最小值；``git_sha/git_describe/git_dirty``
+在开跑时采集，避免用未提交工作树的旧 sha 冒充。脚本会真实调用模型；
+没有密钥时直接失败，不会用规则模式冒充。
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -34,15 +40,41 @@ from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
+from moray.config import get_settings
 from moray.evaluation.metrics import macro_average
 from moray.evaluation.stress import (
     aggregate_cases,
     evaluate_case,
     load_stress_dir,
+    relation_recall_for_predicates,
 )
 from moray.extraction import Chunker, Document, Extractor
 from moray.extraction.pipeline import ChunkedExtractionPipeline
 from moray.extraction.quality import verify_spans
+from moray.schema import GENERAL_DOMAIN, DomainSpec
+
+# 02 压力语料 gold 的规范谓词。验收 8 必须在一个「模型有机会答对」的域里做
+# A/B：general 域的谓词表不含它们，full 与 slim 的关系 F1 都会接近 0，
+# 「不下降」就成了 0 对 0 的空转结论（r4 S2）。
+STRESS_RELATION_PREDICATES = ("供职于", "户籍在", "注册地位于", "涉案关联")
+
+
+def _stress_domain() -> DomainSpec:
+    """把 02 压力语料的谓词并进 general 的类型表，供验收 8 的 A/B 使用。
+
+    只扩 relation_predicates，不改实体类型/属性提示；两种模式用同一个域，
+    baseline 因此是可判（非零）的关系抽取任务。
+    """
+    predicates = tuple(GENERAL_DOMAIN.relation_predicates) + tuple(
+        p for p in STRESS_RELATION_PREDICATES
+        if p not in GENERAL_DOMAIN.relation_predicates)
+    return DomainSpec(
+        code="stress_eval",
+        name=f"{GENERAL_DOMAIN.name}（02 压力语料评测）",
+        types=GENERAL_DOMAIN.types,
+        relation_predicates=predicates,
+        extra_instruction=GENERAL_DOMAIN.extra_instruction,
+    )
 
 
 @dataclass
@@ -56,32 +88,47 @@ class ModeResult:
     chunk_summary: dict
     chunk_details: list[dict]
     span_ratios: list[float]
+    predicate_recall: dict
 
 
-def _git_sha() -> str:
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], text=True).strip()
-    except Exception:  # noqa: BLE001 取证脚本，拿不到就留空
-        return ""
+def _git_identity() -> dict:
+    """记录证据对应的提交；工作树脏时也如实标注，避免再出现旧 sha 冒充。"""
+    def _run(*args: str) -> str:
+        try:
+            return subprocess.check_output(
+                ["git", *args], text=True, stderr=subprocess.DEVNULL).strip()
+        except Exception:  # noqa: BLE001 取证脚本，拿不到就留空
+            return ""
+
+    # 只把【已跟踪】改动算脏：未跟踪的 IDE/临时目录不应让证据看起来不可复现。
+    status = _run("status", "--porcelain", "--untracked-files=no")
+    return {
+        "git_sha": _run("rev-parse", "HEAD"),
+        "git_describe": _run("describe", "--always", "--dirty"),
+        "git_dirty": bool(status),
+        "git_status_porcelain": status,
+    }
 
 
 def _model_identity() -> dict:
-    from moray.config import get_settings
-
     s = get_settings()
     return {
         "provider": s.get("provider"),
         "chat_model": s.get("chat_model"),
         # 只记 host，避免把密钥/查询串写进证据
         "base_url_host": urlparse(s.get("base_url") or "").netloc,
+        # 采样参数：temperature 显式固定；DeepSeek 的模型参数不暴露 seed，
+        # 无法固定随机种子，只能多轮重复报均值/最小值（r4 N3）。
+        "temperature": s.get("temperature"),
+        "seed": None,
+        "seed_note": "provider 的 ChatModel.Parameters 不暴露 seed；用 repeat 采样统计",
     }
 
 
-async def _run_mode(mode: str, cases, chunks_by_case, *,
-                    concurrency: int) -> ModeResult:
+async def _run_mode(mode: str, cases, chunks_by_case, *, concurrency: int,
+                    domain: DomainSpec) -> ModeResult:
     extractor = Extractor(
-        "general", max_retries=2, local_backfill=(mode == "slim"))
+        domain, max_retries=2, local_backfill=(mode == "slim"))
     pipeline = ChunkedExtractionPipeline(extractor, concurrency=concurrency)
 
     evals, case_rows, chunk_details = [], [], []
@@ -94,7 +141,7 @@ async def _run_mode(mode: str, cases, chunks_by_case, *,
 
     for case in cases:
         doc = Document(id=case.name, text=case.text, source="stress-gold",
-                       domain_code="general")
+                       domain_code=domain.code)
         out = await pipeline.run(
             doc, chunks_by_case[case.name], raise_on_chunk_error=False)
 
@@ -152,6 +199,9 @@ async def _run_mode(mode: str, cases, chunks_by_case, *,
         chunk_summary=chunk_summary,
         chunk_details=chunk_details,
         span_ratios=[r["span_ratio"] for r in checked],
+        # 关系轴可判性：只报 02 gold 的谓词召回，看 baseline 是否非零。
+        predicate_recall=relation_recall_for_predicates(
+            evals, set(STRESS_RELATION_PREDICATES)),
     )
 
 
@@ -189,6 +239,92 @@ def _delta(before: ModeResult, after: ModeResult) -> dict:
     }
 
 
+def _mean(values: list) -> float | None:
+    vals = [v for v in values if isinstance(v, (int, float))]
+    return round(sum(vals) / len(vals), 4) if vals else None
+
+
+def _min(values: list) -> float | None:
+    vals = [v for v in values if isinstance(v, (int, float))]
+    return min(vals) if vals else None
+
+
+def _mode_payload(result: ModeResult) -> dict:
+    return {
+        "cases": result.cases, "macro": result.macro, "micro": result.micro,
+        "usage": result.usage, "chunk_summary": result.chunk_summary,
+        "predicate_recall": result.predicate_recall,
+    }
+
+
+def _aggregate_mode(repeats: list[dict], mode: str) -> dict:
+    """多轮重复的均值/最小值：单次 3 样本的 macro 结论太脆（r4 N3）。"""
+    payloads = [r[mode] for r in repeats]
+    macro = {}
+    for family in ("entity_relaxed", "entity_strict", "relation"):
+        f1s = [p["macro"].get(family, {}).get("f1", 0.0) for p in payloads]
+        macro[family] = {
+            "f1_mean": _mean(f1s), "f1_min": _min(f1s),
+            "f1_max": max(f1s) if f1s else None,
+        }
+    recalls = [p.get("predicate_recall", {}).get("recall", 0.0)
+               for p in payloads]
+    names = [c["name"] for c in payloads[0]["cases"]]
+    case_rows = []
+    for name in names:
+        rows = [next(c for c in p["cases"] if c["name"] == name)
+                for p in payloads]
+        case_rows.append({
+            "name": name,
+            "entity_relaxed_f1_mean": _mean(
+                [r["entity_relaxed_f1"] for r in rows]),
+            "entity_relaxed_f1_min": _min(
+                [r["entity_relaxed_f1"] for r in rows]),
+            "entity_strict_f1_mean": _mean(
+                [r["entity_strict_f1"] for r in rows]),
+            "relation_f1_mean": _mean([r["relation_f1"] for r in rows]),
+            "span_ratio_min": _min([r["span_ratio"] for r in rows]),
+            "span_ratio_mean": _mean([r["span_ratio"] for r in rows]),
+        })
+    chunk_keys = ("mean_output_tokens_per_chunk", "truncated_chunks",
+                  "truncation_signals", "output_tokens", "input_tokens",
+                  "chunk_calls")
+    return {
+        "macro": macro,
+        "predicate_recall": {
+            "recall_mean": _mean(recalls), "recall_min": _min(recalls),
+            "recall_max": max(recalls) if recalls else None,
+            "predicates": list(STRESS_RELATION_PREDICATES),
+        },
+        "cases": case_rows,
+        "chunk_summary_mean": {
+            key: _mean([p["chunk_summary"].get(key, 0) for p in payloads])
+            for key in chunk_keys
+        },
+        "usage_mean": {
+            key: _mean([p["usage"].get(key, 0) for p in payloads])
+            for key in payloads[0]["usage"]
+        },
+    }
+
+
+def _aggregate_delta(deltas: list[dict]) -> dict:
+    """多轮 delta 的均值；截断类指标取最坏值（max）而不是平均。"""
+    keys = sorted({key for d in deltas for key in d})
+    out: dict = {}
+    for key in keys:
+        values = [d.get(key) for d in deltas
+                  if isinstance(d.get(key), (int, float))
+                  and not isinstance(d.get(key), bool)]
+        if not values:
+            out[key] = None
+        elif key.startswith("truncat"):
+            out[key] = max(values)
+        else:
+            out[key] = _mean(values)
+    return out
+
+
 async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--gold", default="data/gold/stress")
@@ -197,11 +333,22 @@ async def main() -> int:
     ap.add_argument("--overlap-units", type=int, default=200)
     ap.add_argument("--concurrency", type=int, default=4)
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--repeat", type=int, default=3,
+                    help="重复轮数（≥3 才够报均值/最小值）")
+    ap.add_argument("--temperature", type=float, default=0.0,
+                    help="显式固定采样温度；传负数表示不设置（provider 默认）")
+    ap.add_argument("--domain", choices=("stress", "general"), default="stress",
+                    help="stress=含 02 gold 谓词的评测域（可判 baseline）")
     ap.add_argument("--json-out", default="")
     args = ap.parse_args()
 
     if args.env_file:
         load_dotenv(args.env_file, override=False)
+    if args.temperature >= 0:
+        os.environ["LLM_TEMPERATURE"] = str(args.temperature)
+    else:
+        os.environ.pop("LLM_TEMPERATURE", None)
+    get_settings.cache_clear()      # env 变更后重读，保证证据里的参数是实际值
 
     cases = load_stress_dir(args.gold)
     if args.limit:
@@ -210,19 +357,48 @@ async def main() -> int:
         print(f"没有压力语料：{args.gold}", file=sys.stderr)
         return 2
 
+    domain = _stress_domain() if args.domain == "stress" else GENERAL_DOMAIN
     chunks_by_case = {
         c.name: Chunker(args.max_units, args.overlap_units).chunk_text(c.text)
         for c in cases
     }
-    full = await _run_mode("full", cases, chunks_by_case,
-                           concurrency=args.concurrency)
-    slim = await _run_mode("slim", cases, chunks_by_case,
-                           concurrency=args.concurrency)
+    git_identity = _git_identity()
+    repeats: list[dict] = []
+    chunk_details: list[dict] = []
+    for i in range(max(1, args.repeat)):
+        full = await _run_mode("full", cases, chunks_by_case,
+                               concurrency=args.concurrency, domain=domain)
+        slim = await _run_mode("slim", cases, chunks_by_case,
+                               concurrency=args.concurrency, domain=domain)
+        if i == 0:
+            chunk_details = full.chunk_details + slim.chunk_details
+        repeats.append({
+            "repeat": i + 1,
+            "full": _mode_payload(full),
+            "slim": _mode_payload(slim),
+            "delta": _delta(full, slim),
+        })
+
+    first = repeats[0]
     payload = {
+        "experiment": "03 验收 8/9：full vs slim 真实 LLM A/B（r4 重跑）",
         "baseline_commit": "262319b",
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "git_sha": _git_sha(),
+        **git_identity,
         "model": _model_identity(),
+        "sampling": {
+            "repeat": len(repeats),
+            "temperature": args.temperature if args.temperature >= 0 else None,
+            "seed": None,
+            "note": ("temperature 显式固定；provider 参数不暴露 seed，"
+                     "因此用多轮重复报告均值/最小值，而不是声称单次可复现"),
+        },
+        "domain": {
+            "code": domain.code,
+            "relation_predicates": list(domain.relation_predicates),
+            "source": ("general + 02 stress predicates" if args.domain == "stress"
+                       else "general"),
+        },
         "corpus": {
             "path": args.gold,
             "cases": [c.name for c in cases],
@@ -232,25 +408,28 @@ async def main() -> int:
         "chunking": {"max_units": args.max_units,
                      "overlap_units": args.overlap_units},
         "cost_note": "只记录真实 token；金额以 provider 账单为准，脚本不估算价格",
-        "full": {
-            "cases": full.cases, "macro": full.macro, "micro": full.micro,
-            "usage": full.usage, "chunk_summary": full.chunk_summary,
+        # 顶层 full/slim 是第 1 轮明细；多轮统计见 aggregate。
+        "full": first["full"],
+        "slim": first["slim"],
+        "repeats": repeats,
+        "aggregate": {
+            "full": _aggregate_mode(repeats, "full"),
+            "slim": _aggregate_mode(repeats, "slim"),
+            "delta": _aggregate_delta([r["delta"] for r in repeats]),
         },
-        "slim": {
-            "cases": slim.cases, "macro": slim.macro, "micro": slim.micro,
-            "usage": slim.usage, "chunk_summary": slim.chunk_summary,
-        },
-        "delta": _delta(full, slim),
-        "chunk_details": full.chunk_details + slim.chunk_details,
+        # 兼容既有证据读取方：delta 是各轮 delta 的均值（截断取最坏值）。
+        "delta": _aggregate_delta([r["delta"] for r in repeats]),
+        "chunk_details": chunk_details,
     }
     text = json.dumps(payload, ensure_ascii=False, indent=2)
     if args.json_out:
         Path(args.json_out).write_text(text, encoding="utf-8")
         print(f"wrote {args.json_out}")
     print(json.dumps({
-        "delta": payload["delta"],
-        "full_usage": full.usage,
-        "slim_usage": slim.usage,
+        "aggregate": payload["aggregate"],
+        "git_sha": payload["git_sha"],
+        "git_dirty": payload["git_dirty"],
+        "model": payload["model"],
         "corpus_sha256": hashlib.sha256(
             "".join(c.text for c in cases).encode()).hexdigest()[:16],
     }, ensure_ascii=False, indent=2))

@@ -89,7 +89,10 @@ def entity_signal_key(entity: Entity) -> str:
 class BackfillReport:
     """一次回填的确定性质量信号（供下游替代模型自报置信度）。"""
 
-    # 实体键（JSON [type,name]）-> 该实体在块内被命中的不同字面（标准名/别名）数
+    # 实体键（JSON [type,name]）-> 该实体在块内被命中的不同字面（标准名/别名）数。
+    # 跨块汇总时按块相加：这是 chunk-weighted 计数（重叠块会对同一处原文各计
+    # 一次），不是文档级去重后的「不同字面数」；需要文档级去重的消费方应自行
+    # 按 (entity_key, span) 收敛（r4 N4）。
     matched_literals: dict[str, int] = field(default_factory=dict)
     # 模型给了、但正文里一次都没出现的名字/别名（疑似幻觉）
     unmatched_aliases: list[dict] = field(default_factory=list)
@@ -99,10 +102,12 @@ class BackfillReport:
     seen_literals: list[str] = field(default_factory=list)
     # 歧义未归属的出现
     ambiguous_mentions: list[AmbiguousMention] = field(default_factory=list)
-    # 块级置信度：被正文证据命中的实体占比（0~1）
+    # 块级置信度：被正文证据命中的实体占比（0~1）。
+    # 跨块汇总按块相加（chunk-weighted）：重叠块会对同一原文各计一次，
+    # 不是文档级去重计数；block_confidence 因此是「块加权命中率」（r4 N4）。
     entities_total: int = 0
     entities_grounded: int = 0
-    # 关系证据命中情况
+    # 关系证据命中情况（同上，跨块为 chunk-weighted 计数）
     relations_total: int = 0
     relations_with_evidence: int = 0
     relations_without_evidence: list[dict] = field(default_factory=list)
@@ -316,6 +321,24 @@ def _coalesce_entities(entities: list[Entity]) -> list[Entity]:
     return merged
 
 
+def _literal_index(entities: list[Entity]) -> dict[str, list[int]]:
+    """建立 字面（标准名/别名，去空白）-> 候选逻辑实体下标 的唯一索引。
+
+    歧义、关系端点解析、AC 模式集必须共用同一套口径（去空、strip、别名去重），
+    否则两处规则会各自漂移（r4 N5）。
+    """
+    literal_to_entities: dict[str, list[int]] = {}
+    for idx, e in enumerate(entities):
+        for literal in [e.name, *e.aliases]:
+            literal = literal.strip()
+            if not literal:
+                continue
+            indices = literal_to_entities.setdefault(literal, [])
+            if idx not in indices:
+                indices.append(idx)
+    return literal_to_entities
+
+
 def _entity_patterns(
     logical: list[Entity],
 ) -> tuple[list[str], dict[str, list[int]]]:
@@ -324,17 +347,8 @@ def _entity_patterns(
     只有当同一字面映射到【不同】逻辑实体（不同 (type,name)，或别名归属冲突）
     时才算歧义；同一逻辑实体自身重复出现已在 :func:`_coalesce_entities` 合并。
     """
-    literal_to_entities: dict[str, list[int]] = {}
-    for idx, e in enumerate(logical):
-        for literal in [e.name, *e.aliases]:
-            literal = literal.strip()
-            if not literal:
-                continue
-            literal_to_entities.setdefault(literal, [])
-            if idx not in literal_to_entities[literal]:
-                literal_to_entities[literal].append(idx)
-    patterns = list(literal_to_entities.keys())
-    return patterns, literal_to_entities
+    literal_to_entities = _literal_index(logical)
+    return list(literal_to_entities), literal_to_entities
 
 
 def backfill_provenance(
@@ -469,16 +483,8 @@ def _backfill_relations(
     """按「头、尾同句共现」回填关系证据 span；不共现则留空。"""
     # 关系端点按标准名或别名解析：模型有时会把别名写进 head/tail。
     # 只有「唯一归属」才认（同一字面映射到多个逻辑实体时不猜），与
-    # backfill_provenance 的歧义口径一致。
-    literal_to_indices: dict[str, list[int]] = {}
-    for idx, ent in enumerate(entities):
-        for literal in [ent.name, *ent.aliases]:
-            literal = literal.strip()
-            if not literal:
-                continue
-            indices = literal_to_indices.setdefault(literal, [])
-            if idx not in indices:
-                indices.append(idx)
+    # backfill_provenance 的歧义口径共用 _literal_index。
+    literal_to_indices = _literal_index(entities)
 
     def _resolve(literal: str) -> int | None:
         indices = literal_to_indices.get(literal) or []
@@ -559,11 +565,16 @@ def _backfill_relations(
     return out
 
 
-def merge_backfill_reports(reports: list[BackfillReport]) -> BackfillReport:
+def merge_backfill_reports(
+    reports: list[BackfillReport], *, document_text: str | None = None,
+) -> BackfillReport:
     """把分块回填信号聚合成整篇信号（计数相加、偏移平移、明细去重）。
 
     不做「对块 ratio 再平均」——那会让小块的噪声等权放大；这里直接用
     grounded/total 的整数计数，块级置信度仍然是「命中实体 / 实体总数」。
+    计数是 **chunk-weighted** 口径：重叠块会对同一处原文各计一次，
+    ``entities_total`` / ``matched_literals`` 不是文档级去重值（r4 N4）；
+    需要文档级去重的消费方自行按 ``(entity_key, span)`` 收敛。
 
     跨块语义：``ambiguous_mentions`` 与 ``relation_evidence_candidates`` 里的
     偏移在单块报告里是块内坐标；汇总时统一 + ``chunk_start`` 平移成文档全局
@@ -572,6 +583,9 @@ def merge_backfill_reports(reports: list[BackfillReport]) -> BackfillReport:
     来源块收进 ``chunk_ids``，避免 overlap 把人工复核信号放大。
     ``unmatched_aliases`` 以整篇文档为口径：先取各块 ``seen_literals`` 的并集，
     只有所有块都没见过的别名才算幻觉，并按 ``(entity, literal)`` 去重。
+    ``document_text`` 非空时再对「未被任何块采集到的候选别名」做一次线性
+    AC 扫描：真实分块里某块可能漏抽实体，导致它的别名从未进入该块的
+    ``seen_literals``；只有整篇正文都找不到的字面才是幻觉（r4 S1）。
     ``relations_without_evidence`` 按三元组去重（不同块重复命中同一关系时
     只保留一条，chunk_ids 记录来源块），避免按块堆叠把计数放大。
     """
@@ -639,6 +653,20 @@ def merge_backfill_reports(reports: list[BackfillReport]) -> BackfillReport:
                 item["chunk_id"] = report.chunk_id
                 shifted.append(item)
             merged.relation_evidence_candidates.setdefault(key, []).extend(shifted)
+    # 真实分块的盲点：某块漏抽实体时，该实体的别名不会进入那一块的模式集，
+    # 于是 seen_literals 里没有它，即使正文里明明存在。对「仍可能被判幻觉」
+    # 的候选别名在整篇正文上补一次 AC 扫描（候选数远小于实体别名数，仍是
+    # 线性），把整篇可见的字面并入 seen_literals（r4 S1）。
+    if document_text is not None and unmatched_index:
+        candidates = sorted({
+            key[1] for key in unmatched_index
+            if key[1] and key[1] not in seen_literals
+        })
+        if candidates:
+            seen_literals.update(
+                literal for _s, _e, literal in AhoCorasick(candidates).scan(
+                    document_text)
+            )
     merged.seen_literals = sorted(seen_literals)
     # 整篇口径：只有所有块都没出现过的别名才算幻觉；同一 (entity,literal)
     # 只保留一条，不按块堆叠。
