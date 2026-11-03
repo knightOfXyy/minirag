@@ -7,10 +7,11 @@
 
     缓存键 = 领域配置指纹 + 模型身份 + 分块正文
 
-模型身份 = provider + base_url + 模型名（见 ``Extractor.model_identity``）。
-三者任一变化（改了系统提示/schema、换 provider/网关/模型、改正文一个字）都会
-换键 → 缓存自然失效，不需要显式作废。命中时直接还原上一次的
-ExtractionOutput，不发起任何模型调用。
+模型身份 = provider + base_url + 模型名 + 思考/推理档位（见
+``Extractor.model_identity``）。任一变化（改了系统提示/schema、换 provider/
+网关/模型、改 LLM_THINKING / LLM_REASONING_EFFORT、改正文一个字）都会换键
+→ 缓存自然失效，不需要显式作废。命中时直接还原上一次的 ExtractionOutput，
+不发起任何模型调用。
 
 设计约束（对应工单 05 验收）：
   · 纯加速层：缓存的是【块内】抽取产物，偏移换算（remap_spans）与归并
@@ -47,9 +48,11 @@ logger = logging.getLogger(__name__)
 # 载荷格式版本：一旦序列化形态不兼容可整体换命名空间，避免读到旧格式脏数据。
 _PAYLOAD_VERSION = 1
 
-# 提示模板/生成参数版本：domain_fingerprint 覆盖 system prompt + schema，但不含
-# user 消息前缀（Extractor._LEAD_IN）与采样参数。改这些影响输出的模板要素时必须
-# 递增此版本，让旧缓存整体失效（N11）。
+# 提示模板/生成参数版本：domain_fingerprint 覆盖 system prompt + schema（user 消息
+# 模板由 pipeline 的 tpl 指纹覆盖），模型身份覆盖 provider/base_url/model 与
+# LLM_THINKING/LLM_REASONING_EFFORT。**仍不在键里**的是采样参数（temperature 等）
+# 与请求体里的其它手写参数：改这些影响输出的要素时必须人工递增此版本，让旧缓存
+# 整体失效（N11）。
 _PROMPT_TEMPLATE_VERSION = 1
 
 # 内存后端默认上限：长跑 worker 的进程内存不能只增不减（简单 LRU）。
@@ -80,13 +83,14 @@ class _LeaderCancelled(Exception):
 
 
 class _ClaimResult(NamedTuple):
-    """抢占位的结果：owner 令牌 + 是否只是后端故障。
+    """抢占位的结果：是否抢到 + 是否只是后端故障。
 
     后端故障时既没有令牌、也不该继续等别人（那不是“没抢到”，而是“问不到”），
-    调用方应退化为“直接抽取但不持有占位”，失败时不 release 别人的占位。
+    调用方应退化为“直接抽取但不持有占位”。owner 令牌由调用方预先生成，
+    这里不再回传：没抢到时用同一令牌 release 是 no-op（should-1）。
     """
 
-    owner: str | None = None
+    claimed: bool = False
     backend_error: bool = False
 
 
@@ -124,9 +128,12 @@ class CorruptibleBackend(Protocol):
     async def discard(self, key: str, expected_value: str) -> None: ...
 
 
-def build_cache_key(domain_fingerprint: str, model_name: str, chunk_text: str) -> str:
-    """以全部影响输出的输入要素拼键：领域指纹 + 模型 + 正文 + 模板版本。
+def build_cache_key(
+        domain_fingerprint: str, model_identity: str, chunk_text: str) -> str:
+    """以全部影响输出的输入要素拼键：领域指纹 + 模型身份 + 正文 + 模板版本。
 
+    形参叫 ``model_identity`` 而不是 ``model_name``：它承载的是
+    provider+base_url+model（+思考/推理档位），只传裸模型名会静默退化键口径。
     用真正的长度前缀（``len:value|``）拼装，避免字段边界被内容含分隔符时
     拼成同一字符串；正文取 SHA-256，键长固定且与正文长度无关。
     """
@@ -135,7 +142,7 @@ def build_cache_key(domain_fingerprint: str, model_name: str, chunk_text: str) -
         f"v{_PAYLOAD_VERSION}",
         f"t{_PROMPT_TEMPLATE_VERSION}",
         f"fp={domain_fingerprint}",
-        f"m={model_name}",
+        f"m={model_identity}",
         f"sha={body}",
     )
     raw = "|".join(f"{len(p)}:{p}" for p in parts)
@@ -200,7 +207,7 @@ class ContentResultCache:
     async def get_or_extract(
         self,
         domain_fingerprint: str,
-        model_name: str,
+        model_identity: str,
         chunk_text: str,
         extract: Callable[[], Awaitable[ExtractionOutput]],
     ) -> tuple[ExtractionOutput, bool]:
@@ -210,18 +217,18 @@ class ContentResultCache:
         绝不能因为它影响真实抽取。
         """
         return await self._get_or_extract(
-            domain_fingerprint, model_name, chunk_text, extract, retries=0)
+            domain_fingerprint, model_identity, chunk_text, extract, retries=0)
 
     async def _get_or_extract(
         self,
         domain_fingerprint: str,
-        model_name: str,
+        model_identity: str,
         chunk_text: str,
         extract: Callable[[], Awaitable[ExtractionOutput]],
         *,
         retries: int,
     ) -> tuple[ExtractionOutput, bool]:
-        key = build_cache_key(domain_fingerprint, model_name, chunk_text)
+        key = build_cache_key(domain_fingerprint, model_identity, chunk_text)
 
         # ① 锁外先读后端：postgres 的 SELECT 会真正让出事件循环，绝不能塞进
         # 全局锁，否则 chunk_concurrency 会被串行化（S5）。
@@ -256,11 +263,9 @@ class ContentResultCache:
                 finally:
                     # 等待方被取消/异常退出时回退计数（nit-7）：否则 leader 失败会
                     # 给一个没人 await 的 future set_exception（日志告警）。
-                    remaining = self._waiters.get(key, 0) - 1
-                    if remaining > 0:
-                        self._waiters[key] = remaining
-                    else:
-                        self._waiters.pop(key, None)
+                    # 只回退自己等的那个 future 代际：stale finally 不能把新 leader
+                    # 的计数减到 0（nit-5）。
+                    self._drop_waiter(key, future)
             except _LeaderCancelled:
                 # leader 被取消（不是本等待方被取消）：重新参与该键，自己可能
                 # 成为新 leader；绝不能把取消传播给调用方（blocker-1）。
@@ -269,7 +274,7 @@ class ContentResultCache:
                         f"同键 leader 连续 {retries + 1} 次被取消，放弃等待 "
                         f"key={key[:16]}") from None
                 return await self._get_or_extract(
-                    domain_fingerprint, model_name, chunk_text, extract,
+                    domain_fingerprint, model_identity, chunk_text, extract,
                     retries=retries + 1)
 
         # ③ 从这里开始本协程“拥有”该键的 _inflight。二次读、跨进程占位、等待、
@@ -277,10 +282,11 @@ class ContentResultCache:
         # 请求取消/外层 wait_for）都必须清理 future 与占位，否则同键后续请求
         # 会永久挂在 pending future 上（blocker-1）。
         claimable = getattr(self.backend, "try_claim", None) is not None
-        # 只有 _safe_claim / _wait_remote 明确返回“我抢到了”才有 owner 令牌：
-        # 等待方超时自抽失败时绝不能 release 别人的健康占位（should-1）。
-        # 令牌同时防止旧 leader 给新 leader 续租/删占位（should-1 的另一半）。
-        claim_owner: str | None = None
+        # owner 令牌在进入 try 之前生成：这样任何 await 点（包括 try_claim 内部）
+        # 被取消时都能安全 release。release 按 owner 匹配，没抢到/后端报错时用
+        # 本协程令牌 release 是天然 no-op，不会误删别人的占位（should-1）。
+        owner: str | None = uuid.uuid4().hex if claimable else None
+        holds_claim = False
         renewer: asyncio.Task | None = None
         try:
             cached = await self._safe_get(key)
@@ -290,28 +296,35 @@ class ContentResultCache:
 
             # ④ 支持跨进程占位的后端：抢到占位才是 leader，没抢到就等对方的载荷。
             if claimable:
-                claim = await self._safe_claim(key)
-                claim_owner = claim.owner
-                if claim_owner is None and not claim.backend_error:
-                    cached, claim_owner = await self._wait_remote(key)
+                claim = await self._safe_claim(key, owner)
+                holds_claim = claim.claimed
+                if not holds_claim and not claim.backend_error:
+                    cached, holds_claim = await self._wait_remote(key, owner)
                     if cached is not None:
                         self._finish_inflight(key, cached)
                         return cached, True
                     # 等待超时/对方失败：_wait_remote 会回传是否抢到了新占位。
 
             # 只有确实持有占位才续租：无条件起续租循环会替别人的占位续命。
-            if claimable and claim_owner is not None:
-                renewer = asyncio.create_task(self._renew_loop(key, claim_owner))
+            if holds_claim:
+                renewer = asyncio.create_task(self._renew_loop(key, owner))
 
             # 本协程是这一键的“抽取者”：真正调用模型，结束后唤醒等待者并回写。
             output = await extract()
-            await self._safe_set(key, output)
+            written = await self._safe_set(key, output)
+            if not written and holds_claim:
+                # 写失败时占位必须立刻释放：否则同键后续请求要白等一个租约才
+                # 能接管并重复真调（should-1）。
+                await self._safe_release(key, owner)
+                holds_claim = False
             self._finish_inflight(key, output)
             return output, False
         except BaseException as exc:
             self._fail_inflight(key, exc)
-            if claim_owner is not None:
-                await self._safe_release(key, claim_owner)
+            if owner is not None:
+                # owner 匹配使其在“没抢到/后端故障”时天然 no-op：绝不误删别人的
+                # 占位；但 try_claim 内被取消时能释放已落库的自己的占位（should-1）。
+                await self._safe_release(key, owner)
             raise
         finally:
             if renewer is not None:
@@ -324,12 +337,12 @@ class ContentResultCache:
     async def has_cached(
         self,
         domain_fingerprint: str,
-        model_name: str,
+        model_identity: str,
         chunk_text: str,
     ) -> bool:
         """该分块是否已有可用的缓存结果（只读探测，供预热前判断全命中）。"""
         return await self._safe_get(
-            build_cache_key(domain_fingerprint, model_name, chunk_text)) is not None
+            build_cache_key(domain_fingerprint, model_identity, chunk_text)) is not None
 
     # -------------------------------------------------- 后端容错读写
     async def _safe_get(self, key: str) -> ExtractionOutput | None:
@@ -353,25 +366,24 @@ class ContentResultCache:
             logger.warning("抽取缓存载荷损坏，按未命中处理 key=%s: %r", key[:16], exc)
             return None
 
-    async def _safe_claim(self, key: str) -> _ClaimResult:
-        """尝试抢占跨进程 leader 占位；抢到返回本协程的 owner 令牌。
+    async def _safe_claim(self, key: str, owner: str) -> _ClaimResult:
+        """用调用方预先生成的 owner 令牌抢占跨进程 leader 占位。
 
-        返回 ``owner=None`` 表示没抢到，调用方会去等对方的载荷；``backend_error``
-        表示后端调用异常，调用方应直接抽取但不持有占位（失败时绝不 release
-        别人的占位）。生成新令牌而不是复用旧的，才能让过期 leader 的续租/
-        释放不再命中新 leader 的占位（should-1）。
+        ``claimed=False`` 表示没抢到，调用方会去等对方的载荷；``backend_error``
+        表示后端调用异常，调用方应直接抽取但不持有占位。令牌由调用方提前生成，
+        所以 ``try_claim`` 内部被取消时外层仍能用同一令牌 release（owner 匹配
+        使其在没抢到时是 no-op，should-1）。
 
         backend 只在占位行【不存在或租约已过期】时才会把 leader 让给我们，
         健康但慢的 leader 只要还在续租就不会被抢（S2）。
         """
-        owner = uuid.uuid4().hex
         try:
             claimed = bool(await self.backend.try_claim(
                 key, self.claim_lease_seconds, owner))
         except Exception as exc:  # noqa: BLE001 占位失败按“我来抽但不持有”处理
             logger.warning("抽取缓存占位失败，本进程直接抽取 key=%s: %r", key[:16], exc)
             return _ClaimResult(backend_error=True)
-        return _ClaimResult(owner=owner if claimed else None)
+        return _ClaimResult(claimed=claimed)
 
     async def _safe_renew(self, key: str, owner: str) -> bool | None:
         """续租占位。
@@ -418,26 +430,26 @@ class ContentResultCache:
         CorruptibleBackend 才是完整契约）：两个 worker 同时遇到坏行可能各抽
         一次，所以要留一条 warning，不能静默当成功（nit-5）。
         """
-        discard = getattr(self.backend, "discard", None)
-        if discard is None:
+        backend = self.backend
+        if not isinstance(backend, CorruptibleBackend):
             logger.warning(
                 "缓存后端未实现 discard，坏载荷可能导致同键重复抽取 key=%s",
                 key[:16])
             return
         try:
-            await discard(key, raw)
+            await backend.discard(key, raw)
         except Exception as exc:  # noqa: BLE001 删坏行失败 → 继续尝试占位/重抽
             logger.warning("抽取缓存删除损坏载荷失败（忽略）key=%s: %r",
                            key[:16], exc)
 
     async def _wait_remote(
-            self, key: str) -> tuple[ExtractionOutput | None, str | None]:
+            self, key: str, owner: str) -> tuple[ExtractionOutput | None, bool]:
         """等另一个 worker 回写载荷；租约过期或超时后重新抢占地盘。
 
-        返回 ``(cached, claim_owner)``：
-          · ``cached`` 非 None 表示等到了载荷（claim_owner 恒 None）；
-          · ``cached is None`` 表示“轮到我抽”，``claim_owner`` 非 None 说明本
-            协程确实抢到了占位（决定失败时能不能 release、能不能起续租循环）。
+        返回 ``(cached, claimed)``：
+          · ``cached`` 非 None 表示等到了载荷（claimed 恒 False）；
+          · ``cached is None`` 表示“轮到我抽”，``claimed`` 说明本协程是否确实
+            抢到了占位（决定要不要起续租循环）。owner 是调用方预先生成的令牌。
         轮询按指数退避（N9），不会在慢 leader 期间打出上千条 SELECT。
         """
         loop = asyncio.get_running_loop()
@@ -450,52 +462,65 @@ class ContentResultCache:
             except Exception as exc:  # noqa: BLE001 后端不可读 → 自己抽
                 logger.warning("等待跨进程缓存时读取失败，改为自行抽取 key=%s: %r",
                                key[:16], exc)
-                return None, None
+                return None, False
             if raw is None:
                 # 占位行消失 = leader 失败并释放；立刻重新抢，早于超时恢复。
-                claim = await self._safe_claim(key)
-                if claim.owner is not None or claim.backend_error:
-                    return None, claim.owner
+                claim = await self._safe_claim(key, owner)
+                if claim.claimed or claim.backend_error:
+                    return None, claim.claimed
             elif raw != "":
                 cached = self._decode(key, raw)
                 if cached is not None:
-                    return cached, None
+                    return cached, False
                 # 载荷损坏：删掉（仅当值仍是我们读到的坏值）再走占位，抢到的
                 # 一方重抽并覆盖；没抢到就继续轮询，避免两个 worker 同时重抽（nit-3）。
                 await self._discard_corrupt(key, raw)
-                claim = await self._safe_claim(key)
-                if claim.owner is not None or claim.backend_error:
-                    return None, claim.owner
+                claim = await self._safe_claim(key, owner)
+                if claim.claimed or claim.backend_error:
+                    return None, claim.claimed
             else:
                 # 占位行还在：只有经过一个完整租约后才尝试接管。健康 leader 会
                 # 续租，原子抢占会失败；崩溃 leader 的租约过期后等待方立刻接手，
                 # 不必付满整个 remote_wait_seconds（S2）。
                 if loop.time() - last_takeover >= self.claim_lease_seconds:
                     last_takeover = loop.time()
-                    claim = await self._safe_claim(key)
-                    if claim.owner is not None or claim.backend_error:
-                        return None, claim.owner
+                    claim = await self._safe_claim(key, owner)
+                    if claim.claimed or claim.backend_error:
+                        return None, claim.claimed
             await asyncio.sleep(delay)
             delay = min(delay * 2, self.max_poll_seconds)
         # 循环因 deadline 退出前会先 sleep 一个轮询间隔：leader 可能刚好在这个
         # 窗口里回写。退出前再读一次，否则会白自抽一次（nit-1）。
         cached = await self._safe_get(key)
         if cached is not None:
-            return cached, None
+            return cached, False
         # 等太久（leader 卡死且租约异常）：尽量重新抢占地盘后自己抽，绝不永久卡住。
-        return None, (await self._safe_claim(key)).owner
+        return None, (await self._safe_claim(key, owner)).claimed
 
-    async def _safe_set(self, key: str, output: ExtractionOutput) -> None:
+    async def _safe_set(self, key: str, output: ExtractionOutput) -> bool:
+        """回写结果；返回 False 表示写失败（调用方据此释放自己的占位）。"""
         try:
             raw = json.dumps(
                 {"v": _PAYLOAD_VERSION,
                  "output": output.model_dump(mode="json")},
                 ensure_ascii=False)
             await self.backend.set(key, raw)
+            return True
         except Exception as exc:  # noqa: BLE001 写失败不影响本次结果
             logger.warning("抽取缓存写入失败（忽略）key=%s: %r", key[:16], exc)
+            return False
 
     # -------------------------------------------------- 单飞原语
+    def _drop_waiter(self, key: str, future: asyncio.Future) -> None:
+        """等待方退出时回退计数；只在仍是本协程等待的 future 代际时生效（nit-5）。"""
+        if self._inflight.get(key) is not future:
+            return
+        remaining = self._waiters.get(key, 0) - 1
+        if remaining > 0:
+            self._waiters[key] = remaining
+        else:
+            self._waiters.pop(key, None)
+
     def _finish_inflight(self, key: str, output: ExtractionOutput) -> None:
         future = self._inflight.pop(key, None)
         self._waiters.pop(key, None)
@@ -590,7 +615,8 @@ class PostgresCacheBackend:
             ON CONFLICT (cache_key) DO UPDATE
               SET payload = EXCLUDED.payload,
                   owner = NULL,
-                  expires_at = NULL
+                  expires_at = NULL,
+                  created_at = now()
             """,
             key, value)
         await self.purge_expired()
@@ -658,7 +684,10 @@ class PostgresCacheBackend:
                 and now - self._last_purge < self.purge_interval_seconds):
             return
         self._last_purge = now
+        # 占位行按租约（expires_at）判活：正在续租的占位不能因为 created_at
+        # 老于 TTL 被清掉；载荷行 expires_at 为 NULL，回落到 created_at（nit-6）。
         await self.pool.execute(
             "DELETE FROM extraction_result_cache "
-            "WHERE created_at < now() - ($1::text || ' hours')::interval",
+            "WHERE coalesce(expires_at, created_at) "
+            "< now() - ($1::text || ' hours')::interval",
             str(self.ttl_hours))

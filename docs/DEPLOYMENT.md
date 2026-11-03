@@ -160,7 +160,8 @@ python -m moray.jobs.worker --offline --once
 ## 4b. 分块结果内容级缓存（工单 05，纯加速层、默认关闭）
 
 `MORAY_RESULT_CACHE_ENABLED=1` 开启后，分块抽取前按「领域配置指纹（含 user 消息
-模板 hash） + 模型身份（provider + base_url + 模型名） + 分块正文」查缓存，命中
+模板 hash） + 模型身份（provider + base_url + 模型名 + 思考/推理档位） +
+分块正文」查缓存，命中
 不再调 LLM，也不产生真实 token。
 
 - **后端选择**：`MORAY_RESULT_CACHE_BACKEND=memory`（默认）只在单进程内有效；

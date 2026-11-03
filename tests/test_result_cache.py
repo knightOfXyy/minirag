@@ -89,10 +89,10 @@ async def test_miss_calls_extractor_then_hit_does_not():
         return _output()
 
     o1, hit1 = await cache.get_or_extract(
-        domain_fingerprint="fp1", model_name="m", chunk_text="正文",
+        domain_fingerprint="fp1", model_identity="m", chunk_text="正文",
         extract=extract)
     o2, hit2 = await cache.get_or_extract(
-        domain_fingerprint="fp1", model_name="m", chunk_text="正文",
+        domain_fingerprint="fp1", model_identity="m", chunk_text="正文",
         extract=extract)
 
     assert hit1 is False and hit2 is True
@@ -111,11 +111,11 @@ async def test_hit_returns_independent_copy():
         return _output()
 
     out, _ = await cache.get_or_extract(
-        domain_fingerprint="fp", model_name="m", chunk_text="正文",
+        domain_fingerprint="fp", model_identity="m", chunk_text="正文",
         extract=extract)
     out.result.entities[0].name = "被改写"
     again, hit = await cache.get_or_extract(
-        domain_fingerprint="fp", model_name="m", chunk_text="正文",
+        domain_fingerprint="fp", model_identity="m", chunk_text="正文",
         extract=extract)
     assert hit is True
     assert again.result.entities[0].name == "华为"
@@ -1476,7 +1476,7 @@ class _ConcurrentProbeCache:
         self.active = 0
         self.max_active = 0
 
-    async def has_cached(self, domain_fingerprint, model_name, chunk_text):
+    async def has_cached(self, domain_fingerprint, model_identity, chunk_text):
         import asyncio
 
         self.active += 1
@@ -1487,7 +1487,7 @@ class _ConcurrentProbeCache:
         finally:
             self.active -= 1
 
-    async def get_or_extract(self, domain_fingerprint, model_name, chunk_text,
+    async def get_or_extract(self, domain_fingerprint, model_identity, chunk_text,
                              extract):
         return await extract(), True
 
@@ -1784,3 +1784,285 @@ def test_corruptible_backend_protocol_declares_discard():
     assert not isinstance(_NoDiscard(), CorruptibleBackend)
 
 
+# ---------------------------------------------------------------------------
+# 第 5 轮评审回归：占位只在异常路径释放（should-1）、采样开关进键（should-2）
+# 与 8 条 nit（其中 nit-8 按评审判定继续挂账，不在本单扩大改动面）
+# ---------------------------------------------------------------------------
+class _SetFailingClaimBackend(_ClaimableFakeBackend):
+    """占位接口正常、只有 set 抛错：模拟「抽到了但写不进缓存」。"""
+
+    async def set(self, key, value):
+        await asyncio.sleep(0)
+        raise RuntimeError("模拟写缓存失败")
+
+
+@pytest.mark.asyncio
+async def test_write_failure_releases_own_claim_without_lease_wait():
+    """should-1：写缓存失败后必须立刻释放自己的占位。
+
+    旧实现只在 except 里 release，写失败被 _safe_set 吞掉后占位留到租约过期，
+    同键后续请求会白等一个 claim_lease（默认 30s）再重复真调。
+    """
+    backend = _SetFailingClaimBackend()
+    cache_a = ContentResultCache(backend)
+    cache_b = ContentResultCache(
+        backend, claim_lease_seconds=5.0, remote_wait_seconds=5.0,
+        poll_seconds=0.005)
+    calls = {"n": 0}
+
+    async def extract():
+        calls["n"] += 1
+        return _output()
+
+    key = build_cache_key("fp", "m", "写缓存失败")
+    out1, hit1 = await cache_a.get_or_extract("fp", "m", "写缓存失败", extract)
+    assert (out1.result.entities[0].name, hit1, calls["n"]) == ("华为", False, 1)
+    assert key not in backend._claims, "写失败后占位应立刻释放，不能留到租约过期"
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    out2, hit2 = await cache_b.get_or_extract("fp", "m", "写缓存失败", extract)
+    elapsed = loop.time() - started
+    assert hit2 is False and calls["n"] == 2
+    assert out2.result.entities[0].name == "华为"
+    assert elapsed < 0.5, f"同键后续请求白等了 {elapsed:.3f}s 租约"
+
+
+class _SlowClaimOnceBackend(_ClaimableFakeBackend):
+    """第一次 try_claim 先落占位再挂起，复现「在 try_claim 内被取消」。"""
+
+    def __init__(self):
+        super().__init__()
+        self.claim_entered = asyncio.Event()
+        self._slow = True
+
+    async def try_claim(self, key, lease_seconds, owner):
+        claimed = await super().try_claim(key, lease_seconds, owner)
+        if self._slow:
+            self._slow = False
+            self.claim_entered.set()
+            await asyncio.sleep(30)
+        return claimed
+
+
+@pytest.mark.asyncio
+async def test_cancel_inside_try_claim_releases_placeholder():
+    """should-1：在 try_claim 内被取消时，已落库的占位也必须释放。
+
+    旧实现 owner 在 _safe_claim 内生成，取消发生在返回之前 → claim_owner 仍是
+    None → except 不 release，占位留到租约过期。
+    """
+    backend = _SlowClaimOnceBackend()
+    cache = ContentResultCache(
+        backend, claim_lease_seconds=30.0, remote_wait_seconds=30.0,
+        poll_seconds=0.005)
+    calls = {"n": 0}
+
+    async def extract():
+        calls["n"] += 1
+        return _output()
+
+    key = build_cache_key("fp", "m", "占位中被取消")
+    task = asyncio.create_task(
+        cache.get_or_extract("fp", "m", "占位中被取消", extract))
+    await asyncio.wait_for(backend.claim_entered.wait(), timeout=1.0)
+    assert key in backend._claims          # 占位已落库，owner 令牌还没返回
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert key not in backend._claims, "取消后占位必须释放，不能留到租约过期"
+    assert key not in cache._inflight
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    out, hit = await cache.get_or_extract("fp", "m", "占位中被取消", extract)
+    elapsed = loop.time() - started
+    assert hit is False and calls["n"] == 1
+    assert out.result.entities[0].name == "华为"
+    assert elapsed < 0.5, f"取消后同键请求白等了 {elapsed:.3f}s"
+
+
+def test_extractor_model_identity_covers_thinking_and_reasoning_effort(monkeypatch):
+    """should-2：LLM_THINKING / LLM_REASONING_EFFORT 直接改请求体，必须进缓存键。
+
+    它们是运行期 env（改 .env 重启即生效），漏进键会让同一分块长期返回
+    「上一个思考档位」的结果，且没有任何日志提示。
+    """
+    from moray.extraction import extractor as extractor_mod
+
+    settings = {"provider": "volcengine", "base_url": "https://ark.example",
+                "chat_model": "same-model",
+                "reasoning_effort": None, "thinking": None}
+    monkeypatch.setattr(extractor_mod, "get_settings", lambda: dict(settings))
+    base = extractor_mod.Extractor("general")
+
+    settings["reasoning_effort"] = "high"
+    high = extractor_mod.Extractor("general")
+    settings["reasoning_effort"] = None
+    settings["thinking"] = False
+    no_think = extractor_mod.Extractor("general")
+
+    assert base.model_identity != high.model_identity
+    assert base.model_identity != no_think.model_identity
+    assert high.model_identity != no_think.model_identity
+
+
+class _BrokenRetryPromptExtractor(_CountingRealExtractor):
+    """领域指纹算不出来（模板渲染抛错）的抽取器。"""
+
+    @staticmethod
+    def _retry_prompt(error):
+        raise RuntimeError("模板渲染失败")
+
+
+@pytest.mark.asyncio
+async def test_pipeline_degrades_to_no_cache_when_fingerprint_fails(caplog):
+    """nit-1：缓存层算指纹失败不能让「开缓存」比「不开缓存」更脆弱。"""
+    text = _long_text()
+    chunks = _chunks(text)
+    Document = __import__("moray.extraction.document", fromlist=["Document"]).Document
+    real = _BrokenRetryPromptExtractor(
+        DomainSpec(code="general", name="通用",
+                   types=(TypeSpec("ORG", "机构", "机构"),)))
+    cache = ContentResultCache(InMemoryCacheBackend())
+    caplog.set_level("WARNING")
+    pipeline = _pipeline(real, cache)
+
+    assert pipeline.result_cache is None
+    assert any("降级为不缓存" in r.message for r in caplog.records)
+
+    doc = Document(id="d", text=text, source="t")
+    out1 = await pipeline.run(doc, chunks)
+    out2 = await pipeline.run(doc, chunks)
+    assert real.calls == 2 * len(chunks)   # 退化成普通抽取，每次真调
+    assert out1.result.model_dump() == out2.result.model_dump()
+
+
+class _NoDiscardClaimBackend:
+    """满足 ClaimableBackend、但没有 discard 的后端（缺 CorruptibleBackend 能力）。"""
+
+    def __init__(self):
+        self._inner = _ClaimableFakeBackend()
+
+    async def get(self, key):
+        return await self._inner.get(key)
+
+    async def set(self, key, value):
+        await self._inner.set(key, value)
+
+    async def try_claim(self, key, lease_seconds, owner):
+        return await self._inner.try_claim(key, lease_seconds, owner)
+
+    async def renew_claim(self, key, lease_seconds, owner):
+        return await self._inner.renew_claim(key, lease_seconds, owner)
+
+    async def release(self, key, owner):
+        await self._inner.release(key, owner)
+
+
+@pytest.mark.asyncio
+async def test_discard_corrupt_uses_protocol_not_getattr(caplog):
+    """nit-2：discard 是协议能力，生产路径必须按 isinstance 判定并留 warning。"""
+    from moray.extraction.cache import CorruptibleBackend
+
+    no_discard = _NoDiscardClaimBackend()
+    assert not isinstance(no_discard, CorruptibleBackend)
+    cache = ContentResultCache(no_discard)
+    caplog.set_level("WARNING")
+    await cache._discard_corrupt("chunk:deadbeef", "{坏载荷")
+    assert any("discard" in r.message for r in caplog.records)
+
+    # 实现了协议的后端：真的按“读到的坏值”删除，且不留 warning。
+    backend = _ClaimableFakeBackend()
+    key = build_cache_key("fp", "m", "坏值删除")
+    backend._store[key] = "{坏载荷"
+    caplog.clear()
+    await ContentResultCache(backend)._discard_corrupt(key, "{坏载荷")
+    assert key not in backend._store
+    assert not [r for r in caplog.records if "discard" in r.message]
+
+
+@pytest.mark.asyncio
+async def test_stale_waiter_does_not_steal_new_generation_waiter_count():
+    """nit-5：旧代际等待方的 stale finally 不能把新 leader 的计数减到 0。"""
+    cache = ContentResultCache(InMemoryCacheBackend())
+    key = "chunk:generation"
+    loop = asyncio.get_running_loop()
+    old_future = loop.create_future()
+    new_future = loop.create_future()
+    cache._inflight[key] = new_future
+    cache._waiters[key] = 2
+
+    cache._drop_waiter(key, old_future)          # 上一代际的 stale finally
+    assert cache._waiters[key] == 2
+    assert cache._inflight[key] is new_future
+
+    cache._drop_waiter(key, new_future)
+    assert cache._waiters[key] == 1
+    cache._drop_waiter(key, new_future)
+    assert key not in cache._waiters
+
+
+class _RecordingArgsPool:
+    """记录 SQL 与实参的假 asyncpg pool，供 SQL 占位符静态核对。"""
+
+    def __init__(self):
+        self.calls: list[tuple[str, tuple]] = []
+
+    async def execute(self, sql, *args):
+        self.calls.append((sql, args))
+        return None
+
+    async def fetchval(self, sql, *args):
+        self.calls.append((sql, args))
+        return None
+
+
+def _assert_placeholders_match_args(sql: str, args: tuple) -> None:
+    import re
+
+    numbered = sorted({int(n) for n in re.findall(r"\$(\d+)", sql)})
+    assert numbered == list(range(1, len(args) + 1)), (sql, args)
+
+
+@pytest.mark.asyncio
+async def test_postgres_backend_sql_placeholders_match_args():
+    """nit-7：PG SQL 在 CI 里零执行，至少要静态钉死占位符编号/个数与实参一致。"""
+    from moray.extraction.cache import PostgresCacheBackend
+
+    pool = _RecordingArgsPool()
+    backend = PostgresCacheBackend(pool, ttl_hours=1)
+    await backend.set("k", "v")
+    await backend.try_claim("k", 30.0, "owner-a")
+    await backend.renew_claim("k", 30.0, "owner-a")
+    await backend.release("k", "owner-a")
+    await backend.discard("k", "坏值")
+    unclean = PostgresCacheBackend(pool, ttl_hours=1)
+    await unclean.purge_expired()
+
+    # set(INSERT) + set 内的首次 purge + try_claim/renew/release/discard/再次 purge
+    assert len(pool.calls) == 7
+    for sql, args in pool.calls:
+        _assert_placeholders_match_args(sql, args)
+    # 占位行语义：try_claim 必须复用同一个空载荷参数（$2）做条件，不能错位。
+    try_claim_sql = next(
+        sql for sql, args in pool.calls if "RETURNING cache_key" in sql
+        and "INSERT INTO extraction_result_cache" in sql)
+    assert "payload = $2" in try_claim_sql
+
+
+@pytest.mark.asyncio
+async def test_postgres_set_refreshes_created_at_and_purge_protects_lease():
+    """nit-6：回写要刷新 created_at；TTL 清理不能删掉仍在续租的占位行。"""
+    from moray.extraction.cache import PostgresCacheBackend
+
+    pool = _RecordingArgsPool()
+    backend = PostgresCacheBackend(pool, ttl_hours=1)
+    await backend.set("k", "v")
+
+    set_sql = next(sql for sql, _ in pool.calls
+                   if "SET payload = EXCLUDED.payload" in sql)
+    assert "created_at = now()" in set_sql
+
+    purge_sql = next(sql for sql, _ in pool.calls if "DELETE" in sql)
+    assert "coalesce(expires_at, created_at)" in purge_sql
