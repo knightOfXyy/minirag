@@ -1,6 +1,13 @@
 """抽取流水线：文档 -> 结构化实体/关系。"""
 
 from .chunking import Chunk, Chunker, estimate_tokens, split_sentences
+from .cache import (
+    CacheBackend,
+    ContentResultCache,
+    InMemoryCacheBackend,
+    PostgresCacheBackend,
+    build_cache_key,
+)
 from .document import Document, ExtractionOutput
 from .extractor import ExtractionError, Extractor
 from .local_backfill import (
@@ -29,6 +36,10 @@ __all__ = [
     "ChunkedExtractionPipeline",
     "naive_merge",
     "remap_spans",
+    "ContentResultCache",
+    "InMemoryCacheBackend",
+    "PostgresCacheBackend",
+    "build_cache_key",
     "verify_spans",
     "backfill_provenance",
     "BackfillReport",

@@ -58,6 +58,9 @@ class AppDeps:
     # 动态抽取器提供方：按请求 domain_code 从 DB 配置中心取最新领域包；
     # 存在时优先于 extractor_fn（运营改 domain_configs 表即热更，无需重启）。
     extractor_provider: object | None = None
+    # 分块结果内容级缓存（纯加速层，默认 None=不启用）。进程内共享同一实例，
+    # 重复提交/重试的相同分块命中后不再调 LLM，用量记 cache_hits 而非真实 token。
+    result_cache: object | None = None
 
 
 def create_app(
@@ -165,7 +168,8 @@ def create_app(
             chunk_threshold_units=cs["threshold_units"],
             chunk_max_units=cs["max_units"],
             chunk_overlap_units=cs["overlap_units"],
-            chunk_concurrency=cs["concurrency"])
+            chunk_concurrency=cs["concurrency"],
+            result_cache=d.result_cache)
 
         ingest_info = None
         if req.ingest:

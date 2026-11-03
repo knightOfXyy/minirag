@@ -22,6 +22,7 @@ from .factory import (
     TASK_PROTOCOL,
     build_extraction_model,
     build_system_prompt,
+    domain_fingerprint,
     to_core_result,
     validate_against_domain,
 )
@@ -43,6 +44,7 @@ __all__ = [
     # 动态工厂
     "build_extraction_model",
     "build_system_prompt",
+    "domain_fingerprint",
     "to_core_result",
     "validate_against_domain",
 ]

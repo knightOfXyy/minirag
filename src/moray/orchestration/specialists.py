@@ -162,6 +162,7 @@ async def run_chunked_team(
     chunk_overlap_units: int = 200,
     chunk_concurrency: int = 4,
     usage=None,
+    result_cache=None,
 ) -> ReviewedExtraction:
     """超过分块阈值且有真 Extractor 可取时，走「分块 map → 全局坐标归并 →
     单轮规则审校」；否则逐字节保持 :func:`run_extraction_team` 旧行为。
@@ -177,6 +178,11 @@ async def run_chunked_team(
     ``usage`` 传入 Usage 累加器时，分块路径把 pipeline 聚合的 token 用量
     累加进去（闭包路径的用量由调用方挂 provider.extract 的 usage_sink，两不冲突）。
     返回的 review.iterations 在分块路径恒为 1（单轮），整篇路径为实际轮数。
+
+    ``result_cache`` 非 None 时启用分块结果【内容级缓存】（纯加速层）：键=领域
+    配置指纹+模型名+块正文，命中不调模型、用量记 cache_hits 而非真实 token。
+    调用方应在【同一篇文档的多次运行/多个作业】间复用同一个缓存实例，断点续跑、
+    失败重试、重复提交才能命中；缺省 None，行为与无缓存逐字节一致。
     """
     if provider is None:
         return await run_extraction_team(text, extractor=extractor, max_iters=max_iters)
@@ -191,7 +197,8 @@ async def run_chunked_team(
     real, _domain = await provider.get_extractor(domain_code)
     from ..extraction.pipeline import ChunkedExtractionPipeline
 
-    pipeline = ChunkedExtractionPipeline(real, concurrency=chunk_concurrency)
+    pipeline = ChunkedExtractionPipeline(
+        real, concurrency=chunk_concurrency, result_cache=result_cache)
     chunks = chunker.chunk_text(text)
     output = await pipeline.run(
         _Doc(id="chunked", text=text, source="chunked", domain_code=domain_code), chunks)

@@ -245,6 +245,53 @@ def chunk_settings() -> dict:
     }
 
 
+# 视为“开启”的取值；其余（含 0/false/no/off/空）一律关闭。
+_ENABLED_WORDS = {"1", "true", "yes", "on"}
+
+
+def result_cache_settings() -> dict:
+    """分块抽取结果【内容级缓存】开关（工单 05）。
+
+    纯加速层，默认【关闭】——不配任何东西时作业语义与历史逐字节一致。
+      MORAY_RESULT_CACHE_ENABLED：置真（1/true/yes/on）才启用。
+      MORAY_RESULT_CACHE_BACKEND：存储后端：
+        · memory（缺省）：进程内、零外部依赖，单飞在这一层生效；
+        · postgres：复用作业库（extraction_result_cache 表），跨 worker
+          副本/重启共享缓存内容（跨进程强一致单飞不做保证，至多多抽一次）。
+    """
+    enabled = _first_env("MORAY_RESULT_CACHE_ENABLED").lower() in _ENABLED_WORDS
+    backend = _first_env("MORAY_RESULT_CACHE_BACKEND") or "memory"
+    return {"enabled": enabled, "backend": backend}
+
+
+async def build_result_cache(settings: dict | None = None, *, pool=None):
+    """按配置构造分块结果缓存；关闭或后端不可用时返回 None（= 完全不缓存）。
+
+    memory 后端零依赖即可用；postgres 后端需传入 asyncpg 连接池并建表，
+    建表/初始化失败时安全退回 memory（保证服务可用、不改变抽取正确性）。
+    """
+    s = settings or result_cache_settings()
+    if not s.get("enabled"):
+        return None
+    backend_name = s.get("backend", "memory")
+    from .extraction.cache import ContentResultCache, InMemoryCacheBackend
+
+    if backend_name == "postgres" and pool is not None:
+        from .extraction.cache import PostgresCacheBackend
+
+        pg = PostgresCacheBackend(pool)
+        try:
+            await pg.init_schema()
+            return ContentResultCache(pg)
+        except Exception:  # noqa: BLE001 缓存是加速层：建表失败退回内存，不阻断服务
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "抽取结果缓存 postgres 后端初始化失败，退回进程内内存后端",
+                exc_info=True)
+    return ContentResultCache(InMemoryCacheBackend())
+
+
 def build_chat_model(*, stream: bool = False):
     """按 LLM_PROVIDER 构造聊天模型客户端（默认非流式，便于结构化抽取）。"""
     s = get_settings()

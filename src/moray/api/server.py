@@ -51,10 +51,17 @@ async def build_deps(*, enable_llm: bool = False,
         # 按请求 domain_code 现取最新领域包构建抽取器；改表即热更，无需重启
         extractor_provider = DynamicExtractorProvider(resolver, max_retries=1)
 
+    # 分块结果内容级缓存：默认关闭；启用时在本 API 进程内共享一个实例，
+    # backend=postgres 时复用作业库连接池，跨 worker/重启共享。
+    from ..config import build_result_cache
+
+    result_cache = await build_result_cache(pool=pool)
+
     return AppDeps(
         pool=pool, store=store, kb=kb, ingestor=ingestor,
         job_store=job_store, dashboard=dashboard,
-        extractor_fn=extractor_fn, extractor_provider=extractor_provider)
+        extractor_fn=extractor_fn, extractor_provider=extractor_provider,
+        result_cache=result_cache)
 
 
 def main(argv: list[str] | None = None) -> None:
