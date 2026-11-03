@@ -1,6 +1,8 @@
 # 工单 03 第 6 轮评审（r6）修复证据
 
 - 基线：`4d6f0a7`（r5 修复后的 HEAD）。
+- 先红提交：`f5a5c4c`（只加 `tests/test_r6_review_fixes.py`）。
+- 修复提交：`306393f`（`specialists.py` + `ARCHITECTURE.md`）。
 - 本轮修复面：`src/moray/orchestration/specialists.py`（`rule_review` 的 ②③④⑤）
   + `docs/ARCHITECTURE.md` 审校口径说明 + 新增 `tests/test_r6_review_fixes.py`。
 - 先红：只加用例、未改实现时，`tests/test_r6_review_fixes.py` **5 failed / 2 passed**
