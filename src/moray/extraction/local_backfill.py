@@ -17,7 +17,8 @@
 * **歧义不猜**：同一个字面串若可归属到多个逻辑实体（同名不同类型，或别名
   归属冲突），该次出现被标记为「歧义未归属」，不写进任何实体，只计入质量信号。
 * **关系证据**：按「头、尾实体在同一句中共现」定位；一句内有多对时取最近的
-  一对作为 evidence_span，全部候选保留在回填信号里；跨句/跨块不臆造，证据留空。
+  一对作为 evidence_span，候选按距离保留最近的至多 2000 条（进程内软上限，
+  见 r14 F1）；跨句/跨块不臆造，证据留空。
 
 本模块是纯函数，不调模型、不读环境、不可变地返回一个新的 ExtractionResult，
 便于离线单测与评测复现。全局偏移不在此处理——调用方对块文本回填得到「块内
@@ -37,6 +38,7 @@
 
 from __future__ import annotations
 
+import heapq
 import json
 import logging
 from bisect import bisect_right
@@ -93,14 +95,23 @@ def entity_signal_key(entity: Entity) -> str:
 
 # 关系证据候选是「同句内头×尾」的全笛卡尔积；短文档可能只有几十条，
 # 无标点长文/单块大文本却能到几十万条（数十 MB）。序列化（API 响应、
-# 作业结果）默认只带 selected + 最近的 K 条；内存里的 BackfillReport
-# 始终保留全部，调试/评测可直接读对象（r10 N4）。
+# 作业结果）默认只带 selected + 最近的 K 条；内存里的 BackfillReport 在
+# 配对阶段就按 MAX_INTERNAL_RELATION_EVIDENCE_CANDIDATES 保留最近的 N 条
+# （r14 F1，不再是「始终保留全部」）。
 MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES = 20
 
 # 进程内软上限（r12 N2）：块间传递与 05 结果缓存都携带候选，R 条关系 ×
 # 每块 K 对 × C 块没有上限时会被笛卡尔积撑大。这个值明显高于对外窗口 20，
 # 不会影响正常文档，只兜住「无标点长文 / 单块大文本」的极端情况。
+# r14 F1：配对时就按这个容量限流（大顶堆只留最近 N 对），不再先把
+# H×T 全物化再裁——无标点块只有一句，按句分桶无法降低单句内的笛卡尔积。
 MAX_INTERNAL_RELATION_EVIDENCE_CANDIDATES = 2000
+
+
+# 同一个非法上限值只告警一次（r14 F5）：坏配置是持续状态，每块/每条关系/
+# 每次序列化都打同一条 WARNING 会淹没真正的告警。用 set 记录已告警的具体
+# 值，重复出现时降为 DEBUG。
+_NEGATIVE_CANDIDATE_LIMIT_WARNED: set[int] = set()
 
 
 def entity_identity_key(
@@ -134,8 +145,10 @@ def _cap_relation_candidates(cands: list[dict], limit: int | None) -> list[dict]
     负数没有合理语义（r10 曾表示全量、r11 又改成空，这种静默反转会让旧
     工具/脚本把 0/负值当成「全量」而悄悄丢候选）。r12 曾在序列化边界直接
     ``ValueError``，但该上限可能来自环境/配置：坏配置会把整次抽取响应打成
-    500。这里改为 clamp 到对外默认窗口并记 WARNING（r13 N6）；配置层应在
-    启动时另行校验。跨版本迁移：要全量传 ``None``，要空传 ``0``。
+    500。这里改为 clamp 到对外默认窗口并记 WARNING（r13 N6）；同一个非法值
+    只告警一次，重复出现降为 DEBUG，避免坏配置在批量作业里刷满日志
+    （r14 F5）。配置层应在启动时另行校验。跨版本迁移：要全量传 ``None``，
+    要空传 ``0``。
 
     两个生产方（``backfill_provenance`` 与 ``merge_backfill_reports``）都把
     selected 放在首条，所以前 ``limit`` 条天然包含它；旧实现里「selected 不在
@@ -147,10 +160,18 @@ def _cap_relation_candidates(cands: list[dict], limit: int | None) -> list[dict]
     if limit is None:
         return [_copy_backfill_entry(c) for c in cands]
     if limit < 0:
-        logger.warning(
-            "max_relation_evidence_candidates=%s 非法（负数），"
-            "序列化边界 clamp 到默认 %d 条；None=全量、0=空、正数=前 N 条",
-            limit, MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES)
+        if limit in _NEGATIVE_CANDIDATE_LIMIT_WARNED:
+            logger.debug(
+                "max_relation_evidence_candidates=%s 非法（负数），"
+                "已告警过，继续 clamp 到默认 %d 条",
+                limit, MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES)
+        else:
+            _NEGATIVE_CANDIDATE_LIMIT_WARNED.add(limit)
+            logger.warning(
+                "max_relation_evidence_candidates=%s 非法（负数），"
+                "序列化边界 clamp 到默认 %d 条；None=全量、0=空、正数=前 N 条"
+                "（同一非法值只告警一次，r14 F5）",
+                limit, MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES)
         limit = MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES
     if limit == 0:
         return []
@@ -231,7 +252,9 @@ class BackfillReport:
     # reconcile_span_ambiguity），只额外暴露「有多少条归属被撤销」。
     reconciled_unattributed: int = 0
     relations_without_evidence: list[dict] = field(default_factory=list)
-    # 每条关系的全部同句共现候选（evidence_span 取其中最近的一对）
+    # 每条关系的同句共现候选（evidence_span 取其中最近的一对）。
+    # r14 F1 起配对阶段就按 MAX_INTERNAL_RELATION_EVIDENCE_CANDIDATES 只保留
+    # 最近的 N 条，不再把 H×T 全量留在内存里。
     relation_evidence_candidates: dict[str, list[dict]] = field(default_factory=dict)
     # 该信号属于哪一块（跨块汇总时用于把块内偏移平移成全局偏移）
     chunk_id: str = ""
@@ -417,8 +440,28 @@ class AhoCorasick:
 # ---------------------------------------------------------------------------
 # 纯函数回填
 # ---------------------------------------------------------------------------
+def _normalize_aliases(name: str, aliases) -> list[str]:
+    """别名存值规范化：去首尾空白、去空、去重，并跳过与标准名相同的项。
+
+    与 ``literal_index``/``entity_identity_key`` 的去空白口径一致（r14 F2）：
+    模型在别名里写 ``" 鹅厂 "`` 或把标准名的空白变体塞进 aliases 时，不能
+    让脏值落到 ``entity_aliases`` 表或 API 输出里。
+    """
+    name_key = name.strip()
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for alias in aliases or ():
+        value = alias.strip()
+        if not value or value == name_key or value in seen:
+            continue
+        seen.add(value)
+        cleaned.append(value)
+    return cleaned
+
+
 def merge_entity_metadata(
-    base: Entity, incoming: Entity, *, fill_description: bool = True
+    base: Entity, incoming: Entity, *, fill_description: bool = True,
+    strip_aliases: bool = False,
 ) -> Entity:
     """把 ``incoming`` 的别名/属性/置信度并入 ``base``（确定性、首见优先）。
 
@@ -427,9 +470,17 @@ def merge_entity_metadata(
     把跨块 mention 全量保留，语义不同，由调用方自己处理。
     ``fill_description=False`` 保留 262319b 的旧行为（不做 description 补全），
     供开关关闭时的 naive_merge 使用，保证逐字段一致。
+    ``strip_aliases=True`` 时按存值规范化口径并入别名（r14 F2）：仅回填/
+    瘦身归并路径使用；关闭开关的 LEGACY 归并保持原样，继续逐字段一致。
     """
+    name_key = incoming.name.strip()
     for alias in incoming.aliases:
-        if alias not in base.aliases and alias != incoming.name:
+        if strip_aliases:
+            value = alias.strip()
+            if not value or value == name_key or value in base.aliases:
+                continue
+            base.aliases.append(value)
+        elif alias not in base.aliases and alias != incoming.name:
             base.aliases.append(alias)
     for key, value in incoming.attributes.items():
         base.attributes.setdefault(key, value)
@@ -455,13 +506,16 @@ def _coalesce_entities(entities: list[Entity]) -> list[Entity]:
     for e in entities:
         key = entity_identity_key(e)
         if key in index:
-            merged[index[key]] = merge_entity_metadata(merged[index[key]], e)
+            merged[index[key]] = merge_entity_metadata(
+                merged[index[key]], e, strip_aliases=True)
         else:
             index[key] = len(merged)
             merged.append(Entity(
                 # 存值与身份键同口径（r13 N3）：短文档/直连 Extractor 路径
                 # 不经 naive_merge，若这里保留「 腾讯」入库会解析失败。
-                name=e.name.strip(), type=e.type, aliases=list(e.aliases),
+                name=e.name.strip(), type=e.type,
+                # 别名同样规范化（r14 F2）：去空白/去空/去重/跳过标准名变体。
+                aliases=_normalize_aliases(e.name, e.aliases),
                 mentions=[], confidence=e.confidence,
                 attributes=dict(e.attributes),
                 description=e.description))
@@ -604,7 +658,10 @@ def backfill_provenance(
             Entity(
                 name=e.name,
                 type=e.type,
-                aliases=list(e.aliases),
+                # 别名与标准名/关系端点同口径（r14 F2）：_coalesce_entities
+                # 已规范化，这里再兜一次，保证直连 backfill_provenance 的
+                # 产物也不会把带空白的别名送进入库/API。
+                aliases=_normalize_aliases(e.name, e.aliases),
                 mentions=ms,
                 # 稳定内核 confidence 的语义是「模型自报抽取置信度」，回填不得
                 # 用 grounding(0/1) 覆盖它；确定性信号只走 BackfillReport。
@@ -679,27 +736,66 @@ def _backfill_relations(
         head, tail = r.head.strip(), r.tail.strip()
         hi = _resolve(head)
         ti = _resolve(tail)
-        pairs: list[tuple[int, int, int, int, int]] = []
         # (head_start, tail_start, sent_start, sent_end, distance)
+        # 边配对边限流（r14 F1）：无标点块只有一句，按句分桶无法降低
+        # 单句内的 H×T；先 append 全部再排序会把几十万/上百万条 tuple
+        # 在序列化裁剪之前就物化出来（6000 字 1000×1000 实测 440MB）。
+        # 用一个容量为 MAX_INTERNAL_RELATION_EVIDENCE_CANDIDATES 的大顶堆
+        # 只保留「最近 N 对」，容量以内结果与旧实现 sorted(pairs) 逐值一致。
+        cap = MAX_INTERNAL_RELATION_EVIDENCE_CANDIDATES
+        nearest: list[tuple[int, int, int, tuple[int, int, int, int, int]]] = []
         if hi is not None and ti is not None:
             # 尾 mention 按句分桶：头 mention 只与自己所在句的尾比较，
             # 不再对每个头扫一遍全部尾（单句一头的常见情形是 O(1)）。
-            tails_by_sentence: dict[int, list[EntityMention]] = {}
+            # 句内尾起点预排序后，逐头从「最近位置」向两侧扩张：一旦
+            # 已保留满 N 对且下一个候选比堆顶最差还远，就停止该头（r14 F1）。
+            tails_by_sentence: dict[int, list[int]] = {}
             for tm, tsent in mentions_with_sentence.get(ti, ()):
-                tails_by_sentence.setdefault(tsent, []).append(tm)
+                tails_by_sentence.setdefault(tsent, []).append(tm.span.start)
+            for starts in tails_by_sentence.values():
+                starts.sort()
             for hm, hsent in mentions_with_sentence.get(hi, ()):
+                starts = tails_by_sentence.get(hsent)
+                if not starts:
+                    continue
                 hs = hm.span.start
-                for tm in tails_by_sentence.get(hsent, ()):
-                    ts = tm.span.start
-                    ss, se = sentences[hsent]
-                    pairs.append((hs, ts, ss, se, abs(hs - ts)))
+                ss, se = sentences[hsent]
+                left = bisect_right(starts, hs) - 1
+                right = left + 1
+                while left >= 0 or right < len(starts):
+                    if right >= len(starts) or (
+                            left >= 0
+                            and hs - starts[left] <= starts[right] - hs):
+                        ts = starts[left]
+                        left -= 1
+                        distance = hs - ts
+                    else:
+                        ts = starts[right]
+                        right += 1
+                        distance = ts - hs
+                    if len(nearest) == cap:
+                        worst_distance = -nearest[0][0]
+                        if distance > worst_distance:
+                            # 之后的候选只会更远，不可能进入最近 N 对。
+                            break
+                    pair = (hs, ts, ss, se, distance)
+                    # 堆项取负，把 Python 的最小堆当成「最差在堆顶」的大顶堆：
+                    # 距离最大（最远）、距离相同则起点最大的先被替换掉。
+                    entry = (-pair[4], -pair[0], -pair[1], pair)
+                    if len(nearest) < cap:
+                        heapq.heappush(nearest, entry)
+                    elif entry[:3] > nearest[0][:3]:
+                        heapq.heapreplace(nearest, entry)
 
         key = json.dumps([head, r.predicate, tail], ensure_ascii=False)
         evidence: Span | None = None
-        if pairs:
-            # 最近的一对；取该句整句作为证据 span（去掉句首尾空白，
+        if nearest:
+            # 最近的一对；距离相同按 head_start/tail_start 稳定排序（与旧实现
+            # 的插入顺序一致）。取该句整句作为证据 span（去掉句首尾空白，
             # 但保持对原文的精确切片）
-            ordered = sorted(pairs, key=lambda p: p[4])
+            ordered = sorted(
+                (entry[3] for entry in nearest),
+                key=lambda p: (p[4], p[0], p[1]))
             _hs, _ts, ss, se, _dist = ordered[0]
             ss, se = _trim_bounds(text, ss, se)
             evidence = Span(start=ss, end=se, text=text[ss:se])

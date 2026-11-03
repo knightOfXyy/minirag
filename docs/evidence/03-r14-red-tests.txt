@@ -1,0 +1,157 @@
+$ # 在 0734f46（r14 修复前）的 git archive 副本里跑本轮新增用例
+$ PYTHONPATH=src python -m pytest -q tests/test_r14_review_fixes.py
+F.FFFFF                                                                  [100%]
+=================================== FAILURES ===================================
+________ test_relation_evidence_pairing_without_punctuation_is_bounded _________
+
+    def test_relation_evidence_pairing_without_punctuation_is_bounded():
+        """3000 字无标点、500×500 mention：配对应 <1s，候选在配对时就 ≤2000。
+    
+        旧实现先物化 250k 条 pair 再排序，候选列表长度会远大于进程内软上限。
+        """
+        text = "华为 深圳 " * 500  # 3000 字，整段没有句末标点 -> 单句
+        result = ExtractionResult(
+            entities=[Entity(name="华为", type="ORG"), Entity(name="深圳", type="LOC")],
+            relations=[Relation(head="华为", predicate="位于", tail="深圳")],
+        )
+    
+        started = time.perf_counter()
+        _filled, report = lb.backfill_provenance(result, text)
+        elapsed = time.perf_counter() - started
+    
+        assert elapsed < 1.0, f"无标点块配对耗时 {elapsed:.3f}s，疑似仍是 H×T 全物化"
+        key = next(iter(report.relation_evidence_candidates))
+        cands = report.relation_evidence_candidates[key]
+>       assert len(cands) == lb.MAX_INTERNAL_RELATION_EVIDENCE_CANDIDATES
+E       AssertionError: assert 250000 == 2000
+E        +  where 250000 = len([{'head_start': 0, 'tail_start': 3, 'sent_start': 0, 'sent_end': 3000, ...}, {'head_start': 6, 'tail_start': 3, 'sent_...t_start': 0, 'sent_end': 3000, ...}, {'head_start': 18, 'tail_start': 15, 'sent_start': 0, 'sent_end': 3000, ...}, ...])
+E        +  and   2000 = lb.MAX_INTERNAL_RELATION_EVIDENCE_CANDIDATES
+
+tests/test_r14_review_fixes.py:45: AssertionError
+___________________ test_bounded_pairing_matches_bruteforce ____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2100319a60>
+
+    def test_bounded_pairing_matches_bruteforce(monkeypatch):
+        """把上限压到 5，逐值对比暴力全量排序的前 5 对（含距离并列的稳定序）。"""
+        monkeypatch.setattr(lb, "MAX_INTERNAL_RELATION_EVIDENCE_CANDIDATES", 5)
+        text = "华为 深圳 " * 20
+        heads = [i for i in range(0, len(text), 6)]
+        tails = [i + 3 for i in range(0, len(text), 6)]
+        expected = sorted(
+            ((abs(h - t), h, t) for h in heads for t in tails))[:5]
+    
+        _filled, report = lb.backfill_provenance(
+            ExtractionResult(
+                entities=[
+                    Entity(name="华为", type="ORG"),
+                    Entity(name="深圳", type="LOC"),
+                ],
+                relations=[Relation(head="华为", predicate="位于", tail="深圳")],
+            ),
+            text,
+        )
+        cands = report.relation_evidence_candidates[
+            next(iter(report.relation_evidence_candidates))]
+        actual = [(c["distance"], c["head_start"], c["tail_start"]) for c in cands]
+>       assert actual == expected
+E       assert [(3, 0, 3), (... 18, 15), ...] == [(3, 0, 3), (..., (3, 12, 15)]
+E         
+E         Left contains 395 more items, first extra item: (3, 18, 15)
+E         Use -v to get more diff
+
+tests/test_r14_review_fixes.py:96: AssertionError
+____________________ test_backfill_normalizes_alias_values _____________________
+
+    def test_backfill_normalizes_alias_values():
+        text = "腾讯在深圳。"
+        result, _report = lb.backfill_provenance(
+            ExtractionResult(entities=[
+                Entity(name=" 腾讯 ", type="ORG",
+                       aliases=[" 鹅厂 ", "腾讯", "鹅厂", "", "   "]),
+                # 重复输出同一逻辑实体，走 merge_entity_metadata 的别名并集路径。
+                Entity(name="腾讯", type="ORG", aliases=[" 鹅厂 ", "企鹅帝国"]),
+            ]),
+            text,
+        )
+    
+        assert len(result.entities) == 1
+        assert result.entities[0].name == "腾讯"
+>       assert result.entities[0].aliases == ["鹅厂", "企鹅帝国"]
+E       AssertionError: assert [' 鹅厂 ', '腾讯'...'   ', '企鹅帝国'] == ['鹅厂', '企鹅帝国']
+E         
+E         At index 0 diff: ' 鹅厂 ' != '鹅厂'
+E         Left contains 4 more items, first extra item: '鹅厂'
+E         Use -v to get more diff
+
+tests/test_r14_review_fixes.py:116: AssertionError
+__________________ test_ingestor_receives_clean_alias_values ___________________
+
+    @pytest.mark.asyncio
+    async def test_ingestor_receives_clean_alias_values():
+        """回填产物送进 Ingestor 时，落库入参已经是干净别名。"""
+        text = "腾讯在深圳。"
+        filled, _report = lb.backfill_provenance(
+            ExtractionResult(entities=[
+                Entity(name=" 腾讯 ", type="ORG", aliases=[" 鹅厂 ", "腾讯", ""]),
+            ]),
+            text,
+        )
+        store = _CapturingStore()
+        output = ExtractionOutput(
+            document_id="doc", domain_code="general", result=filled)
+    
+        await Ingestor(store, _StubEmbedder()).ingest(output)
+    
+        assert store.calls[0]["name"] == "腾讯"
+>       assert store.calls[0]["aliases"] == ["鹅厂"]
+E       AssertionError: assert [' 鹅厂 ', '腾讯', ''] == ['鹅厂']
+E         
+E         At index 0 diff: ' 鹅厂 ' != '鹅厂'
+E         Left contains 2 more items, first extra item: '腾讯'
+E         Use -v to get more diff
+
+tests/test_r14_review_fixes.py:152: AssertionError
+_________ test_payload_version_bumped_for_backfill_value_normalization _________
+
+    def test_payload_version_bumped_for_backfill_value_normalization():
+        """r13 N3/N4 改了缓存载荷里的取值语义，版本号必须递增才不会回放旧脏值。"""
+>       assert cache_mod._PAYLOAD_VERSION >= 2
+E       assert 1 >= 2
+E        +  where 1 = cache_mod._PAYLOAD_VERSION
+
+tests/test_r14_review_fixes.py:160: AssertionError
+___________________ test_negative_candidate_limit_warns_once ___________________
+
+caplog = <_pytest.logging.LogCaptureFixture object at 0x7f20be6e8170>
+
+    def test_negative_candidate_limit_warns_once(caplog):
+        report = lb.BackfillReport()
+        report.relation_evidence_candidates = {"k": [{"selected": True}]}
+        logger_name = "moray.extraction.local_backfill"
+    
+        with caplog.at_level(logging.WARNING, logger=logger_name):
+            report.to_dict(max_relation_evidence_candidates=-4321)
+            report.to_dict(max_relation_evidence_candidates=-4321)
+    
+        warnings = [
+            r for r in caplog.records
+            if r.name == logger_name and r.levelno == logging.WARNING
+            and "-4321" in r.getMessage()
+        ]
+>       assert len(warnings) == 1
+E       assert 2 == 1
+E        +  where 2 = len([<LogRecord: moray.extraction.local_backfill, 30, /tmp/opencode/r14-red/src/moray/extraction/local_backfill.py, 150, "...action/local_backfill.py, 150, "max_relation_evidence_candidates=%s 非法（负数），序列化边界 clamp 到默认 %d 条；None=全量、0=空、正数=前 N 条">])
+
+tests/test_r14_review_fixes.py:185: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  moray.extraction.local_backfill:local_backfill.py:150 max_relation_evidence_candidates=-4321 非法（负数），序列化边界 clamp 到默认 20 条；None=全量、0=空、正数=前 N 条
+WARNING  moray.extraction.local_backfill:local_backfill.py:150 max_relation_evidence_candidates=-4321 非法（负数），序列化边界 clamp 到默认 20 条；None=全量、0=空、正数=前 N 条
+=========================== short test summary info ============================
+FAILED tests/test_r14_review_fixes.py::test_relation_evidence_pairing_without_punctuation_is_bounded
+FAILED tests/test_r14_review_fixes.py::test_bounded_pairing_matches_bruteforce
+FAILED tests/test_r14_review_fixes.py::test_backfill_normalizes_alias_values
+FAILED tests/test_r14_review_fixes.py::test_ingestor_receives_clean_alias_values
+FAILED tests/test_r14_review_fixes.py::test_payload_version_bumped_for_backfill_value_normalization
+FAILED tests/test_r14_review_fixes.py::test_negative_candidate_limit_warns_once
+6 failed, 1 passed in 0.86s

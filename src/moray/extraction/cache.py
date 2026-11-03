@@ -46,7 +46,10 @@ from .document import ExtractionOutput
 logger = logging.getLogger(__name__)
 
 # 载荷格式版本：一旦序列化形态不兼容可整体换命名空间，避免读到旧格式脏数据。
-_PAYLOAD_VERSION = 1
+# r14 F3：r13 N3/N4 把实体名、关系 head/tail、matched_literals 信号键改成
+# 去空白口径后递增到 2——否则 05 结果缓存里升级前的条目会继续回放带空白
+# 实体名/端点与未 strip 的信号键，直到过期。
+_PAYLOAD_VERSION = 2
 
 # 提示模板/生成参数版本：键里已经包含全部【自动感知】的要素——
 #   · 领域指纹 domain_fingerprint（system prompt + schema + 瘦身/全量模式 +
