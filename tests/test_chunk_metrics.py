@@ -135,7 +135,7 @@ def test_summary_is_json_serializable_with_none_phase_timings():
         wait_s=0.0, prefill_s=None, decode_s=None))
     s = docs.summary()
     json.dumps(s)  # 不抛即可
-    assert s["prefill_s"] == 0.0 and s["decode_s"] == 0.0
+    assert s["prefill_s"] is None and s["decode_s"] is None
     assert s["truncated_chunks"] == 0
 
 
@@ -244,7 +244,7 @@ async def test_pipeline_emits_document_metrics_one_record_per_chunk():
     assert ids == {c.id for c in chunks}
     for rec in dm.chunks:
         # 核心字段无缺省：结束原因非空、attempts>=1、token 显式给出
-        assert rec.finish_reason in {"stop", FINISH_LENGTH, FINISH_UNKNOWN}
+        assert rec.finish_reason == "stop"
         assert rec.attempts >= 1
         assert rec.input_tokens > 0 and rec.output_tokens > 0
         assert rec.wait_s >= 0.0
@@ -318,9 +318,12 @@ async def test_pipeline_raises_by_default_but_metrics_still_attached():
 
     ex = _AlwaysTruncated(
         [(_BAD, {"finish_reason": FINISH_LENGTH})] * 10, max_retries=1)
-    with pytest.raises(Exception):
+    with pytest.raises(ExtractionError) as excinfo:
         await ChunkedExtractionPipeline(ex, concurrency=1).run(
             Document(id="doc3", text=text), chunks)
+    dm = getattr(excinfo.value, "document_metrics", None)
+    assert dm is not None
+    assert dm.summary()["truncation_signals"] >= 1
 
 
 # ---------------------------------------------------------------------------

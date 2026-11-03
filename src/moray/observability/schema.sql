@@ -5,6 +5,8 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     id                BIGSERIAL PRIMARY KEY,
     document_id       TEXT NOT NULL,
     domain_code       TEXT NOT NULL DEFAULT 'general',
+    -- 来源路径：api（实时 /extract）/ job（批量作业）。历史行默认 job。
+    source            TEXT NOT NULL DEFAULT 'job',
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     -- 规模
@@ -32,22 +34,24 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     trace_id          TEXT,                          -- 关联 OTEL trace（若有）
 
     -- 工单 01：分块级度量（文档级聚合）。chunk_calls=0 表示整篇旧闭环、未分块，
-    -- 看板聚合时据此过滤，避免老数据把分块均值拉成 0。
+    -- 聚合时按该列自行判断是否有效，不会把老数据算进分块均值。
     chunk_calls         INTEGER NOT NULL DEFAULT 0,  -- 分块 LLM 调用块数
     total_attempts      INTEGER NOT NULL DEFAULT 0,  -- 含校验返工的尝试总次数
     truncated_chunks    INTEGER NOT NULL DEFAULT 0,  -- 最终被长度上限截断的块数
-    truncation_signals  INTEGER NOT NULL DEFAULT 0,  -- 任意尝试撞长度上限的块数
+    truncation_signals  INTEGER NOT NULL DEFAULT 0,  -- 出现过截断信号的块数（含救回）
     reworked_chunks     INTEGER NOT NULL DEFAULT 0,  -- 发生校验返工的块数
     rework_rate         REAL    NOT NULL DEFAULT 0,  -- reworked_chunks/chunk_calls
     wait_ms             INTEGER NOT NULL DEFAULT 0,  -- 排队/限流等待总耗时
-    prefill_ms          INTEGER NOT NULL DEFAULT 0,  -- 首 token（prefill）总耗时
-    decode_ms           INTEGER NOT NULL DEFAULT 0,  -- 解码总耗时
+    -- NULL=该请求形态下不可测（生产默认非流式）；不要写 0 冒充"测到了"
+    prefill_ms          INTEGER,                     -- 首 token（prefill）总耗时
+    decode_ms           INTEGER,                     -- 解码总耗时
     chunk_metrics       JSONB                         -- 每块一条明细，供下钻
 );
 CREATE INDEX IF NOT EXISTS idx_runs_doc ON pipeline_runs(document_id);
 CREATE INDEX IF NOT EXISTS idx_runs_created ON pipeline_runs(created_at);
 
 -- 对已有库平滑升级（必须先于任何引用新列的语句；可重复执行）
+ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'job';
 ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS cached_input_tokens INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS chunk_calls INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS total_attempts INTEGER NOT NULL DEFAULT 0;
@@ -56,9 +60,14 @@ ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS truncation_signals INTEGER NO
 ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS reworked_chunks INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS rework_rate REAL NOT NULL DEFAULT 0;
 ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS wait_ms INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS prefill_ms INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS decode_ms INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS prefill_ms INTEGER;
+ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS decode_ms INTEGER;
 ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS chunk_metrics JSONB;
+-- 旧库的 prefill_ms/decode_ms 是 NOT NULL DEFAULT 0；改成可空以区分"不可测"。
+ALTER TABLE pipeline_runs ALTER COLUMN prefill_ms DROP NOT NULL;
+ALTER TABLE pipeline_runs ALTER COLUMN decode_ms DROP NOT NULL;
+-- 来源索引必须在 ADD COLUMN 之后（旧库的 source 是刚加上去的）。
+CREATE INDEX IF NOT EXISTS idx_runs_source ON pipeline_runs(source);
 
 -- 截断是"调大块预算"唯一的静默杀手：给看板按截断过滤/排序留索引。
 -- 放在 ALTER 之后：对已存在的旧库，列是刚加上去的。

@@ -12,7 +12,6 @@
 import os
 from types import SimpleNamespace
 
-import numpy as np
 import pytest
 
 from moray.api.app import AppDeps, create_app

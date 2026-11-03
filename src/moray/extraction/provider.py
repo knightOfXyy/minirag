@@ -45,12 +45,17 @@ class DynamicExtractorProvider:
                 self._cache.pop(old_key, None)
         return extractor, domain
 
-    async def extract(self, domain_code: str, usage_sink: Usage | None = None):
+    async def extract(
+        self, domain_code: str, usage_sink: Usage | None = None,
+        metrics_sink: list | None = None,
+    ):
         """返回一个绑定该领域的 async (text, feedback)->ExtractionResult。
 
         usage_sink: 可选的 Usage 累加器。抽取函数契约只返回 ExtractionResult，
         token 用量（含提示缓存命中）会在这一层被丢掉；给上层一个"顺手收集"的
         出口，/extract 与 worker 才能把成本和缓存命中率写进看板。
+        metrics_sink: 可选的 ChunkCallMetrics 列表。短文档（不分块）路径需要
+        把每次调用的 finish_reason/截断信号带出去，否则 length 只留一条日志。
         """
         extractor, _domain = await self.get_extractor(domain_code)
 
@@ -65,6 +70,8 @@ class DynamicExtractorProvider:
                          source="dynamic", domain_code=domain_code))
             if usage_sink is not None:
                 usage_sink.add(out.usage)
+            if metrics_sink is not None and out.call_metrics is not None:
+                metrics_sink.append(out.call_metrics)
             return out.result
 
         return _fn

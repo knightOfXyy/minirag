@@ -94,9 +94,47 @@ class ChunkCallMetrics:
         }
 
 
-def _sum(values: list[float | None]) -> float:
-    """只累加真实测到的分段耗时；None（测不到）跳过，不拿 0 参与求和。"""
-    return round(sum(v for v in values if v is not None), 6)
+def _sum(values: list[float | None]) -> float | None:
+    """只累加真实测到的分段耗时；全部 None（测不到）时保持 None。
+
+    不能用 0 代替：0 会被下游当成"几乎不耗时的实测值"拉低均值/P50/P99。
+    """
+    known = [v for v in values if v is not None]
+    return round(sum(known), 6) if known else None
+
+
+def merge_call_metrics(records: list[ChunkCallMetrics]) -> ChunkCallMetrics:
+    """把同一块的多轮抽取调用合并成一条块级记录。
+
+    分块路径里一块通常只调一次 Extractor；短文档的旧闭环会因审校返工
+    再调一次，但它们仍然是"同一块文本"。合并后 chunk_calls 仍等于块数，
+    而 attempts/两次 token/截断信号都不会丢。
+    """
+    if not records:
+        raise ValueError("records 不能为空")
+    if len(records) == 1:
+        return records[0]
+    first, last = records[0], records[-1]
+    return ChunkCallMetrics(
+        chunk_id=first.chunk_id,
+        attempts=sum(r.attempts for r in records),
+        finish_reason=last.finish_reason,
+        input_tokens=sum(r.input_tokens for r in records),
+        output_tokens=sum(r.output_tokens for r in records),
+        cached_input_tokens=sum(r.cached_input_tokens for r in records),
+        wait_s=sum(r.wait_s for r in records),
+        # 任一轮测到就累加；全测不到才为 None
+        prefill_s=(round(sum(r.prefill_s for r in records
+                             if r.prefill_s is not None), 6)
+                   if any(r.prefill_s is not None for r in records) else None),
+        decode_s=(round(sum(r.decode_s for r in records
+                            if r.decode_s is not None), 6)
+                  if any(r.decode_s is not None for r in records) else None),
+        attempt_finish_reasons=[
+            reason for r in records for reason in r.attempt_finish_reasons],
+        truncated_attempts=sum(r.truncated_attempts for r in records),
+        error=(last.error or ""),
+    )
 
 
 @dataclass
@@ -119,10 +157,10 @@ class DocumentMetrics:
 
     @property
     def truncation_signals(self) -> int:
-        """所有尝试中出现截断信号的总次数（含返工后救回的块）。
+        """出现过截断信号的块数（含返工后救回的块）。
 
         与 truncated_chunks 的区别：一块可能先 length、返工后 stop——
-        最终没截断，但"预算撞过顶"这件事必须被看见。
+        最终没截断，但"预算撞过顶"这件事必须被看见。按块计数，不是按尝试次数。
         """
         return sum(
             1 for c in self.chunks
