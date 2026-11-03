@@ -164,60 +164,45 @@ async def test_retry_rerun_completed_chunks_hit_cache(env):
 
 
 @pytest.mark.asyncio
-async def test_failed_then_retry_mixes_uncached_and_cached(env):
-    """首轮处理到一半失败（缓存里已有部分块）→ 重试：已完成块命中、其余真抽。"""
-    _pool, store, jobs, ingestor, doc_path = env
+async def test_failed_then_retry_mixes_uncached_and_cached(env, monkeypatch):
+    """首轮真跑到一半失败（缓存里已有部分块）→ 重试：已完成块命中、其余真抽。
 
+    nit-8：不再用 pipeline 私有方法手工预热键（那等于假设“测试键 == 实际键”），
+    直接让第一次真实作业跑一半失败，走真实键。
+    """
+    _pool, store, jobs, ingestor, doc_path = env
+    monkeypatch.setenv("MORAY_CHUNK_CONCURRENCY", "1")   # 顺序执行，失败点确定
+
+    from moray.config import chunk_settings
+    from moray.extraction.chunking import Chunker
     from moray.schema import get_domain
-    from moray.extraction.pipeline import ChunkedExtractionPipeline
 
     domain = get_domain("general")
-    real = _CountingExtractor(domain)
-    real.model_name = "fake-model"      # 与预热键一致（生产里模型名本就固定）
-    provider = _StaticProvider(real)
-    cache = ContentResultCache(InMemoryCacheBackend())
-    # 预热键必须与 pipeline 实际使用的键一致：领域指纹里还包含 user 消息模板
-    # 的 hash（nit-2），不能再直接用 schema.domain_fingerprint。
-    cache_fp = ChunkedExtractionPipeline(real)._domain_fingerprint()
-    cache_model = ChunkedExtractionPipeline(real)._cache_model_identity()
-
-    # 用“上一轮”的独立抽取器预热一半的块，模拟失败前已完成并写缓存的分块。
-    # 分块参数必须与 handler 实际从 env 读取的一致（见 env fixture），否则块正文
-    # 对不上会全部 miss。
-    from moray.config import chunk_settings as _chunk_settings
-    from moray.extraction.chunking import Chunker
-
-    _cs = _chunk_settings()
+    cs = chunk_settings()
     chunks = Chunker(
-        max_units=_cs["max_units"], overlap_units=_cs["overlap_units"]
+        max_units=cs["max_units"], overlap_units=cs["overlap_units"]
     ).chunk_text(Path(doc_path).read_text(encoding="utf-8"))
-    prior = _CountingExtractor(domain)
+    assert len(chunks) >= 4
     half = len(chunks) // 2
-    for c in chunks[:half]:
-        await cache.get_or_extract(
-            cache_fp, cache_model, c.text,
-            lambda c=c: _uncached_call(prior, c))
-    assert prior.calls == half
 
-    # 本轮真正使用的抽取器从零开始计数
-    handler = await _make_handler(ingestor, provider, cache)
+    cache = ContentResultCache(InMemoryCacheBackend())
+    failing = _FailAfter(domain, fail_after=half)
+    handler1 = await _make_handler(ingestor, _StaticProvider(failing), cache)
     await jobs.create_job(job_id="j2", document_id="d2",
                           document_ref=doc_path, domain_code="general")
-    s = await BatchRunner(jobs, handler, max_attempts=3).run_once(recover=False)
-    assert s.succeeded == 1
-    # 已缓存的一半不调模型，剩余块真实抽取
-    assert real.calls == len(chunks) - half
+    s1 = await BatchRunner(jobs, handler1, max_attempts=1).run_once(recover=False)
+    assert s1.failed == 1
+
+    # 同一 cache 实例重跑（进程内后端）：已完成的一半命中，其余真抽
+    retry = _CountingExtractor(domain)
+    handler2 = await _make_handler(ingestor, _StaticProvider(retry), cache)
+    await jobs.reset_failed()
+    s2 = await BatchRunner(jobs, handler2, max_attempts=1).run_once(recover=False)
+    assert s2.succeeded == 1
+    assert retry.calls == len(chunks) - half
     summary = (await jobs.list_jobs(JobStatus.SUCCEEDED))[0]["result_summary"]
     assert summary["usage"]["cache_hits"] == half
-    assert summary["usage"]["input_tokens"] == 3 * real.calls
-
-
-async def _uncached_call(real, chunk):
-    from moray.extraction.document import Document
-
-    return await real.extract(
-        Document(id=chunk.id, text=chunk.text, source="chunk",
-                 domain_code="general"))
+    assert summary["usage"]["input_tokens"] == 3 * retry.calls
 
 
 async def _sample_output(text="同一段块正文"):
@@ -328,8 +313,9 @@ async def test_postgres_stale_claim_taken_over_after_lease(env):
     await backend.init_schema()
     await pool.execute("TRUNCATE extraction_result_cache")
     key = build_cache_key("fp", "m", "PG 占位残留")
-    assert await backend.try_claim(key, 0.05) is True
-    assert await backend.try_claim(key, 0.05) is False   # 租约有效，不能被抢
+    assert await backend.try_claim(key, 0.05, "dead-leader") is True
+    assert await backend.try_claim(
+        key, 0.05, "other-worker") is False   # 租约有效，不能被抢
     await asyncio.sleep(0.1)                              # 等租约过期
 
     cache = ContentResultCache(
@@ -349,6 +335,30 @@ async def test_postgres_stale_claim_taken_over_after_lease(env):
     assert calls["n"] == 1                 # 只多一次真实调用
     assert elapsed < 1.0                   # 一个租约内接管，不等满 5s
     assert out.result.model_dump() == (await _sample_output()).result.model_dump()
+
+
+@pytest.mark.asyncio
+async def test_postgres_old_leader_cannot_renew_or_release_new_leader(env):
+    """should-1：占位行带 owner；旧 leader 租约过期、B 接管后，A 的续租/释放
+    都不能影响 B 的占位（否则第三个 worker 能抢占 → 同一块第二次真调）。"""
+    from moray.extraction.cache import PostgresCacheBackend, build_cache_key
+
+    pool, *_ = env
+    backend = PostgresCacheBackend(pool)
+    await backend.init_schema()
+    await pool.execute("TRUNCATE extraction_result_cache")
+    key = build_cache_key("fp", "m", "PG 旧 leader 干扰")
+    old, new = "owner-old", "owner-new"
+    assert await backend.try_claim(key, 0.05, old) is True
+    await asyncio.sleep(0.1)                              # A 的租约过期
+    assert await backend.try_claim(key, 30.0, new) is True  # B 接管
+
+    assert await backend.renew_claim(key, 30.0, old) is False
+    await backend.release(key, old)
+    owner = await pool.fetchval(
+        "SELECT owner FROM extraction_result_cache WHERE cache_key=$1", key)
+    assert owner == new
+    assert await backend.try_claim(key, 30.0, "owner-third") is False
 
 
 @pytest.mark.asyncio

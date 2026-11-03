@@ -257,7 +257,8 @@ async def run_chunked_team(
     返回的 review.iterations 在分块路径恒为 1（单轮），整篇路径为实际轮数。
 
     ``result_cache`` 非 None 时启用分块结果【内容级缓存】（纯加速层）：键=领域
-    配置指纹+模型名+块正文，命中不调模型、用量记 cache_hits 而非真实 token。
+    配置指纹+模型身份（provider+base_url+模型名）+块正文，命中不调模型、
+    用量记 cache_hits 而非真实 token。
     调用方应在【同一篇文档的多次运行/多个作业】间复用同一个缓存实例，断点续跑、
     失败重试、重复提交才能命中；缺省 None，行为与无缓存逐字节一致。
 

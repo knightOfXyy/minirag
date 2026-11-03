@@ -318,9 +318,13 @@ def result_cache_settings() -> dict:
       MORAY_RESULT_CACHE_TTL_HOURS：postgres 行保留小时数，0=不清理。
       MORAY_RESULT_CACHE_REMOTE_WAIT_SECONDS：跨进程单飞等待上限（秒），
         默认 300（明显高于 p99 单块抽取耗时）。占位行有租约，leader 崩溃
-        时等待方会在一个租约内接管，不会真的等满这个窗口。
+        时等待方会在一个租约内接管，不会真的等满这个窗口。必须不小于一个
+        占位租约（30s），否则等待方会抢在健康 leader 续租前自抽，失去单飞。
     """
-    from .extraction.cache import DEFAULT_REMOTE_WAIT_SECONDS
+    from .extraction.cache import (
+        DEFAULT_CLAIM_LEASE_SECONDS,
+        DEFAULT_REMOTE_WAIT_SECONDS,
+    )
 
     enabled = _first_env("MORAY_RESULT_CACHE_ENABLED").lower() in _ENABLED_WORDS
     if not enabled:
@@ -332,13 +336,21 @@ def result_cache_settings() -> dict:
         raise ConfigError(
             f"MORAY_RESULT_CACHE_BACKEND={backend!r} 未知，"
             f"可选：{'/'.join(_RESULT_CACHE_BACKENDS)}")
+    remote_wait_seconds = _positive_float_env(
+        "MORAY_RESULT_CACHE_REMOTE_WAIT_SECONDS",
+        DEFAULT_REMOTE_WAIT_SECONDS)
+    if remote_wait_seconds < DEFAULT_CLAIM_LEASE_SECONDS:
+        # 等待窗口短于一个占位租约：等待方会在健康 leader 续租前就超时自抽，
+        # 同一块必然出现第二次真实调用（nit-2）。非法值启动即报错。
+        raise ConfigError(
+            "MORAY_RESULT_CACHE_REMOTE_WAIT_SECONDS 不能小于占位租约 "
+            f"{DEFAULT_CLAIM_LEASE_SECONDS:g}s（当前 {remote_wait_seconds:g}s）；"
+            "否则等待方会抢在健康 leader 续租前自行抽取，失去单飞保证")
     return {
         "enabled": enabled,
         "backend": backend,
         "ttl_hours": _nonneg_int_env("MORAY_RESULT_CACHE_TTL_HOURS", 0),
-        "remote_wait_seconds": _positive_float_env(
-            "MORAY_RESULT_CACHE_REMOTE_WAIT_SECONDS",
-            DEFAULT_REMOTE_WAIT_SECONDS),
+        "remote_wait_seconds": remote_wait_seconds,
     }
 
 

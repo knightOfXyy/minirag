@@ -209,11 +209,15 @@ class _ClaimableFakeBackend:
 
     def __init__(self):
         self._store: dict[str, str] = {}
-        self._claims: dict[str, float] = {}
+        # key -> (expires_at, owner)；owner 是 leader 令牌，旧 leader 不能拿它
+        # 给新 leader 续租/删占位（should-1）。
+        self._claims: dict[str, tuple[float, str]] = {}
         self.gets = 0
         self.claims = 0
         self.renews = 0
         self.releases = 0
+        # >0 时下一次 renew_claim 抛错，模拟 DB 抖动（nit-3）。
+        self.renew_errors = 0
 
     async def get(self, key):
         await asyncio.sleep(0)
@@ -229,30 +233,43 @@ class _ClaimableFakeBackend:
         self._store[key] = value
         self._claims.pop(key, None)
 
-    async def try_claim(self, key, lease_seconds):
+    async def try_claim(self, key, lease_seconds, owner):
         await asyncio.sleep(0)
         now = asyncio.get_running_loop().time()
-        expires = self._claims.get(key)
-        if expires is not None and expires > now:
+        current = self._claims.get(key)
+        if current is not None and current[0] > now:
             return False       # 占位仍有效：健康 leader 在续租
         self.claims += 1
-        self._claims[key] = now + lease_seconds
+        self._claims[key] = (now + lease_seconds, owner)
         return True
 
-    async def renew_claim(self, key, lease_seconds):
+    async def renew_claim(self, key, lease_seconds, owner):
         await asyncio.sleep(0)
+        if self.renew_errors:
+            self.renew_errors -= 1
+            raise RuntimeError("模拟一次续租 DB 抖动")
         now = asyncio.get_running_loop().time()
-        expires = self._claims.get(key)
-        if expires is None or expires <= now:
+        current = self._claims.get(key)
+        if current is None or current[0] <= now:
             return False
+        if current[1] != owner:
+            return False       # 旧 leader 不能给新 leader 续租
         self.renews += 1
-        self._claims[key] = now + lease_seconds
+        self._claims[key] = (now + lease_seconds, owner)
         return True
 
-    async def release(self, key):
+    async def release(self, key, owner):
         await asyncio.sleep(0)
+        current = self._claims.get(key)
+        if current is None or current[1] != owner:
+            return             # 只有占位 owner 才能删，旧 leader 无权删新 leader
         self.releases += 1
         self._claims.pop(key, None)
+
+    async def discard(self, key, expected_value):
+        await asyncio.sleep(0)
+        if self._store.get(key) == expected_value:
+            self._store.pop(key, None)
 
 
 def test_inmemory_backend_is_not_claimable():
@@ -329,7 +346,7 @@ async def test_stale_claim_taken_over_after_lease_not_full_wait():
         backend, remote_wait_seconds=5.0,
         poll_seconds=0.01, claim_lease_seconds=0.05)
     key = build_cache_key("fp", "m", "占位残留")
-    assert await backend.try_claim(key, 0.01)   # 死掉的 leader，只占位不回写
+    assert await backend.try_claim(key, 0.01, "dead-leader")   # 死掉的 leader，只占位不回写
     await asyncio.sleep(0.02)                   # 让租约过期
     calls = {"n": 0}
 
@@ -402,6 +419,54 @@ async def test_broken_backend_degrades_to_normal_extraction():
     assert calls["n"] == 2          # 写不进去 → 每次都真抽
     assert hit1 is False and hit2 is False
     assert o1.result.model_dump() == o2.result.model_dump()
+
+
+class _ClaimBrokenBackend:
+    """get/set 正常，只有占位接口抛错：模拟 DB 占位表暂时不可用。"""
+
+    def __init__(self):
+        self.store: dict[str, str] = {}
+        self.releases = 0
+
+    async def get(self, key):
+        return self.store.get(key)
+
+    async def set(self, key, value):
+        self.store[key] = value
+
+    async def try_claim(self, key, lease_seconds, owner):
+        raise RuntimeError("占位表暂时不可用")
+
+    async def renew_claim(self, key, lease_seconds, owner):
+        return False
+
+    async def release(self, key, owner):
+        self.releases += 1
+
+    async def discard(self, key, expected_value):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_claim_backend_error_extracts_at_once_without_owning_claim():
+    """should-1：占位接口报错不是“没抢到”，不能去等满 remote_wait_seconds，
+    也不能在失败时 release（本协程从没真正持有占位）。"""
+    backend = _ClaimBrokenBackend()
+    cache = ContentResultCache(backend, remote_wait_seconds=30.0)
+    calls = {"n": 0}
+
+    async def extract():
+        calls["n"] += 1
+        return _output()
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    out, hit = await cache.get_or_extract("fp", "m", "占位接口坏了", extract)
+    elapsed = loop.time() - started
+    assert hit is False and calls["n"] == 1
+    assert elapsed < 1.0               # 没有把 30s 等待窗口等满
+    assert backend.releases == 0       # 没持有占位 → 不误删别人的
+    assert out.result.entities[0].name == "华为"
 
 
 class _CorruptPayloadBackend:
@@ -1173,7 +1238,7 @@ async def test_cancelled_call_in_remote_wait_does_not_wedge_key():
 
     backend = _ClaimableFakeBackend()
     key = build_cache_key("fp", "m", "取消不钉死")
-    assert await backend.try_claim(key, 30.0)      # 别的 worker 持有健康占位
+    assert await backend.try_claim(key, 30.0, "other-worker")  # 别的 worker 持有健康占位
     cache = ContentResultCache(
         backend, remote_wait_seconds=30.0,
         poll_seconds=0.005, claim_lease_seconds=30.0)
@@ -1192,7 +1257,7 @@ async def test_cancelled_call_in_remote_wait_does_not_wedge_key():
     # 出问题的实现会在这里留下 pending future
     assert key not in cache._inflight
 
-    await backend.release(key)                     # 原 leader 失败/结束
+    await backend.release(key, "other-worker")     # 原 leader 失败/结束
     out, hit = await asyncio.wait_for(
         cache.get_or_extract("fp", "m", "取消不钉死", extract), timeout=1.0)
     assert hit is False
@@ -1210,7 +1275,7 @@ async def test_waiter_self_extract_failure_does_not_release_other_claim():
 
     backend = _ClaimableFakeBackend()
     key = build_cache_key("fp", "m", "别删别人的占位")
-    assert await backend.try_claim(key, 30.0)       # Q 的占位健康且未过期
+    assert await backend.try_claim(key, 30.0, "worker-q")  # Q 的占位健康且未过期
     cache = ContentResultCache(
         backend, remote_wait_seconds=0.05,
         poll_seconds=0.005, claim_lease_seconds=30.0)
@@ -1223,7 +1288,7 @@ async def test_waiter_self_extract_failure_does_not_release_other_claim():
 
     assert backend.releases == 0                   # 没碰别人的占位
     # Q 的占位仍在：第三个 worker 抢不到，不会发生第二次真调
-    assert await backend.try_claim(key, 0.01) is False
+    assert await backend.try_claim(key, 0.01, "worker-3") is False
     await asyncio.sleep(0)
 
 
@@ -1316,7 +1381,7 @@ async def test_waiter_takes_over_after_lease_expires_mid_wait():
 
     backend = _ClaimableFakeBackend()
     key = build_cache_key("fp", "m", "等待期租约过期")
-    assert await backend.try_claim(key, 0.08)     # 进来时仍有效
+    assert await backend.try_claim(key, 0.08, "stale-leader")  # 进来时仍有效
     cache = ContentResultCache(
         backend, remote_wait_seconds=5.0,
         poll_seconds=0.01, claim_lease_seconds=0.05)
@@ -1449,5 +1514,273 @@ def test_claimable_backend_protocol_is_runtime_checkable():
 
     assert isinstance(_ClaimableFakeBackend(), ClaimableBackend)
     assert not isinstance(InMemoryCacheBackend(), ClaimableBackend)
+
+
+# ---------------------------------------------------------------------------
+# 第 4 轮评审回归：取消互不连坐（blocker-1）、占位 owner 令牌（should-1）、
+# 窗口末尾回写（nit-1）、续租抖动（nit-3）、坏后端 discard 契约（nit-5）
+# （对应 reviews/05-r4-minirag-review.md）
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_one_waiter_cancel_does_not_cancel_siblings_or_new_arrivals():
+    """blocker-1：同键多个等待方共用 future 时，取消其中一个不能连坐其它等待方
+    与取消后新到达者。
+
+    旧实现所有等待方直接 await 同一个 future：CPython 取消 w1 会把该 future
+    置为 cancelled，w2 立刻收到 CancelledError，w3 登记到已 cancelled 的
+    future 上立即失败。
+    """
+    cache = ContentResultCache(InMemoryCacheBackend())
+    key = build_cache_key("fp", "m", "等待方互不连坐")
+    release = asyncio.Event()
+    calls = {"n": 0}
+
+    async def slow():
+        calls["n"] += 1
+        await release.wait()
+        return _output()
+
+    def call():
+        return cache.get_or_extract("fp", "m", "等待方互不连坐", slow)
+
+    leader = asyncio.create_task(call())
+    await asyncio.sleep(0)                 # leader 登记 _inflight 并进入 extract
+    w1 = asyncio.create_task(call())
+    w2 = asyncio.create_task(call())
+    await asyncio.sleep(0)                 # w1/w2 登记为等待方
+    assert cache._waiters.get(key, 0) == 2
+
+    w1.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await w1
+    await asyncio.sleep(0.01)
+    assert not w2.done(), "取消 w1 不应把 w2 一起取消"
+
+    w3 = asyncio.create_task(call())       # 取消后新到达者
+    await asyncio.sleep(0.01)
+    assert not w3.done(), "取消后新到达者不应被已污染的 future 直接失败"
+
+    release.set()
+    out2, hit2 = await asyncio.wait_for(w2, timeout=1.0)
+    out3, hit3 = await asyncio.wait_for(w3, timeout=1.0)
+    out_leader, hit_leader = await leader
+    assert (hit_leader, hit2, hit3) == (False, True, True)
+    assert calls["n"] == 1
+    assert out2.result.entities[0].name == "华为"
+    assert out3.result.entities[0].name == "华为"
+
+
+@pytest.mark.asyncio
+async def test_cancelled_leader_lets_waiters_retry_and_finish():
+    """blocker-1 的另一半：leader 被取消时，等待方收到非取消信号并重试，
+    最终只多一次真实调用，键也不会被钉死。"""
+    cache = ContentResultCache(InMemoryCacheBackend())
+    key = build_cache_key("fp", "m", "leader 被取消")
+    started = asyncio.Event()
+    calls = {"n": 0}
+
+    async def cancellable():
+        calls["n"] += 1
+        started.set()
+        await asyncio.sleep(30)            # 等待被 cancel
+        return _output()
+
+    async def succeeding():
+        calls["n"] += 1
+        return _output("重试后")
+
+    leader = asyncio.create_task(
+        cache.get_or_extract("fp", "m", "leader 被取消", cancellable))
+    await started.wait()
+    waiter = asyncio.create_task(
+        cache.get_or_extract("fp", "m", "leader 被取消", succeeding))
+    await asyncio.sleep(0)
+    assert cache._waiters.get(key, 0) == 1
+
+    leader.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await leader
+    out, hit = await asyncio.wait_for(waiter, timeout=1.0)
+    assert hit is False                    # 等待方自己真抽，不是缓存命中
+    assert out.result.entities[0].name == "重试后"
+    assert calls["n"] == 2                 # leader 那次 + 重试一次，没有失败风暴
+    assert key not in cache._inflight
+
+
+@pytest.mark.asyncio
+async def test_old_leader_claim_token_cannot_touch_new_leader_placeholder():
+    """should-1：占位必须带 owner 令牌；旧 leader 续租/释放不能影响新 leader。
+
+    旧实现只按 payload='' 匹配：A 的租约过期、B 接管后，A 的 renew 仍会成功、
+    A 失败时的 release 会删掉 B 的占位，第三个 worker 立刻抢到 → 同一块两次真调。
+    """
+    backend = _ClaimableFakeBackend()
+    key = build_cache_key("fp", "m", "旧 leader 不能干扰新 leader")
+    old_owner, new_owner = "owner-old", "owner-new"
+    assert await backend.try_claim(key, 0.05, old_owner)
+    await asyncio.sleep(0.06)                              # A 的租约过期
+    assert await backend.try_claim(key, 30.0, new_owner)   # B 接管
+
+    assert await backend.renew_claim(key, 30.0, old_owner) is False
+    await backend.release(key, old_owner)                  # A 失败：不能删 B 的占位
+    assert backend._claims[key][1] == new_owner
+    # 第三个 worker 抢不到，不会发生第二次真调
+    assert await backend.try_claim(key, 30.0, "owner-third") is False
+
+
+@pytest.mark.asyncio
+async def test_stale_leader_failure_does_not_release_new_leader_claim():
+    """should-1 端到端：旧 leader 抽取期间租约过期、被接管，随后旧 leader 失败，
+    不能把新 leader 的占位一起删掉。"""
+    backend = _ClaimableFakeBackend()
+    backend.renew_errors = 10 ** 6          # 旧 leader 续租一直抖动 → 不延期
+    cache_a = ContentResultCache(
+        backend, claim_lease_seconds=0.05, remote_wait_seconds=5.0)
+    key = build_cache_key("fp", "m", "旧 leader 失败不误删")
+    started = asyncio.Event()
+
+    async def failing():
+        started.set()
+        await asyncio.sleep(0.1)            # 跨过租约，期间无人续租成功
+        raise RuntimeError("旧 leader 失败")
+
+    leader = asyncio.create_task(
+        cache_a.get_or_extract("fp", "m", "旧 leader 失败不误删", failing))
+    await started.wait()
+    await asyncio.sleep(0.06)               # 租约已过期
+    assert await backend.try_claim(key, 30.0, "new-leader") is True
+
+    with pytest.raises(RuntimeError):
+        await leader
+    await asyncio.sleep(0)
+    assert backend._claims[key][1] == "new-leader", "旧 leader 不得删新 leader 占位"
+    assert await backend.try_claim(key, 30.0, "third-worker") is False
+
+
+class _LatePayloadBackend:
+    """先返回占位行，等到 delay 后才出现载荷。
+
+    模拟 leader 恰在等待窗口最后一次轮询之后、循环退出之前回写载荷（nit-1）。
+    """
+
+    def __init__(self, delay: float):
+        import json
+
+        self.delay = delay
+        self.start: float | None = None
+        self._payload = json.dumps(
+            {"v": 1, "output": _output().model_dump(mode="json")},
+            ensure_ascii=False)
+
+    async def get(self, key):
+        loop = asyncio.get_running_loop()
+        if self.start is None:
+            self.start = loop.time()
+        if loop.time() - self.start >= self.delay:
+            return self._payload
+        return ""                           # leader 仍持有占位
+
+    async def set(self, key, value):
+        pass
+
+    async def try_claim(self, key, lease_seconds, owner):
+        return False                        # 别人一直是健康 leader
+
+    async def renew_claim(self, key, lease_seconds, owner):
+        return False
+
+    async def release(self, key, owner):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_wait_window_tail_reads_payload_written_just_before_deadline():
+    """nit-1：轮询因 deadline 退出前必须再读一次，不能忽略刚回写的载荷。"""
+    backend = _LatePayloadBackend(delay=0.08)
+    cache = ContentResultCache(
+        backend, remote_wait_seconds=0.1,
+        poll_seconds=0.05, max_poll_seconds=0.05)
+    calls = {"n": 0}
+
+    async def extract():
+        calls["n"] += 1
+        return _output("不该被调用")
+
+    out, hit = await cache.get_or_extract("fp", "m", "窗口末尾回写", extract)
+    assert hit is True
+    assert calls["n"] == 0
+    assert out.result.entities[0].name == "华为"
+
+
+@pytest.mark.asyncio
+async def test_transient_renew_error_does_not_stop_renewal():
+    """nit-3：一次续租异常只是 DB 抖动，不能当成“占位已丢”永久停止续租。"""
+    backend = _ClaimableFakeBackend()
+    backend.renew_errors = 1
+    cache_a = ContentResultCache(backend, claim_lease_seconds=0.15)
+    cache_b = ContentResultCache(
+        backend, claim_lease_seconds=0.15,
+        poll_seconds=0.01, remote_wait_seconds=5.0)
+    calls = {"n": 0}
+
+    async def slow():
+        calls["n"] += 1
+        await asyncio.sleep(0.5)            # 超过两个租约，必须持续续租
+        return _output()
+
+    leader = asyncio.create_task(
+        cache_a.get_or_extract("fp", "m", "续租抖动", slow))
+    await asyncio.sleep(0.02)
+    out, hit = await cache_b.get_or_extract("fp", "m", "续租抖动", slow)
+    leader_out, _ = await leader
+    assert calls["n"] == 1                 # 等待方没有接管 → 没有第二次真调
+    assert hit is True
+    assert out.result.model_dump() == leader_out.result.model_dump()
+    assert backend.renews >= 1             # 抖动之后仍成功续租
+
+
+def test_duck_domain_fingerprint_is_stable_across_object_instances():
+    """nit-4：非 DomainSpec 的回退指纹不能吃 object.__repr__（含内存地址），
+    否则每个进程算出不同键，缓存永远不命中。"""
+    class _DuckDomain:
+        """默认 object.__repr__：含内存地址，正是旧实现进键的东西。"""
+
+        def __init__(self, **fields):
+            self.__dict__.update(fields)
+
+    def fingerprint(**fields):
+        domain = _DuckDomain(**fields)
+        return _pipeline(_CountingRealExtractor(domain), ContentResultCache(
+            InMemoryCacheBackend()))._domain_fingerprint()
+
+    a = fingerprint(code="general", types=("ORG",))
+    b = fingerprint(code="general", types=("ORG",))
+    assert a == b
+    assert "0x" not in a
+    # 文档化字段变了必须换指纹（否则会读到旧结果）
+    assert fingerprint(code="general", types=("ORG", "PER")) != a
+
+
+def test_corruptible_backend_protocol_declares_discard():
+    """nit-5：discard 是 claimable 后端的可选能力，必须在协议里钉住，
+    否则新后端漏实现时坏载荷会静默双抽。"""
+    from moray.extraction.cache import ClaimableBackend, CorruptibleBackend
+
+    fake = _ClaimableFakeBackend()
+    assert isinstance(fake, ClaimableBackend)
+    assert isinstance(fake, CorruptibleBackend)
+
+    class _NoDiscard:
+        async def try_claim(self, key, lease_seconds, owner):
+            return True
+
+        async def renew_claim(self, key, lease_seconds, owner):
+            return True
+
+        async def release(self, key, owner):
+            pass
+
+    assert isinstance(_NoDiscard(), ClaimableBackend)
+    assert not isinstance(_NoDiscard(), CorruptibleBackend)
 
 
