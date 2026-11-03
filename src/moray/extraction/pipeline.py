@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 
 from ..schema import (
     DomainSpec,
@@ -31,6 +32,8 @@ from ..schema import (
 from .chunking import Chunk
 from .document import CacheSavings, Document, ExtractionOutput, Usage
 from .extractor import Extractor
+
+logger = logging.getLogger(__name__)
 
 
 def remap_spans(result: ExtractionResult, chunk: Chunk) -> ExtractionResult:
@@ -173,8 +176,16 @@ class ChunkedExtractionPipeline:
         self.result_cache = result_cache
         # 领域指纹只依赖抽取器配置，一次 pipeline.run 内不会变：构造时算一次，
         # 避免每个分块都重建 pydantic 模型 + JSON schema（N2）。
-        self._cached_domain_fingerprint = (
-            self._domain_fingerprint() if result_cache is not None else None)
+        # 但这是缓存层的活：指纹算不出来时宁可退化成「不缓存」，也不能让
+        # 「开缓存」比「不开缓存」更脆弱（nit-1）。
+        self._cached_domain_fingerprint = None
+        if result_cache is not None:
+            try:
+                self._cached_domain_fingerprint = self._domain_fingerprint()
+            except Exception as exc:  # noqa: BLE001 缓存层异常不能影响真实抽取
+                logger.warning(
+                    "分块结果缓存指纹计算失败，本次运行降级为不缓存: %r", exc)
+                self.result_cache = None
 
     def _domain_fingerprint(self) -> str:
         """当前抽取器所用领域配置 + 提示模板的版本指纹。
@@ -226,13 +237,13 @@ class ChunkedExtractionPipeline:
             if self.result_cache is None:
                 output = await self.extractor.extract(mini_doc)
             else:
-                model_name = self._cache_model_identity()
+                model_identity = self._cache_model_identity()
 
                 async def _do_extract() -> ExtractionOutput:
                     return await self.extractor.extract(mini_doc)
 
                 output, hit = await self.result_cache.get_or_extract(
-                    self._cached_domain_fingerprint, model_name,
+                    self._cached_domain_fingerprint, model_identity,
                     chunk.text, _do_extract)
                 if hit:
                     # 命中：还原结构化结果与【用量记录】；但不计真实 token，
@@ -268,12 +279,12 @@ class ChunkedExtractionPipeline:
         if self.warm_prefix and total >= 2:
             all_cached = False
             if self.result_cache is not None:
-                model_name = self._cache_model_identity()
+                model_identity = self._cache_model_identity()
                 # 并发探测：postgres 后端下串行 N 次 RTT 只为决定要不要预热
                 # 是纯浪费（nit-4）。
                 probes = await asyncio.gather(*[
                     self.result_cache.has_cached(
-                        self._cached_domain_fingerprint, model_name, c.text)
+                        self._cached_domain_fingerprint, model_identity, c.text)
                     for c in chunks
                 ])
                 all_cached = all(probes)
