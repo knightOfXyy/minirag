@@ -1,0 +1,2353 @@
+{
+  "experiment": "工单 04：分块预算 1500 vs 3500 A/B（真实 LLM，slim+本地回填）",
+  "generated_at": "2026-11-03T07:54:27.075486+00:00",
+  "git_sha": "b86769ac7a9fa50972893d3d645799a7c1463d2d",
+  "git_describe": "b86769a",
+  "git_dirty": false,
+  "git_status_porcelain": "",
+  "model": {
+    "provider": "deepseek",
+    "chat_model": "deepseek-flash",
+    "base_url_host": "api.deepseek.com",
+    "temperature": 0.0,
+    "seed": null,
+    "seed_note": "provider 的 ChatModel.Parameters 不暴露 seed；用 repeat 采样统计"
+  },
+  "model_capabilities": {
+    "source": "https://api.deepseek.com/v1/models",
+    "model_id": "deepseek-flash",
+    "context_window": 1048576,
+    "max_output_tokens": 393216
+  },
+  "sampling": {
+    "repeat": 3,
+    "temperature": 0.0,
+    "seed": null,
+    "note": "temperature 固定；provider 不暴露 seed，用多轮重复报 mean/worst"
+  },
+  "corpus": {
+    "stress_path": "data/gold/stress",
+    "cases": [
+      "stress_seed20261102",
+      "stress_seed20261103",
+      "stress_seed20261104"
+    ],
+    "seeds": [
+      20261102,
+      20261103,
+      20261104
+    ],
+    "total_chars": 79362,
+    "stress_sha256": "7e98a0daa7cd38e2",
+    "real_docs": [
+      "gold:case01.tagged",
+      "gold:case02.tagged",
+      "gold:case03.tagged",
+      "gold:case04.tagged",
+      "gold:case05.tagged",
+      "gold:case06.tagged",
+      "sample:batch/doc_a.txt",
+      "sample:batch/doc_b.txt",
+      "sample:batch/doc_c.txt",
+      "sample:news_001.txt",
+      "sample:news_long_002.txt"
+    ],
+    "real_docs_count": 11
+  },
+  "chunking": {
+    "budgets": [
+      1500,
+      3500
+    ],
+    "overlap_units": 200,
+    "overlap_note": "本单明确不动 overlap；两档都用同一个配置值，overlap_pairs_min 是相邻块实际重叠对数的最小值。"
+  },
+  "thresholds": {
+    "entity_macro_f1_max_drop_pt": 0.5,
+    "relation_f1": "mean/worst 都不下降",
+    "truncated_chunks": "候选档必须为 0（压力语料 + 真实文档）",
+    "overlap": "配置值与实际重叠行为都不变",
+    "chunk_calls": "候选档必须下降"
+  },
+  "budgets": {
+    "1500": {
+      "budget": 1500,
+      "overlap_units": 200,
+      "repeat": 3,
+      "documents": 3,
+      "rounds": [
+        {
+          "round": 1,
+          "cases": [
+            {
+              "name": "stress_seed20261102",
+              "seed": 20261102,
+              "n_chunks": 26,
+              "chunk_calls": 26,
+              "input_tokens": 49265,
+              "output_tokens": 14287,
+              "cached_input_tokens": 43392,
+              "truncated_chunks": 0,
+              "truncation_signals": 0,
+              "reworked_chunks": 0,
+              "failed_chunks": 0,
+              "max_chunk_input_tokens": 2523,
+              "max_chunk_output_tokens": 3823,
+              "max_chunk_units": 1500,
+              "max_chunk_chars": 2292,
+              "overlap_pairs": 8,
+              "wall_s": 11.83,
+              "entity_relaxed_f1": 0.9176470588235294,
+              "entity_relaxed_prf": {
+                "tp": 78,
+                "fp": 3,
+                "fn": 11,
+                "precision": 0.963,
+                "recall": 0.8764,
+                "f1": 0.9176
+              },
+              "entity_strict_f1": 0.969508400746733,
+              "relation_f1": 0.7999999999999999,
+              "relation_prf": {
+                "tp": 94,
+                "fp": 27,
+                "fn": 20,
+                "precision": 0.7769,
+                "recall": 0.8246,
+                "f1": 0.8
+              }
+            },
+            {
+              "name": "stress_seed20261103",
+              "seed": 20261103,
+              "n_chunks": 26,
+              "chunk_calls": 26,
+              "input_tokens": 49251,
+              "output_tokens": 17829,
+              "cached_input_tokens": 43264,
+              "truncated_chunks": 0,
+              "truncation_signals": 0,
+              "reworked_chunks": 0,
+              "failed_chunks": 0,
+              "max_chunk_input_tokens": 2521,
+              "max_chunk_output_tokens": 4535,
+              "max_chunk_units": 1500,
+              "max_chunk_chars": 2278,
+              "overlap_pairs": 8,
+              "wall_s": 18.74,
+              "entity_relaxed_f1": 0.896551724137931,
+              "entity_relaxed_prf": {
+                "tp": 78,
+                "fp": 5,
+                "fn": 13,
+                "precision": 0.9398,
+                "recall": 0.8571,
+                "f1": 0.8966
+              },
+              "entity_strict_f1": 0.9679802955665024,
+              "relation_f1": 0.5027932960893855,
+              "relation_prf": {
+                "tp": 90,
+                "fp": 154,
+                "fn": 24,
+                "precision": 0.3689,
+                "recall": 0.7895,
+                "f1": 0.5028
+              }
+            },
+            {
+              "name": "stress_seed20261104",
+              "seed": 20261104,
+              "n_chunks": 26,
+              "chunk_calls": 26,
+              "input_tokens": 49222,
+              "output_tokens": 17120,
+              "cached_input_tokens": 43264,
+              "truncated_chunks": 0,
+              "truncation_signals": 0,
+              "reworked_chunks": 0,
+              "failed_chunks": 0,
+              "max_chunk_input_tokens": 2515,
+              "max_chunk_output_tokens": 4399,
+              "max_chunk_units": 1500,
+              "max_chunk_chars": 2292,
+              "overlap_pairs": 8,
+              "wall_s": 18.664,
+              "entity_relaxed_f1": 0.9005847953216374,
+              "entity_relaxed_prf": {
+                "tp": 77,
+                "fp": 3,
+                "fn": 14,
+                "precision": 0.9625,
+                "recall": 0.8462,
+                "f1": 0.9006
+              },
+              "entity_strict_f1": 0.9825,
+              "relation_f1": 0.5202312138728323,
+              "relation_prf": {
+                "tp": 90,
+                "fp": 142,
+                "fn": 24,
+                "precision": 0.3879,
+                "recall": 0.7895,
+                "f1": 0.5202
+              }
+            }
+          ],
+          "micro": {
+            "documents": 3,
+            "entity_strict": {
+              "tp": 2351,
+              "fp": 65,
+              "fn": 64,
+              "precision": 0.9731,
+              "recall": 0.9735,
+              "f1": 0.9733
+            },
+            "entity_relaxed": {
+              "tp": 233,
+              "fp": 11,
+              "fn": 38,
+              "precision": 0.9549,
+              "recall": 0.8598,
+              "f1": 0.9049
+            },
+            "entity_by_type": {
+              "EVENT": {
+                "tp": 0,
+                "fp": 0,
+                "fn": 24,
+                "precision": 0.0,
+                "recall": 0.0,
+                "f1": 0.0
+              },
+              "LOC": {
+                "tp": 45,
+                "fp": 0,
+                "fn": 0,
+                "precision": 1.0,
+                "recall": 1.0,
+                "f1": 1.0
+              },
+              "MISC": {
+                "tp": 14,
+                "fp": 0,
+                "fn": 14,
+                "precision": 1.0,
+                "recall": 0.5,
+                "f1": 0.6667
+              },
+              "ORG": {
+                "tp": 54,
+                "fp": 10,
+                "fn": 0,
+                "precision": 0.8438,
+                "recall": 1.0,
+                "f1": 0.9153
+              },
+              "PER": {
+                "tp": 120,
+                "fp": 1,
+                "fn": 0,
+                "precision": 0.9917,
+                "recall": 1.0,
+                "f1": 0.9959
+              }
+            },
+            "relation": {
+              "tp": 274,
+              "fp": 323,
+              "fn": 68,
+              "precision": 0.459,
+              "recall": 0.8012,
+              "f1": 0.5836
+            }
+          },
+          "macro": {
+            "entity_strict": {
+              "precision": 0.9732,
+              "recall": 0.9735,
+              "f1": 0.9733
+            },
+            "entity_relaxed": {
+              "precision": 0.9551,
+              "recall": 0.8599,
+              "f1": 0.9049
+            },
+            "relation": {
+              "precision": 0.5112,
+              "recall": 0.8012,
+              "f1": 0.6077
+            },
+            "documents": 3
+          },
+          "chunk_calls_total": 78,
+          "input_tokens_total": 147738,
+          "output_tokens_total": 49236,
+          "truncated_chunks_total": 0,
+          "wall_s_total": 49.234
+        },
+        {
+          "round": 2,
+          "cases": [
+            {
+              "name": "stress_seed20261102",
+              "seed": 20261102,
+              "n_chunks": 26,
+              "chunk_calls": 26,
+              "input_tokens": 49265,
+              "output_tokens": 14534,
+              "cached_input_tokens": 43392,
+              "truncated_chunks": 0,
+              "truncation_signals": 0,
+              "reworked_chunks": 0,
+              "failed_chunks": 0,
+              "max_chunk_input_tokens": 2523,
+              "max_chunk_output_tokens": 3823,
+              "max_chunk_units": 1500,
+              "max_chunk_chars": 2292,
+              "overlap_pairs": 8,
+              "wall_s": 11.772,
+              "entity_relaxed_f1": 0.8915662650602411,
+              "entity_relaxed_prf": {
+                "tp": 74,
+                "fp": 3,
+                "fn": 15,
+                "precision": 0.961,
+                "recall": 0.8315,
+                "f1": 0.8916
+              },
+              "entity_strict_f1": 0.9480122324159023,
+              "relation_f1": 0.7758620689655172,
+              "relation_prf": {
+                "tp": 90,
+                "fp": 28,
+                "fn": 24,
+                "precision": 0.7627,
+                "recall": 0.7895,
+                "f1": 0.7759
+              }
+            },
+            {
+              "name": "stress_seed20261103",
+              "seed": 20261103,
+              "n_chunks": 26,
+              "chunk_calls": 26,
+              "input_tokens": 49251,
+              "output_tokens": 18283,
+              "cached_input_tokens": 43264,
+              "truncated_chunks": 0,
+              "truncation_signals": 0,
+              "reworked_chunks": 0,
+              "failed_chunks": 0,
+              "max_chunk_input_tokens": 2521,
+              "max_chunk_output_tokens": 5482,
+              "max_chunk_units": 1500,
+              "max_chunk_chars": 2278,
+              "overlap_pairs": 8,
+              "wall_s": 21.26,
+              "entity_relaxed_f1": 0.9069767441860465,
+              "entity_relaxed_prf": {
+                "tp": 78,
+                "fp": 3,
+                "fn": 13,
+                "precision": 0.963,
+                "recall": 0.8571,
+                "f1": 0.907
+              },
+              "entity_strict_f1": 0.9838509316770185,
+              "relation_f1": 0.49315068493150693,
+              "relation_prf": {
+                "tp": 90,
+                "fp": 161,
+                "fn": 24,
+                "precision": 0.3586,
+                "recall": 0.7895,
+                "f1": 0.4932
+              }
+            },
+            {
+              "name": "stress_seed20261104",
+              "seed": 20261104,
+              "n_chunks": 26,
+              "chunk_calls": 26,
+              "input_tokens": 49222,
+              "output_tokens": 13919,
+              "cached_input_tokens": 43264,
+              "truncated_chunks": 0,
+              "truncation_signals": 0,
+              "reworked_chunks": 0,
+              "failed_chunks": 0,
+              "max_chunk_input_tokens": 2515,
+              "max_chunk_output_tokens": 3761,
+              "max_chunk_units": 1500,
+              "max_chunk_chars": 2292,
+              "overlap_pairs": 8,
+              "wall_s": 11.63,
+              "entity_relaxed_f1": 0.9005847953216374,
+              "entity_relaxed_prf": {
+                "tp": 77,
+                "fp": 3,
+                "fn": 14,
+                "precision": 0.9625,
+                "recall": 0.8462,
+                "f1": 0.9006
+              },
+              "entity_strict_f1": 0.9825,
+              "relation_f1": 0.7899159663865545,
+              "relation_prf": {
+                "tp": 94,
+                "fp": 30,
+                "fn": 20,
+                "precision": 0.7581,
+                "recall": 0.8246,
+                "f1": 0.7899
+              }
+            }
+          ],
+          "micro": {
+            "documents": 3,
+            "entity_strict": {
+              "tp": 2353,
+              "fp": 77,
+              "fn": 62,
+              "precision": 0.9683,
+              "recall": 0.9743,
+              "f1": 0.9713
+            },
+            "entity_relaxed": {
+              "tp": 229,
+              "fp": 9,
+              "fn": 42,
+              "precision": 0.9622,
+              "recall": 0.845,
+              "f1": 0.8998
+            },
+            "entity_by_type": {
+              "EVENT": {
+                "tp": 0,
+                "fp": 0,
+                "fn": 24,
+                "precision": 0.0,
+                "recall": 0.0,
+                "f1": 0.0
+              },
+              "LOC": {
+                "tp": 45,
+                "fp": 0,
+                "fn": 0,
+                "precision": 1.0,
+                "recall": 1.0,
+                "f1": 1.0
+              },
+              "MISC": {
+                "tp": 10,
+                "fp": 0,
+                "fn": 18,
+                "precision": 1.0,
+                "recall": 0.3571,
+                "f1": 0.5263
+              },
+              "ORG": {
+                "tp": 54,
+                "fp": 9,
+                "fn": 0,
+                "precision": 0.8571,
+                "recall": 1.0,
+                "f1": 0.9231
+              },
+              "PER": {
+                "tp": 120,
+                "fp": 0,
+                "fn": 0,
+                "precision": 1.0,
+                "recall": 1.0,
+                "f1": 1.0
+              }
+            },
+            "relation": {
+              "tp": 274,
+              "fp": 219,
+              "fn": 68,
+              "precision": 0.5558,
+              "recall": 0.8012,
+              "f1": 0.6563
+            }
+          },
+          "macro": {
+            "entity_strict": {
+              "precision": 0.969,
+              "recall": 0.9743,
+              "f1": 0.9715
+            },
+            "entity_relaxed": {
+              "precision": 0.9622,
+              "recall": 0.8449,
+              "f1": 0.8997
+            },
+            "relation": {
+              "precision": 0.6264,
+              "recall": 0.8012,
+              "f1": 0.6863
+            },
+            "documents": 3
+          },
+          "chunk_calls_total": 78,
+          "input_tokens_total": 147738,
+          "output_tokens_total": 46736,
+          "truncated_chunks_total": 0,
+          "wall_s_total": 44.662
+        },
+        {
+          "round": 3,
+          "cases": [
+            {
+              "name": "stress_seed20261102",
+              "seed": 20261102,
+              "n_chunks": 26,
+              "chunk_calls": 26,
+              "input_tokens": 49265,
+              "output_tokens": 14458,
+              "cached_input_tokens": 43392,
+              "truncated_chunks": 0,
+              "truncation_signals": 0,
+              "reworked_chunks": 0,
+              "failed_chunks": 0,
+              "max_chunk_input_tokens": 2523,
+              "max_chunk_output_tokens": 4159,
+              "max_chunk_units": 1500,
+              "max_chunk_chars": 2292,
+              "overlap_pairs": 8,
+              "wall_s": 12.655,
+              "entity_relaxed_f1": 0.8915662650602411,
+              "entity_relaxed_prf": {
+                "tp": 74,
+                "fp": 3,
+                "fn": 15,
+                "precision": 0.961,
+                "recall": 0.8315,
+                "f1": 0.8916
+              },
+              "entity_strict_f1": 0.9480122324159023,
+              "relation_f1": 0.7758620689655172,
+              "relation_prf": {
+                "tp": 90,
+                "fp": 28,
+                "fn": 24,
+                "precision": 0.7627,
+                "recall": 0.7895,
+                "f1": 0.7759
+              }
+            },
+            {
+              "name": "stress_seed20261103",
+              "seed": 20261103,
+              "n_chunks": 26,
+              "chunk_calls": 26,
+              "input_tokens": 49251,
+              "output_tokens": 18242,
+              "cached_input_tokens": 43264,
+              "truncated_chunks": 0,
+              "truncation_signals": 0,
+              "reworked_chunks": 0,
+              "failed_chunks": 0,
+              "max_chunk_input_tokens": 2521,
+              "max_chunk_output_tokens": 4588,
+              "max_chunk_units": 1500,
+              "max_chunk_chars": 2278,
+              "overlap_pairs": 8,
+              "wall_s": 19.421,
+              "entity_relaxed_f1": 0.896551724137931,
+              "entity_relaxed_prf": {
+                "tp": 78,
+                "fp": 5,
+                "fn": 13,
+                "precision": 0.9398,
+                "recall": 0.8571,
+                "f1": 0.8966
+              },
+              "entity_strict_f1": 0.9591214154972544,
+              "relation_f1": 0.49723756906077343,
+              "relation_prf": {
+                "tp": 90,
+                "fp": 158,
+                "fn": 24,
+                "precision": 0.3629,
+                "recall": 0.7895,
+                "f1": 0.4972
+              }
+            },
+            {
+              "name": "stress_seed20261104",
+              "seed": 20261104,
+              "n_chunks": 26,
+              "chunk_calls": 26,
+              "input_tokens": 49222,
+              "output_tokens": 14307,
+              "cached_input_tokens": 43264,
+              "truncated_chunks": 0,
+              "truncation_signals": 0,
+              "reworked_chunks": 0,
+              "failed_chunks": 0,
+              "max_chunk_input_tokens": 2515,
+              "max_chunk_output_tokens": 3797,
+              "max_chunk_units": 1500,
+              "max_chunk_chars": 2292,
+              "overlap_pairs": 8,
+              "wall_s": 11.249,
+              "entity_relaxed_f1": 0.8953488372093024,
+              "entity_relaxed_prf": {
+                "tp": 77,
+                "fp": 4,
+                "fn": 14,
+                "precision": 0.9506,
+                "recall": 0.8462,
+                "f1": 0.8953
+              },
+              "entity_strict_f1": 0.9727722772277227,
+              "relation_f1": 0.7999999999999999,
+              "relation_prf": {
+                "tp": 94,
+                "fp": 27,
+                "fn": 20,
+                "precision": 0.7769,
+                "recall": 0.8246,
+                "f1": 0.8
+              }
+            }
+          ],
+          "micro": {
+            "documents": 3,
+            "entity_strict": {
+              "tp": 2347,
+              "fp": 128,
+              "fn": 68,
+              "precision": 0.9483,
+              "recall": 0.9718,
+              "f1": 0.9599
+            },
+            "entity_relaxed": {
+              "tp": 229,
+              "fp": 12,
+              "fn": 42,
+              "precision": 0.9502,
+              "recall": 0.845,
+              "f1": 0.8945
+            },
+            "entity_by_type": {
+              "EVENT": {
+                "tp": 0,
+                "fp": 0,
+                "fn": 24,
+                "precision": 0.0,
+                "recall": 0.0,
+                "f1": 0.0
+              },
+              "LOC": {
+                "tp": 45,
+                "fp": 0,
+                "fn": 0,
+                "precision": 1.0,
+                "recall": 1.0,
+                "f1": 1.0
+              },
+              "MISC": {
+                "tp": 10,
+                "fp": 0,
+                "fn": 18,
+                "precision": 1.0,
+                "recall": 0.3571,
+                "f1": 0.5263
+              },
+              "ORG": {
+                "tp": 54,
+                "fp": 11,
+                "fn": 0,
+                "precision": 0.8308,
+                "recall": 1.0,
+                "f1": 0.9076
+              },
+              "PER": {
+                "tp": 120,
+                "fp": 1,
+                "fn": 0,
+                "precision": 0.9917,
+                "recall": 1.0,
+                "f1": 0.9959
+              }
+            },
+            "relation": {
+              "tp": 274,
+              "fp": 213,
+              "fn": 68,
+              "precision": 0.5626,
+              "recall": 0.8012,
+              "f1": 0.661
+            }
+          },
+          "macro": {
+            "entity_strict": {
+              "precision": 0.9485,
+              "recall": 0.9719,
+              "f1": 0.96
+            },
+            "entity_relaxed": {
+              "precision": 0.9505,
+              "recall": 0.8449,
+              "f1": 0.8945
+            },
+            "relation": {
+              "precision": 0.6342,
+              "recall": 0.8012,
+              "f1": 0.691
+            },
+            "documents": 3
+          },
+          "chunk_calls_total": 78,
+          "input_tokens_total": 147738,
+          "output_tokens_total": 47007,
+          "truncated_chunks_total": 0,
+          "wall_s_total": 43.325
+        }
+      ],
+      "entity_macro_f1_mean": 0.8997,
+      "entity_macro_f1_worst": 0.8945,
+      "entity_strict_f1_mean": 0.9683,
+      "relation_f1_mean": 0.6617,
+      "relation_f1_worst": 0.6077,
+      "relation_tp_total": 822,
+      "relation_fp_total": 755,
+      "relation_fn_total": 204,
+      "relation_recall_mean": 0.8012,
+      "entity_tp_total": 691,
+      "entity_fp_total": 32,
+      "entity_fn_total": 122,
+      "entity_by_type": {
+        "EVENT": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 72,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0
+        },
+        "LOC": {
+          "tp": 135,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0
+        },
+        "MISC": {
+          "tp": 34,
+          "fp": 0,
+          "fn": 50,
+          "precision": 1.0,
+          "recall": 0.4048,
+          "f1": 0.5763
+        },
+        "ORG": {
+          "tp": 162,
+          "fp": 30,
+          "fn": 0,
+          "precision": 0.8438,
+          "recall": 1.0,
+          "f1": 0.9153
+        },
+        "PER": {
+          "tp": 360,
+          "fp": 2,
+          "fn": 0,
+          "precision": 0.9945,
+          "recall": 1.0,
+          "f1": 0.9972
+        }
+      },
+      "micro_pooled": {
+        "entity_relaxed": {
+          "tp": 691,
+          "fp": 32,
+          "fn": 122,
+          "precision": 0.9557,
+          "recall": 0.8499,
+          "f1": 0.8997
+        },
+        "entity_strict": {
+          "tp": 7051,
+          "fp": 270,
+          "fn": 194,
+          "precision": 0.9631,
+          "recall": 0.9732,
+          "f1": 0.9681
+        },
+        "relation": {
+          "tp": 822,
+          "fp": 755,
+          "fn": 204,
+          "precision": 0.5212,
+          "recall": 0.8012,
+          "f1": 0.6316
+        }
+      },
+      "chunk_calls_total_mean": 78.0,
+      "chunk_calls_per_document_mean": 26.0,
+      "input_tokens_total_mean": 147738.0,
+      "output_tokens_total_mean": 47659.6667,
+      "input_tokens_per_document_mean": 49246.0,
+      "output_tokens_per_document_mean": 15886.5556,
+      "output_tokens_per_chunk_mean": 611.02,
+      "wall_s_per_document_mean": 15.2468,
+      "wall_s_total_mean": 45.7403,
+      "truncated_chunks_max": 0,
+      "truncation_signals_max": 0,
+      "failed_chunks_max": 0,
+      "max_chunk_input_tokens": 2523,
+      "max_chunk_output_tokens": 5482,
+      "max_chunk_units": 1500,
+      "max_chunk_chars": 2292,
+      "overlap_pairs_min": 8
+    },
+    "3500": {
+      "budget": 3500,
+      "overlap_units": 200,
+      "repeat": 3,
+      "documents": 3,
+      "rounds": [
+        {
+          "round": 1,
+          "cases": [
+            {
+              "name": "stress_seed20261102",
+              "seed": 20261102,
+              "n_chunks": 9,
+              "chunk_calls": 9,
+              "input_tokens": 27764,
+              "output_tokens": 12104,
+              "cached_input_tokens": 25728,
+              "truncated_chunks": 0,
+              "truncation_signals": 0,
+              "reworked_chunks": 0,
+              "failed_chunks": 0,
+              "max_chunk_input_tokens": 3836,
+              "max_chunk_output_tokens": 5402,
+              "max_chunk_units": 3597,
+              "max_chunk_chars": 4613,
+              "overlap_pairs": 7,
+              "wall_s": 16.257,
+              "entity_relaxed_f1": 0.8505747126436781,
+              "entity_relaxed_prf": {
+                "tp": 74,
+                "fp": 11,
+                "fn": 15,
+                "precision": 0.8706,
+                "recall": 0.8315,
+                "f1": 0.8506
+              },
+              "entity_strict_f1": 0.9516227801592162,
+              "relation_f1": 0.5980066445182725,
+              "relation_prf": {
+                "tp": 90,
+                "fp": 97,
+                "fn": 24,
+                "precision": 0.4813,
+                "recall": 0.7895,
+                "f1": 0.598
+              }
+            },
+            {
+              "name": "stress_seed20261103",
+              "seed": 20261103,
+              "n_chunks": 9,
+              "chunk_calls": 9,
+              "input_tokens": 27750,
+              "output_tokens": 12028,
+              "cached_input_tokens": 11136,
+              "truncated_chunks": 0,
+              "truncation_signals": 0,
+              "reworked_chunks": 0,
+              "failed_chunks": 0,
+              "max_chunk_input_tokens": 3815,
+              "max_chunk_output_tokens": 5276,
+              "max_chunk_units": 3594,
+              "max_chunk_chars": 4600,
+              "overlap_pairs": 7,
+              "wall_s": 13.319,
+              "entity_relaxed_f1": 0.8603351955307262,
+              "entity_relaxed_prf": {
+                "tp": 77,
+                "fp": 11,
+                "fn": 14,
+                "precision": 0.875,
+                "recall": 0.8462,
+                "f1": 0.8603
+              },
+              "entity_strict_f1": 0.9630078835657974,
+              "relation_f1": 0.5787781350482315,
+              "relation_prf": {
+                "tp": 90,
+                "fp": 107,
+                "fn": 24,
+                "precision": 0.4569,
+                "recall": 0.7895,
+                "f1": 0.5788
+              }
+            },
+            {
+              "name": "stress_seed20261104",
+              "seed": 20261104,
+              "n_chunks": 9,
+              "chunk_calls": 9,
+              "input_tokens": 27750,
+              "output_tokens": 11408,
+              "cached_input_tokens": 11136,
+              "truncated_chunks": 0,
+              "truncation_signals": 0,
+              "reworked_chunks": 0,
+              "failed_chunks": 0,
+              "max_chunk_input_tokens": 3810,
+              "max_chunk_output_tokens": 4656,
+              "max_chunk_units": 3596,
+              "max_chunk_chars": 4615,
+              "overlap_pairs": 7,
+              "wall_s": 14.064,
+              "entity_relaxed_f1": 0.8603351955307262,
+              "entity_relaxed_prf": {
+                "tp": 77,
+                "fp": 11,
+                "fn": 14,
+                "precision": 0.875,
+                "recall": 0.8462,
+                "f1": 0.8603
+              },
+              "entity_strict_f1": 0.9591712370505789,
+              "relation_f1": 0.5844155844155845,
+              "relation_prf": {
+                "tp": 90,
+                "fp": 104,
+                "fn": 24,
+                "precision": 0.4639,
+                "recall": 0.7895,
+                "f1": 0.5844
+              }
+            }
+          ],
+          "micro": {
+            "documents": 3,
+            "entity_strict": {
+              "tp": 2358,
+              "fp": 150,
+              "fn": 57,
+              "precision": 0.9402,
+              "recall": 0.9764,
+              "f1": 0.958
+            },
+            "entity_relaxed": {
+              "tp": 228,
+              "fp": 33,
+              "fn": 43,
+              "precision": 0.8736,
+              "recall": 0.8413,
+              "f1": 0.8571
+            },
+            "entity_by_type": {
+              "EVENT": {
+                "tp": 0,
+                "fp": 24,
+                "fn": 24,
+                "precision": 0.0,
+                "recall": 0.0,
+                "f1": 0.0
+              },
+              "LOC": {
+                "tp": 45,
+                "fp": 0,
+                "fn": 0,
+                "precision": 1.0,
+                "recall": 1.0,
+                "f1": 1.0
+              },
+              "MISC": {
+                "tp": 9,
+                "fp": 0,
+                "fn": 19,
+                "precision": 1.0,
+                "recall": 0.3214,
+                "f1": 0.4865
+              },
+              "ORG": {
+                "tp": 54,
+                "fp": 9,
+                "fn": 0,
+                "precision": 0.8571,
+                "recall": 1.0,
+                "f1": 0.9231
+              },
+              "PER": {
+                "tp": 120,
+                "fp": 0,
+                "fn": 0,
+                "precision": 1.0,
+                "recall": 1.0,
+                "f1": 1.0
+              }
+            },
+            "relation": {
+              "tp": 270,
+              "fp": 308,
+              "fn": 72,
+              "precision": 0.4671,
+              "recall": 0.7895,
+              "f1": 0.587
+            }
+          },
+          "macro": {
+            "entity_strict": {
+              "precision": 0.9402,
+              "recall": 0.9764,
+              "f1": 0.9579
+            },
+            "entity_relaxed": {
+              "precision": 0.8735,
+              "recall": 0.8413,
+              "f1": 0.8571
+            },
+            "relation": {
+              "precision": 0.4674,
+              "recall": 0.7895,
+              "f1": 0.5871
+            },
+            "documents": 3
+          },
+          "chunk_calls_total": 27,
+          "input_tokens_total": 83264,
+          "output_tokens_total": 35540,
+          "truncated_chunks_total": 0,
+          "wall_s_total": 43.64
+        },
+        {
+          "round": 2,
+          "cases": [
+            {
+              "name": "stress_seed20261102",
+              "seed": 20261102,
+              "n_chunks": 9,
+              "chunk_calls": 9,
+              "input_tokens": 27764,
+              "output_tokens": 11602,
+              "cached_input_tokens": 25728,
+              "truncated_chunks": 0,
+              "truncation_signals": 0,
+              "reworked_chunks": 0,
+              "failed_chunks": 0,
+              "max_chunk_input_tokens": 3836,
+              "max_chunk_output_tokens": 4859,
+              "max_chunk_units": 3597,
+              "max_chunk_chars": 4613,
+              "overlap_pairs": 7,
+              "wall_s": 12.606,
+              "entity_relaxed_f1": 0.8191489361702128,
+              "entity_relaxed_prf": {
+                "tp": 77,
+                "fp": 22,
+                "fn": 12,
+                "precision": 0.7778,
+                "recall": 0.8652,
+                "f1": 0.8191
+              },
+              "entity_strict_f1": 0.7150063051702397,
+              "relation_f1": 0.5863192182410423,
+              "relation_prf": {
+                "tp": 90,
+                "fp": 103,
+                "fn": 24,
+                "precision": 0.4663,
+                "recall": 0.7895,
+                "f1": 0.5863
+              }
+            },
+            {
+              "name": "stress_seed20261103",
+              "seed": 20261103,
+              "n_chunks": 9,
+              "chunk_calls": 9,
+              "input_tokens": 27750,
+              "output_tokens": 11540,
+              "cached_input_tokens": 25856,
+              "truncated_chunks": 0,
+              "truncation_signals": 0,
+              "reworked_chunks": 0,
+              "failed_chunks": 0,
+              "max_chunk_input_tokens": 3815,
+              "max_chunk_output_tokens": 5042,
+              "max_chunk_units": 3594,
+              "max_chunk_chars": 4600,
+              "overlap_pairs": 7,
+              "wall_s": 14.706,
+              "entity_relaxed_f1": 0.8749999999999999,
+              "entity_relaxed_prf": {
+                "tp": 77,
+                "fp": 8,
+                "fn": 14,
+                "precision": 0.9059,
+                "recall": 0.8462,
+                "f1": 0.875
+              },
+              "entity_strict_f1": 0.9838909541511772,
+              "relation_f1": 0.594059405940594,
+              "relation_prf": {
+                "tp": 90,
+                "fp": 99,
+                "fn": 24,
+                "precision": 0.4762,
+                "recall": 0.7895,
+                "f1": 0.5941
+              }
+            },
+            {
+              "name": "stress_seed20261104",
+              "seed": 20261104,
+              "n_chunks": 9,
+              "chunk_calls": 9,
+              "input_tokens": 27750,
+              "output_tokens": 11577,
+              "cached_input_tokens": 25728,
+              "truncated_chunks": 0,
+              "truncation_signals": 0,
+              "reworked_chunks": 0,
+              "failed_chunks": 0,
+              "max_chunk_input_tokens": 3810,
+              "max_chunk_output_tokens": 4656,
+              "max_chunk_units": 3596,
+              "max_chunk_chars": 4615,
+              "overlap_pairs": 7,
+              "wall_s": 13.972,
+              "entity_relaxed_f1": 0.8603351955307262,
+              "entity_relaxed_prf": {
+                "tp": 77,
+                "fp": 11,
+                "fn": 14,
+                "precision": 0.875,
+                "recall": 0.8462,
+                "f1": 0.8603
+              },
+              "entity_strict_f1": 0.9650521152667074,
+              "relation_f1": 0.5678233438485806,
+              "relation_prf": {
+                "tp": 90,
+                "fp": 113,
+                "fn": 24,
+                "precision": 0.4433,
+                "recall": 0.7895,
+                "f1": 0.5678
+              }
+            }
+          ],
+          "micro": {
+            "documents": 3,
+            "entity_strict": {
+              "tp": 2148,
+              "fp": 268,
+              "fn": 267,
+              "precision": 0.8891,
+              "recall": 0.8894,
+              "f1": 0.8893
+            },
+            "entity_relaxed": {
+              "tp": 231,
+              "fp": 41,
+              "fn": 40,
+              "precision": 0.8493,
+              "recall": 0.8524,
+              "f1": 0.8508
+            },
+            "entity_by_type": {
+              "EVENT": {
+                "tp": 0,
+                "fp": 24,
+                "fn": 24,
+                "precision": 0.0,
+                "recall": 0.0,
+                "f1": 0.0
+              },
+              "LOC": {
+                "tp": 45,
+                "fp": 0,
+                "fn": 0,
+                "precision": 1.0,
+                "recall": 1.0,
+                "f1": 1.0
+              },
+              "MISC": {
+                "tp": 12,
+                "fp": 0,
+                "fn": 16,
+                "precision": 1.0,
+                "recall": 0.4286,
+                "f1": 0.6
+              },
+              "ORG": {
+                "tp": 54,
+                "fp": 3,
+                "fn": 0,
+                "precision": 0.9474,
+                "recall": 1.0,
+                "f1": 0.973
+              },
+              "PER": {
+                "tp": 120,
+                "fp": 14,
+                "fn": 0,
+                "precision": 0.8955,
+                "recall": 1.0,
+                "f1": 0.9449
+              }
+            },
+            "relation": {
+              "tp": 270,
+              "fp": 315,
+              "fn": 72,
+              "precision": 0.4615,
+              "recall": 0.7895,
+              "f1": 0.5825
+            }
+          },
+          "macro": {
+            "entity_strict": {
+              "precision": 0.8875,
+              "recall": 0.8887,
+              "f1": 0.888
+            },
+            "entity_relaxed": {
+              "precision": 0.8529,
+              "recall": 0.8525,
+              "f1": 0.8515
+            },
+            "relation": {
+              "precision": 0.462,
+              "recall": 0.7895,
+              "f1": 0.5827
+            },
+            "documents": 3
+          },
+          "chunk_calls_total": 27,
+          "input_tokens_total": 83264,
+          "output_tokens_total": 34719,
+          "truncated_chunks_total": 0,
+          "wall_s_total": 41.284
+        },
+        {
+          "round": 3,
+          "cases": [
+            {
+              "name": "stress_seed20261102",
+              "seed": 20261102,
+              "n_chunks": 9,
+              "chunk_calls": 9,
+              "input_tokens": 27764,
+              "output_tokens": 11630,
+              "cached_input_tokens": 25728,
+              "truncated_chunks": 0,
+              "truncation_signals": 0,
+              "reworked_chunks": 0,
+              "failed_chunks": 0,
+              "max_chunk_input_tokens": 3836,
+              "max_chunk_output_tokens": 4902,
+              "max_chunk_units": 3597,
+              "max_chunk_chars": 4613,
+              "overlap_pairs": 7,
+              "wall_s": 15.258,
+              "entity_relaxed_f1": 0.8850574712643678,
+              "entity_relaxed_prf": {
+                "tp": 77,
+                "fp": 8,
+                "fn": 12,
+                "precision": 0.9059,
+                "recall": 0.8652,
+                "f1": 0.8851
+              },
+              "entity_strict_f1": 0.9836065573770493,
+              "relation_f1": 0.594059405940594,
+              "relation_prf": {
+                "tp": 90,
+                "fp": 99,
+                "fn": 24,
+                "precision": 0.4762,
+                "recall": 0.7895,
+                "f1": 0.5941
+              }
+            },
+            {
+              "name": "stress_seed20261103",
+              "seed": 20261103,
+              "n_chunks": 9,
+              "chunk_calls": 9,
+              "input_tokens": 27750,
+              "output_tokens": 11507,
+              "cached_input_tokens": 25856,
+              "truncated_chunks": 0,
+              "truncation_signals": 0,
+              "reworked_chunks": 0,
+              "failed_chunks": 0,
+              "max_chunk_input_tokens": 3815,
+              "max_chunk_output_tokens": 5042,
+              "max_chunk_units": 3594,
+              "max_chunk_chars": 4600,
+              "overlap_pairs": 7,
+              "wall_s": 13.026,
+              "entity_relaxed_f1": 0.8342857142857143,
+              "entity_relaxed_prf": {
+                "tp": 73,
+                "fp": 11,
+                "fn": 18,
+                "precision": 0.869,
+                "recall": 0.8022,
+                "f1": 0.8343
+              },
+              "entity_strict_f1": 0.9610705596107055,
+              "relation_f1": 0.594059405940594,
+              "relation_prf": {
+                "tp": 90,
+                "fp": 99,
+                "fn": 24,
+                "precision": 0.4762,
+                "recall": 0.7895,
+                "f1": 0.5941
+              }
+            },
+            {
+              "name": "stress_seed20261104",
+              "seed": 20261104,
+              "n_chunks": 9,
+              "chunk_calls": 9,
+              "input_tokens": 27750,
+              "output_tokens": 11408,
+              "cached_input_tokens": 25728,
+              "truncated_chunks": 0,
+              "truncation_signals": 0,
+              "reworked_chunks": 0,
+              "failed_chunks": 0,
+              "max_chunk_input_tokens": 3810,
+              "max_chunk_output_tokens": 4656,
+              "max_chunk_units": 3596,
+              "max_chunk_chars": 4615,
+              "overlap_pairs": 7,
+              "wall_s": 13.908,
+              "entity_relaxed_f1": 0.8603351955307262,
+              "entity_relaxed_prf": {
+                "tp": 77,
+                "fp": 11,
+                "fn": 14,
+                "precision": 0.875,
+                "recall": 0.8462,
+                "f1": 0.8603
+              },
+              "entity_strict_f1": 0.9580036518563604,
+              "relation_f1": 0.5844155844155845,
+              "relation_prf": {
+                "tp": 90,
+                "fp": 104,
+                "fn": 24,
+                "precision": 0.4639,
+                "recall": 0.7895,
+                "f1": 0.5844
+              }
+            }
+          ],
+          "micro": {
+            "documents": 3,
+            "entity_strict": {
+              "tp": 2357,
+              "fp": 101,
+              "fn": 58,
+              "precision": 0.9589,
+              "recall": 0.976,
+              "f1": 0.9674
+            },
+            "entity_relaxed": {
+              "tp": 227,
+              "fp": 30,
+              "fn": 44,
+              "precision": 0.8833,
+              "recall": 0.8376,
+              "f1": 0.8598
+            },
+            "entity_by_type": {
+              "EVENT": {
+                "tp": 0,
+                "fp": 24,
+                "fn": 24,
+                "precision": 0.0,
+                "recall": 0.0,
+                "f1": 0.0
+              },
+              "LOC": {
+                "tp": 45,
+                "fp": 0,
+                "fn": 0,
+                "precision": 1.0,
+                "recall": 1.0,
+                "f1": 1.0
+              },
+              "MISC": {
+                "tp": 8,
+                "fp": 0,
+                "fn": 20,
+                "precision": 1.0,
+                "recall": 0.2857,
+                "f1": 0.4444
+              },
+              "ORG": {
+                "tp": 54,
+                "fp": 6,
+                "fn": 0,
+                "precision": 0.9,
+                "recall": 1.0,
+                "f1": 0.9474
+              },
+              "PER": {
+                "tp": 120,
+                "fp": 0,
+                "fn": 0,
+                "precision": 1.0,
+                "recall": 1.0,
+                "f1": 1.0
+              }
+            },
+            "relation": {
+              "tp": 270,
+              "fp": 302,
+              "fn": 72,
+              "precision": 0.472,
+              "recall": 0.7895,
+              "f1": 0.5908
+            }
+          },
+          "macro": {
+            "entity_strict": {
+              "precision": 0.9595,
+              "recall": 0.976,
+              "f1": 0.9676
+            },
+            "entity_relaxed": {
+              "precision": 0.8833,
+              "recall": 0.8378,
+              "f1": 0.8599
+            },
+            "relation": {
+              "precision": 0.4721,
+              "recall": 0.7895,
+              "f1": 0.5908
+            },
+            "documents": 3
+          },
+          "chunk_calls_total": 27,
+          "input_tokens_total": 83264,
+          "output_tokens_total": 34545,
+          "truncated_chunks_total": 0,
+          "wall_s_total": 42.192
+        }
+      ],
+      "entity_macro_f1_mean": 0.8562,
+      "entity_macro_f1_worst": 0.8515,
+      "entity_strict_f1_mean": 0.9378,
+      "relation_f1_mean": 0.5869,
+      "relation_f1_worst": 0.5827,
+      "relation_tp_total": 810,
+      "relation_fp_total": 925,
+      "relation_fn_total": 216,
+      "relation_recall_mean": 0.7895,
+      "entity_tp_total": 686,
+      "entity_fp_total": 104,
+      "entity_fn_total": 127,
+      "entity_by_type": {
+        "EVENT": {
+          "tp": 0,
+          "fp": 72,
+          "fn": 72,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0
+        },
+        "LOC": {
+          "tp": 135,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0
+        },
+        "MISC": {
+          "tp": 29,
+          "fp": 0,
+          "fn": 55,
+          "precision": 1.0,
+          "recall": 0.3452,
+          "f1": 0.5133
+        },
+        "ORG": {
+          "tp": 162,
+          "fp": 18,
+          "fn": 0,
+          "precision": 0.9,
+          "recall": 1.0,
+          "f1": 0.9474
+        },
+        "PER": {
+          "tp": 360,
+          "fp": 14,
+          "fn": 0,
+          "precision": 0.9626,
+          "recall": 1.0,
+          "f1": 0.9809
+        }
+      },
+      "micro_pooled": {
+        "entity_relaxed": {
+          "tp": 686,
+          "fp": 104,
+          "fn": 127,
+          "precision": 0.8684,
+          "recall": 0.8438,
+          "f1": 0.8559
+        },
+        "entity_strict": {
+          "tp": 6863,
+          "fp": 519,
+          "fn": 382,
+          "precision": 0.9297,
+          "recall": 0.9473,
+          "f1": 0.9384
+        },
+        "relation": {
+          "tp": 810,
+          "fp": 925,
+          "fn": 216,
+          "precision": 0.4669,
+          "recall": 0.7895,
+          "f1": 0.5867
+        }
+      },
+      "chunk_calls_total_mean": 27.0,
+      "chunk_calls_per_document_mean": 9.0,
+      "input_tokens_total_mean": 83264.0,
+      "output_tokens_total_mean": 34934.6667,
+      "input_tokens_per_document_mean": 27754.6667,
+      "output_tokens_per_document_mean": 11644.8889,
+      "output_tokens_per_chunk_mean": 1293.88,
+      "wall_s_per_document_mean": 14.124,
+      "wall_s_total_mean": 42.372,
+      "truncated_chunks_max": 0,
+      "truncation_signals_max": 0,
+      "failed_chunks_max": 0,
+      "max_chunk_input_tokens": 3836,
+      "max_chunk_output_tokens": 5402,
+      "max_chunk_units": 3597,
+      "max_chunk_chars": 4615,
+      "overlap_pairs_min": 7
+    }
+  },
+  "real_docs": {
+    "1500": {
+      "documents": 11,
+      "rows": [
+        {
+          "id": "gold:case01.tagged",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1249,
+          "output_tokens": 128,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1249,
+          "max_chunk_output_tokens": 128,
+          "max_chunk_units": 15,
+          "wall_s": 1.257
+        },
+        {
+          "id": "gold:case02.tagged",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1251,
+          "output_tokens": 131,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1251,
+          "max_chunk_output_tokens": 131,
+          "max_chunk_units": 15,
+          "wall_s": 1.128
+        },
+        {
+          "id": "gold:case03.tagged",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1254,
+          "output_tokens": 174,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1254,
+          "max_chunk_output_tokens": 174,
+          "max_chunk_units": 25,
+          "wall_s": 1.162
+        },
+        {
+          "id": "gold:case04.tagged",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1255,
+          "output_tokens": 177,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1255,
+          "max_chunk_output_tokens": 177,
+          "max_chunk_units": 29,
+          "wall_s": 1.046
+        },
+        {
+          "id": "gold:case05.tagged",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1253,
+          "output_tokens": 174,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1253,
+          "max_chunk_output_tokens": 174,
+          "max_chunk_units": 18,
+          "wall_s": 1.259
+        },
+        {
+          "id": "gold:case06.tagged",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1254,
+          "output_tokens": 171,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1254,
+          "max_chunk_output_tokens": 171,
+          "max_chunk_units": 23,
+          "wall_s": 1.18
+        },
+        {
+          "id": "sample:batch/doc_a.txt",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1256,
+          "output_tokens": 175,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1256,
+          "max_chunk_output_tokens": 175,
+          "max_chunk_units": 24,
+          "wall_s": 1.612
+        },
+        {
+          "id": "sample:batch/doc_b.txt",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1254,
+          "output_tokens": 173,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1254,
+          "max_chunk_output_tokens": 173,
+          "max_chunk_units": 25,
+          "wall_s": 1.359
+        },
+        {
+          "id": "sample:batch/doc_c.txt",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1254,
+          "output_tokens": 176,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1254,
+          "max_chunk_output_tokens": 176,
+          "max_chunk_units": 24,
+          "wall_s": 1.385
+        },
+        {
+          "id": "sample:news_001.txt",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1299,
+          "output_tokens": 343,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1299,
+          "max_chunk_output_tokens": 343,
+          "max_chunk_units": 106,
+          "wall_s": 1.525
+        },
+        {
+          "id": "sample:news_long_002.txt",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1423,
+          "output_tokens": 579,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1423,
+          "max_chunk_output_tokens": 579,
+          "max_chunk_units": 341,
+          "wall_s": 2.633
+        }
+      ],
+      "truncated_chunks_total": 0,
+      "truncation_signals_total": 0,
+      "failed_chunks_total": 0,
+      "max_chunk_input_tokens": 1423,
+      "max_chunk_output_tokens": 579,
+      "chunk_calls_total": 11
+    },
+    "3500": {
+      "documents": 11,
+      "rows": [
+        {
+          "id": "gold:case01.tagged",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1249,
+          "output_tokens": 128,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1249,
+          "max_chunk_output_tokens": 128,
+          "max_chunk_units": 15,
+          "wall_s": 1.218
+        },
+        {
+          "id": "gold:case02.tagged",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1251,
+          "output_tokens": 131,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1251,
+          "max_chunk_output_tokens": 131,
+          "max_chunk_units": 15,
+          "wall_s": 1.928
+        },
+        {
+          "id": "gold:case03.tagged",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1254,
+          "output_tokens": 174,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1254,
+          "max_chunk_output_tokens": 174,
+          "max_chunk_units": 25,
+          "wall_s": 3.939
+        },
+        {
+          "id": "gold:case04.tagged",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1255,
+          "output_tokens": 177,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1255,
+          "max_chunk_output_tokens": 177,
+          "max_chunk_units": 29,
+          "wall_s": 1.365
+        },
+        {
+          "id": "gold:case05.tagged",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1253,
+          "output_tokens": 173,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1253,
+          "max_chunk_output_tokens": 173,
+          "max_chunk_units": 18,
+          "wall_s": 1.057
+        },
+        {
+          "id": "gold:case06.tagged",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1254,
+          "output_tokens": 171,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1254,
+          "max_chunk_output_tokens": 171,
+          "max_chunk_units": 23,
+          "wall_s": 6.722
+        },
+        {
+          "id": "sample:batch/doc_a.txt",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1256,
+          "output_tokens": 175,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1256,
+          "max_chunk_output_tokens": 175,
+          "max_chunk_units": 24,
+          "wall_s": 1.92
+        },
+        {
+          "id": "sample:batch/doc_b.txt",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1254,
+          "output_tokens": 173,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1254,
+          "max_chunk_output_tokens": 173,
+          "max_chunk_units": 25,
+          "wall_s": 1.605
+        },
+        {
+          "id": "sample:batch/doc_c.txt",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1254,
+          "output_tokens": 171,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1254,
+          "max_chunk_output_tokens": 171,
+          "max_chunk_units": 24,
+          "wall_s": 1.291
+        },
+        {
+          "id": "sample:news_001.txt",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1299,
+          "output_tokens": 322,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1299,
+          "max_chunk_output_tokens": 322,
+          "max_chunk_units": 106,
+          "wall_s": 2.005
+        },
+        {
+          "id": "sample:news_long_002.txt",
+          "n_chunks": 1,
+          "chunk_calls": 1,
+          "input_tokens": 1423,
+          "output_tokens": 619,
+          "truncated_chunks": 0,
+          "truncation_signals": 0,
+          "failed_chunks": 0,
+          "max_chunk_input_tokens": 1423,
+          "max_chunk_output_tokens": 619,
+          "max_chunk_units": 341,
+          "wall_s": 2.409
+        }
+      ],
+      "truncated_chunks_total": 0,
+      "truncation_signals_total": 0,
+      "failed_chunks_total": 0,
+      "max_chunk_input_tokens": 1423,
+      "max_chunk_output_tokens": 619,
+      "chunk_calls_total": 11
+    }
+  },
+  "calls_drop_pct": 65.38,
+  "residual_cross_chunk": {
+    "1500": {
+      "budget": {
+        "max_units": 1500,
+        "overlap_units": 200
+      },
+      "documents": 3,
+      "total_relations": 342,
+      "co_chunk_relations": 338,
+      "cross_chunk_relations": 4,
+      "cross_chunk_ratio": 0.011696,
+      "cross_chunk_ratio_pct": 1.1696,
+      "far_first_occurrence_relations": 60,
+      "far_first_occurrence_ratio": 0.175439,
+      "far_first_occurrence_ratio_pct": 17.5439,
+      "residual_relations": [
+        {
+          "document": "stress_seed20261102",
+          "head": "马秀兰",
+          "predicate": "关联物证",
+          "tail": "作案手机",
+          "head_occurrences": 6,
+          "tail_occurrences": 4,
+          "first_occurrence_gap_units": 15206
+        },
+        {
+          "document": "stress_seed20261103",
+          "head": "杨俊杰",
+          "predicate": "关联物证",
+          "tail": "断线钳",
+          "head_occurrences": 10,
+          "tail_occurrences": 1,
+          "first_occurrence_gap_units": 24911
+        },
+        {
+          "document": "stress_seed20261104",
+          "head": "谢丽娟",
+          "predicate": "关联物证",
+          "tail": "作案手机",
+          "head_occurrences": 7,
+          "tail_occurrences": 1,
+          "first_occurrence_gap_units": 23116
+        },
+        {
+          "document": "stress_seed20261104",
+          "head": "徐永刚",
+          "predicate": "关联物证",
+          "tail": "断线钳",
+          "head_occurrences": 12,
+          "tail_occurrences": 1,
+          "first_occurrence_gap_units": 25044
+        }
+      ],
+      "far_first_occurrence_examples": [
+        {
+          "document": "stress_seed20261102",
+          "head": "宋思远",
+          "predicate": "涉案关联",
+          "tail": "A2024-942",
+          "first_occurrence_gap_units": 14361,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "张卫东",
+          "predicate": "涉案关联",
+          "tail": "A2024-886",
+          "first_occurrence_gap_units": 14568,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "王建国",
+          "predicate": "涉案关联",
+          "tail": "A2024-932",
+          "first_occurrence_gap_units": 14776,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "萧晓峰",
+          "predicate": "涉案关联",
+          "tail": "A2024-584",
+          "first_occurrence_gap_units": 14440,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "萧梓萱",
+          "predicate": "涉案关联",
+          "tail": "A2024-844",
+          "first_occurrence_gap_units": 14898,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "胡俊杰",
+          "predicate": "涉案关联",
+          "tail": "A2024-300",
+          "first_occurrence_gap_units": 15571,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "萧梓萱",
+          "predicate": "涉案关联",
+          "tail": "A2024-416",
+          "first_occurrence_gap_units": 15095,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "李秀兰",
+          "predicate": "涉案关联",
+          "tail": "A2024-444",
+          "first_occurrence_gap_units": 15372,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "城南信达物流有限责任公司",
+          "predicate": "办案地位于",
+          "tail": "望江路",
+          "first_occurrence_gap_units": 15911,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "城南信达物流有限责任公司",
+          "predicate": "追赃方向指向",
+          "tail": "望江路",
+          "first_occurrence_gap_units": 15911,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "西江盛通机械制造有限公司",
+          "predicate": "办案地位于",
+          "tail": "青云镇",
+          "first_occurrence_gap_units": 16002,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "西江盛通机械制造有限公司",
+          "predicate": "追赃方向指向",
+          "tail": "青云镇",
+          "first_occurrence_gap_units": 16002,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "北辰恒泰商贸有限公司",
+          "predicate": "办案地位于",
+          "tail": "白石桥",
+          "first_occurrence_gap_units": 16072,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "北辰恒泰商贸有限公司",
+          "predicate": "追赃方向指向",
+          "tail": "白石桥",
+          "first_occurrence_gap_units": 16072,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "桥南顺达实业集团有限公司",
+          "predicate": "办案地位于",
+          "tail": "铜官山区",
+          "first_occurrence_gap_units": 16161,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "桥南顺达实业集团有限公司",
+          "predicate": "追赃方向指向",
+          "tail": "铜官山区",
+          "first_occurrence_gap_units": 16161,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "裕民广泰实业集团有限公司",
+          "predicate": "办案地位于",
+          "tail": "望江路",
+          "first_occurrence_gap_units": 15768,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "城南信达建筑工程有限公司",
+          "predicate": "追赃方向指向",
+          "tail": "青云镇",
+          "first_occurrence_gap_units": 15859,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "马秀兰",
+          "predicate": "关联物证",
+          "tail": "作案手机",
+          "first_occurrence_gap_units": 15206,
+          "covered_by_repeated_mention": false
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "胡俊杰",
+          "predicate": "关联物证",
+          "tail": "断线钳",
+          "first_occurrence_gap_units": 15270,
+          "covered_by_repeated_mention": true
+        }
+      ]
+    },
+    "3500": {
+      "budget": {
+        "max_units": 3500,
+        "overlap_units": 200
+      },
+      "documents": 3,
+      "total_relations": 342,
+      "co_chunk_relations": 342,
+      "cross_chunk_relations": 0,
+      "cross_chunk_ratio": 0.0,
+      "cross_chunk_ratio_pct": 0.0,
+      "far_first_occurrence_relations": 60,
+      "far_first_occurrence_ratio": 0.175439,
+      "far_first_occurrence_ratio_pct": 17.5439,
+      "residual_relations": [],
+      "far_first_occurrence_examples": [
+        {
+          "document": "stress_seed20261102",
+          "head": "宋思远",
+          "predicate": "涉案关联",
+          "tail": "A2024-942",
+          "first_occurrence_gap_units": 14361,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "张卫东",
+          "predicate": "涉案关联",
+          "tail": "A2024-886",
+          "first_occurrence_gap_units": 14568,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "王建国",
+          "predicate": "涉案关联",
+          "tail": "A2024-932",
+          "first_occurrence_gap_units": 14776,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "萧晓峰",
+          "predicate": "涉案关联",
+          "tail": "A2024-584",
+          "first_occurrence_gap_units": 14440,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "萧梓萱",
+          "predicate": "涉案关联",
+          "tail": "A2024-844",
+          "first_occurrence_gap_units": 14898,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "胡俊杰",
+          "predicate": "涉案关联",
+          "tail": "A2024-300",
+          "first_occurrence_gap_units": 15571,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "萧梓萱",
+          "predicate": "涉案关联",
+          "tail": "A2024-416",
+          "first_occurrence_gap_units": 15095,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "李秀兰",
+          "predicate": "涉案关联",
+          "tail": "A2024-444",
+          "first_occurrence_gap_units": 15372,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "城南信达物流有限责任公司",
+          "predicate": "办案地位于",
+          "tail": "望江路",
+          "first_occurrence_gap_units": 15911,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "城南信达物流有限责任公司",
+          "predicate": "追赃方向指向",
+          "tail": "望江路",
+          "first_occurrence_gap_units": 15911,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "西江盛通机械制造有限公司",
+          "predicate": "办案地位于",
+          "tail": "青云镇",
+          "first_occurrence_gap_units": 16002,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "西江盛通机械制造有限公司",
+          "predicate": "追赃方向指向",
+          "tail": "青云镇",
+          "first_occurrence_gap_units": 16002,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "北辰恒泰商贸有限公司",
+          "predicate": "办案地位于",
+          "tail": "白石桥",
+          "first_occurrence_gap_units": 16072,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "北辰恒泰商贸有限公司",
+          "predicate": "追赃方向指向",
+          "tail": "白石桥",
+          "first_occurrence_gap_units": 16072,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "桥南顺达实业集团有限公司",
+          "predicate": "办案地位于",
+          "tail": "铜官山区",
+          "first_occurrence_gap_units": 16161,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "桥南顺达实业集团有限公司",
+          "predicate": "追赃方向指向",
+          "tail": "铜官山区",
+          "first_occurrence_gap_units": 16161,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "裕民广泰实业集团有限公司",
+          "predicate": "办案地位于",
+          "tail": "望江路",
+          "first_occurrence_gap_units": 15768,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "城南信达建筑工程有限公司",
+          "predicate": "追赃方向指向",
+          "tail": "青云镇",
+          "first_occurrence_gap_units": 15859,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "马秀兰",
+          "predicate": "关联物证",
+          "tail": "作案手机",
+          "first_occurrence_gap_units": 15206,
+          "covered_by_repeated_mention": true
+        },
+        {
+          "document": "stress_seed20261102",
+          "head": "胡俊杰",
+          "predicate": "关联物证",
+          "tail": "断线钳",
+          "first_occurrence_gap_units": 15270,
+          "covered_by_repeated_mention": true
+        }
+      ]
+    }
+  },
+  "safety_margin": {
+    "1500": {
+      "source": "provider usage.input_tokens (real tokenizer)",
+      "note": "input_tokens 是 provider 对完整请求的真实计数，已包含正文 + 系统提示 + 结构化 schema；不是 estimate_tokens。单块 token 为多次尝试之和（保守上界）。",
+      "max_chunk_input_tokens": 2523,
+      "max_chunk_output_tokens": 5482,
+      "context_window": 1048576,
+      "max_output_tokens": 393216,
+      "input_margin_tokens": 1046053,
+      "input_margin_pct": 99.7594,
+      "input_plus_output_margin_tokens": 1040571,
+      "input_plus_output_margin_pct": 99.2366,
+      "within_context": true,
+      "output_cap_margin_tokens": 387734
+    },
+    "3500": {
+      "source": "provider usage.input_tokens (real tokenizer)",
+      "note": "input_tokens 是 provider 对完整请求的真实计数，已包含正文 + 系统提示 + 结构化 schema；不是 estimate_tokens。单块 token 为多次尝试之和（保守上界）。",
+      "max_chunk_input_tokens": 3836,
+      "max_chunk_output_tokens": 5402,
+      "context_window": 1048576,
+      "max_output_tokens": 393216,
+      "input_margin_tokens": 1044740,
+      "input_margin_pct": 99.6342,
+      "input_plus_output_margin_tokens": 1039338,
+      "input_plus_output_margin_pct": 99.119,
+      "within_context": true,
+      "output_cap_margin_tokens": 387814
+    }
+  },
+  "gate": {
+    "passed": false,
+    "checks": {
+      "entity_mean_within_0_5pt": false,
+      "entity_worst_within_0_5pt": false,
+      "relation_mean_not_lower": false,
+      "relation_worst_not_lower": false,
+      "truncated_chunks_zero": true,
+      "overlap_unchanged": true,
+      "chunk_calls_decreased": true
+    },
+    "failures": [
+      "entity_mean_within_0_5pt",
+      "entity_worst_within_0_5pt",
+      "relation_mean_not_lower",
+      "relation_worst_not_lower"
+    ],
+    "entity_macro_f1_mean_delta_pt": -4.35,
+    "entity_macro_f1_worst_delta_pt": -4.82,
+    "relation_f1_mean_delta_pt": -7.48,
+    "relation_f1_worst_delta_pt": -10.36,
+    "overlap_unchanged": true,
+    "max_entity_drop_pt": 0.5,
+    "budgets": {
+      "baseline": 1500,
+      "candidate": 3500
+    },
+    "real_docs_truncated_chunks": 0,
+    "stress_truncated_chunks": 0,
+    "derived_note": "worst-of-N 用逐轮配对差；原始逐轮数据由 b86769a 采集，派生字段由 8788d73 的 gate 重算"
+  },
+  "cost_note": "只记录 provider 真实 token；金额以账单为准，脚本不估算价格",
+  "paired_round_deltas_pt": {
+    "entity_macro_f1": [
+      -4.78,
+      -4.82,
+      -3.46
+    ],
+    "relation_f1": [
+      -2.06,
+      -10.36,
+      -10.02
+    ],
+    "note": "候选减基线，逐轮配对；worst-of-N = 本数组最小值"
+  }
+}

@@ -104,6 +104,23 @@ DeepSeek 三个要注意的点（2026 现状）：
   校验——DeepSeek 只有 `high/max`（`low/medium→high`、`xhigh→max`、
   `minimal→关闭思考`），翻译不了的值直接报错，不留到请求体里才炸。
 
+## 2c. 分块预算（默认 1500；3500 需 A/B 达标后单独切换）
+
+分块预算走现有 env，默认值**保持不变**（`max_units=1500`、`overlap_units=200`）：
+
+```bash
+MORAY_CHUNK_MAX_UNITS=1500       # 改成 3500 只影响单请求的块大小
+MORAY_CHUNK_OVERLAP_UNITS=200    # 工单04 明确不动 overlap
+MORAY_CHUNK_THRESHOLD_UNITS=4000 # 估算单位超过它才走分块
+MORAY_CHUNK_CONCURRENCY=4
+```
+
+工单 04 的真实 LLM A/B（1500 vs 3500）与门槛核对见
+`docs/evidence/04-budget-ab.md`。在门槛全部通过前，生产保持 1500；
+通过后把默认值切换做成**单独一个 commit**（只改 `config.chunk_settings()` 的
+默认那一处），回滚直接 `git revert <该 commit>`。当前该 commit **未添加**
+（A/B 准确率门槛未通过，见报告“结论”）。
+
 ## 3. Docker 镜像
 
 ```bash

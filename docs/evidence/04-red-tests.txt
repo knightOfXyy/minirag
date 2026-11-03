@@ -1,0 +1,30 @@
+# 工单04 先红：实现 budget.py 之前，新增测试因模块不存在而失败
+# 命令（代码提交 b86769a 之前的工作树）：
+#   .venv/bin/python -m pytest tests/test_chunk_budget.py -q
+#
+# 实际输出：
+==================================== ERRORS ====================================
+__________________ ERROR collecting tests/test_chunk_budget.py __________________
+ImportError while importing test module
+'/home/dell/orca/workspaces/minirag/tmp-yzd-feat-relation-202610-04/tests/test_chunk_budget.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_chunk_budget.py:20: in <module>
+    from moray.evaluation.stress.budget import (
+E   ModuleNotFoundError: No module named 'moray.evaluation.stress.budget'
+!!!!!!!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 error in 0.74s
+
+# 第二轮先红（评审自纠：worst-of-N 必须是逐轮配对差，不是两档最值相减）
+# 命令：
+#   python -m pytest tests/test_chunk_budget.py::test_budget_gate_prefers_explicit_paired_worst_delta -q
+# 实现前输出：
+>       assert gate["entity_macro_f1_worst_delta_pt"] == pytest.approx(-0.8)
+E       assert -0.4 == -0.8 ± 8.0e-07
+E        comparison failed
+E        Obtained: -0.4
+E        Expected: -0.8
+FAILED tests/test_chunk_budget.py::test_budget_gate_prefers_explicit_paired_worst_delta
+1 failed in 0.71s
