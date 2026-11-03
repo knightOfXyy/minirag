@@ -36,12 +36,6 @@ class RunRecorder:
     n_entities: int = 0
     n_relations: int = 0
     span_ratio: float | None = None
-    # 确定性回填信号（仅瘦身开关打开时有值；关闭时 None）
-    block_confidence: float | None = None
-    entities_grounded: int | None = None
-    entities_total: int | None = None
-    relation_evidence_ratio: float | None = None
-    ambiguous_mentions: int = 0
     review_passed: bool | None = None
     review_iters: int = 1
     open_issues: int = 0
@@ -294,10 +288,12 @@ class Dashboard:
               -- 零 span（slim 模型不自报）时 span_ratio 落 NULL；全批次未测
               -- 时聚合保持 NULL（未测），不用 coalesce 0 伪装成"一致率 0"。
               avg(span_ratio)                                        AS avg_span_ratio,
-              coalesce(avg(block_confidence),0)                      AS avg_block_confidence,
-              coalesce(sum(entities_grounded),0)                     AS entities_grounded,
-              coalesce(sum(entities_total),0)                        AS entities_total,
-              coalesce(avg(relation_evidence_ratio),0)               AS avg_relation_evidence_ratio,
+              -- 回填列与 span_ratio 同口径：全批次未测时聚合保持 NULL，
+              -- 不拿 coalesce 0 把「未知」伪装成 0% / 0 命中（未知≠0）。
+              avg(block_confidence)                                  AS avg_block_confidence,
+              sum(entities_grounded)                                 AS entities_grounded,
+              sum(entities_total)                                    AS entities_total,
+              avg(relation_evidence_ratio)                           AS avg_relation_evidence_ratio,
               coalesce(sum(ambiguous_mentions),0)                    AS ambiguous_mentions,
               coalesce(avg(review_iters),0)                          AS avg_review_iters,
               coalesce(sum(open_issues),0)                           AS total_open_issues,

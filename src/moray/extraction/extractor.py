@@ -365,6 +365,9 @@ class Extractor:
         )
         # 供 ExtractionMetricsMiddleware 核对 span（中间件存在时才有用）
         setattr(agent, "_audit_source_text", source_text)
+        # 中间件需要知道瘦身回填是否开启：用抽取器的单一开关，而不是它自己
+        # 再猜一套「无 mention 且 confidence 全 None」的判据（r9 N5）。
+        setattr(agent, "_audit_local_backfill", self.local_backfill)
         usage = Usage()
         last_error = ""
 

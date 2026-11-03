@@ -132,15 +132,17 @@ class BackfillReport:
 
     @classmethod
     def from_dict(
-        cls, data: dict, *, chunk_start: int = 0, chunk_id: str = ""
+        cls, data: dict, *, chunk_start: int | None = None, chunk_id: str = ""
     ) -> "BackfillReport":
         """从落盘/跨进程传递的纯字典还原（pipeline 汇总分块信号用）。
 
         ``chunk_start``/``chunk_id`` 由调用方在跨块汇总时注入，用于把块内偏移
         平移成文档全局偏移并标明来源块（字典里的同名字段仅作回读兜底）。
+        显式传入的 ``0`` 是合法块起点，不能被字典里的旧值覆盖（r9 N11）。
         """
         report = cls()
-        report.chunk_start = int(chunk_start or data.get("chunk_start", 0))
+        report.chunk_start = int(
+            data.get("chunk_start", 0) if chunk_start is None else chunk_start)
         report.chunk_id = chunk_id or str(data.get("chunk_id", ""))
         report.matched_literals = dict(data.get("matched_literals") or {})
         report.unmatched_aliases = list(data.get("unmatched_aliases") or [])
@@ -447,7 +449,10 @@ def backfill_provenance(
         # seen_literals，避免按别名逐个重扫全文。
         for literal in e.aliases:
             literal = literal.strip()
-            if literal and literal != e.name and literal not in seen_literals:
+            # 标准名可能带首尾空白；与其去空白后的形式相同的别名不是幻觉，
+            # 只是同一标准名的空白变体（r9 N2）。
+            if (literal and literal != e.name.strip()
+                    and literal not in seen_literals):
                 report.unmatched_aliases.append(
                     {"entity": e.name, "literal": literal}
                 )
@@ -625,7 +630,9 @@ def merge_backfill_reports(
             unmatched_index.setdefault(key, dict(entry))
         for am in report.ambiguous_mentions:
             start, end = am.start + offset, am.end + offset
-            key = (am.surface, start, end, tuple(am.candidates))
+            # 候选集合与实体输出顺序无关：重叠块里模型把候选换个顺序，
+            # 同一处歧义仍必须合并成一条（r9 N4）。
+            key = (am.surface, start, end, tuple(sorted(am.candidates)))
             existing = ambiguous_index.get(key)
             source_chunks = am.chunk_ids or (
                 [am.chunk_id] if am.chunk_id else [report.chunk_id])

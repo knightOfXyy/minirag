@@ -30,7 +30,7 @@ from typing import Awaitable, Callable
 
 from ..extraction.chunk_metrics import DocumentMetrics, merge_call_metrics
 from ..extraction.extractor import ExtractionError
-from ..extraction.local_backfill import literal_index
+from ..extraction.local_backfill import entity_signal_key, literal_index
 from ..extraction.quality import verify_spans
 from ..schema import ExtractionResult
 
@@ -211,6 +211,15 @@ def rule_review(
         }
         if matched:
             ambiguous_only -= {key for key, n in matched.items() if n}
+        # 实体字面被更长的实体名吸收时（如「阿里」出现在「阿里巴巴」里），
+        # 它的 matched_literals=0，但字面确实在正文中出现过。不能再报
+        # 「未在正文中找到出处」——那是事实错误的返工反馈（r9 N3）。
+        seen = {str(x) for x in (backfill.get("seen_literals") or [])}
+        absorbed = {
+            entity_signal_key(e) for e in result.entities
+            if any(lit.strip() in seen
+                   for lit in [e.name, *e.aliases] if lit.strip())
+        }
         # 只有非空 matched_literals（或本来就没有实体）才用文档级键集合；
         # 空字典既可能是「真的全没命中」，也可能是旧调用方手写精简字典，
         # 当成「全部命中」会静默放行（r7 F3）。
@@ -219,7 +228,8 @@ def rule_review(
             # 新信号：按文档级实体键集合判定，不再拿 chunk-weighted 计数相加
             # 与文档级歧义集合比较（r6 S2）。
             uncovered = {
-                key for key, n in matched.items() if not n} - ambiguous_only
+                key for key, n in matched.items() if not n
+            } - ambiguous_only - absorbed
             undercovered = bool(uncovered)
         else:
             # 兼容旧调用方手写的精简 backfill 字典（没有 matched_literals）。

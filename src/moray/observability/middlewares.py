@@ -165,12 +165,12 @@ class ExtractionMetricsMiddleware(_RecorderMiddleware):
                         report = verify_spans(result, source)
                         rec.span_ratio = report.ratio
                         # 瘦身输出模型不吐 mention/confidence：span 空转 ratio=1.0
-                        # 会把幻觉实体也判满分。这里跑一次确定性本地回填，用
-                        # 真实命中率（block_confidence）替代空转的 1.0。
-                        if (result.entities
-                                and not any(e.mentions for e in result.entities)
-                                and all(e.confidence is None
-                                        for e in result.entities)):
+                        # 会把幻觉实体也判满分。只有抽取器显式开启回填时才跑
+                        # 本地回填，用真实命中率（block_confidence）替代空转的
+                        # 1.0；不再自创第三套「无 mention 且 confidence 全 None」
+                        # 的 slim 判据（r9 N5）。
+                        if (result.entities and getattr(
+                                agent, "_audit_local_backfill", False)):
                             from ..extraction.local_backfill import (
                                 backfill_provenance,
                             )
