@@ -1,0 +1,11 @@
+# 工单 03 r8 修复后定向回归
+# HEAD=01e2316
+# 命令：ARK_API_KEY=dummy PYTHONPATH=src /tmp/opencode/review-venv/bin/python -m pytest -q -p no:cacheprovider \
+#       tests/test_r8_review_fixes.py tests/test_r7_review_fixes.py tests/test_r6_review_fixes.py tests/test_r5_review_fixes.py tests/test_r4_review_fixes.py tests/test_r3_review_fixes.py tests/test_local_backfill.py tests/test_orchestration.py tests/test_confidence_unknown.py
+/tmp/opencode/review-venv/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+........................................................................ [ 75%]
+.......................                                                  [100%]
+95 passed in 0.84s

@@ -59,6 +59,9 @@
   新读者从 `backfill_provenance` / `merge_backfill_reports` 两个入口读即可。
 - 偏移：块内回填 -> `pipeline.remap_spans` 平移到全局；跨块信号汇总时
   `merge_backfill_reports` 再按 `chunk_start` 平移并带 `chunk_id`。
+- 关系证据复杂度：每个 mention 的句下标只算一次（二分定位），尾 mention 按句
+  分桶后头 mention 只在本句内配对；不再对「头 × 尾」每对线性扫句表
+  （旧实现 O(H·T·S)，见 r8 F4）。
 - 缓存键：`domain_fingerprint(domain, slim=...)` 把回填模式一起 hash 进
   prompt+schema 指纹；`sampling_fingerprint`（temperature / reasoning_effort /
   thinking）也并入 05 内容缓存键。slim/full 的产物形状与语义不同，05 内容缓存
@@ -74,13 +77,16 @@
 - 审校口径：`rule_review` 的关系端点与回填共用 `literal_index`——标准名永远
   合法；「唯一归属」的别名只在瘦身模式（有 `backfill` 信号）下放宽。关闭态
   逐字面保持 262319b：只认实体标准名**原样**精确命中（不 strip、不看归属
-  唯一性；带空白的端点也按原样比较）。同一字面归属多个实体时只有瘦身模式
-  会报「归属不唯一或未知」，不做归属猜测；④ 不再对歧义端点重复报「端点在
+  唯一性；带空白的端点也按原样比较）。同一字面归属多个实体时**不报 issue、
+  不触发返工**（这版不做模型补问），只把该处保留为
+  `BackfillReport.ambiguous_mentions` 质量信号；④ 也不再对歧义端点报「端点在
   正文中未命中」。
-- 重复实体口径：回填链路先按 `(type, name)` 合并同一逻辑实体的重复输出，
-  审校面对的是合并后的结果，因此瘦身模式不再另做「未去重」判定——真正同型
-  同名的重复会被静默合并（别名/属性取并集），不返工；「同名不同类型」是工单
-  定义的合法歧义，走 mention 歧义信号。关闭态继续按纯 `name` 比较。
+- 重复实体口径：回填链路先按 `(type, name.strip())` 合并同一逻辑实体的重复
+  输出（身份键与 `literal_index` 的去空白口径一致，只差空白的标准名不再退化成
+  歧义），审校面对的是合并后的结果，因此瘦身模式不再另做「未去重」判定——
+  真正同型同名的重复会被静默合并（别名/属性取并集），不返工；「同名不同
+  类型」是工单定义的合法歧义，走 mention 歧义信号。关闭态继续按纯 `name`
+  比较。
 - 跨块命中口径：⑤ 用文档级实体键集合（`matched_literals` 中 `n==0` 的键去掉
   `ambiguous_only`）判定「未找到出处」，不拿 chunk-weighted 的
   `entities_grounded/entities_total` 相加结果与文档级歧义集合比较。

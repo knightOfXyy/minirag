@@ -29,8 +29,9 @@ from moray.schema import Entity, ExtractionResult, Relation, Span
 def _rule_review_262319b(text: str, result: ExtractionResult):
     """262319b:src/moray/orchestration/specialists.py 的 rule_review 原文。
 
-    差分用例只比较 ①②③ 的 verdict + issues；fixture 都带合法证据 span，
-    避免 ④ 因后续「置信度未知」语义变更产生无关差异。
+    差分用例比较 ①②③④ 的 verdict + issues；除 ``high_conf_no_evidence``
+    刻意构造「高置信 + 无证据」外，其余 fixture 都带合法证据 span，避免 ④
+    因后续「置信度未知」语义变更产生无关差异。
     """
     issues: list[str] = []
 
@@ -124,6 +125,15 @@ def _review_fixtures():
             evidence_span=_span(missing_text, "腾讯发布了混元"))],
     )
 
+    # r8 F2：把 ④ 也纳入关闭态逐字节差分——高置信 + 无证据时，
+    # 262319b 的反馈文案是「置信度高却无原文证据」。
+    high_conf_text = "腾讯发布了混元。"
+    high_conf_no_evidence = ExtractionResult(
+        entities=[Entity(name="腾讯", type="ORG"), Entity(name="混元", type="MISC")],
+        relations=[Relation(
+            head="腾讯", predicate="发布", tail="混元", confidence=0.9)],
+    )
+
     return [
         ("clean", clean_text, clean),
         ("alias_endpoint", alias_text, alias),
@@ -131,11 +141,12 @@ def _review_fixtures():
         ("same_name_diff_type", ambiguous_text, same_name_diff_type),
         ("true_duplicate", duplicate_text, true_duplicate),
         ("missing_endpoint", missing_text, missing_endpoint),
+        ("high_conf_no_evidence", high_conf_text, high_conf_no_evidence),
     ]
 
 
 def test_off_mode_rule_review_matches_262319b_on_all_fixtures():
-    """关闭态 ②③ 与归档基线逐条一致（verdict + issues 原文）。"""
+    """关闭态 ①②③④ 与归档基线逐条一致（verdict + issues 原文）。"""
     for name, text, result in _review_fixtures():
         expected_verdict, expected_issues = _rule_review_262319b(text, result)
         review = rule_review(text, result, backfill=None)

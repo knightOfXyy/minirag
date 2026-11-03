@@ -5,6 +5,7 @@
 * B1：分块结果缓存键必须区分 slim/full 回填模式，共享缓存不得互相投毒；
 * S1：跨块未命中别名以整篇文档为口径，实体在某块漏抽时不能误报幻觉；
 * N1：规则审校的关系端点与回填同口径（唯一归属的别名才认）；
+      r8 F1 起归属冲突的别名端点降为质量信号，不再触发返工；
 * N4：重叠块计数按 chunk-weighted 语义记录（文档级去重在信号消费侧说明）；
 * N6：实体 description 补全与关系重复合并是两个独立开关。
 """
@@ -212,7 +213,7 @@ def test_rule_review_accepts_unique_alias_relation_endpoint():
     assert review.verdict == ReviewVerdict.PASS, review.issues
 
 
-def test_rule_review_still_rejects_ambiguous_alias_relation_endpoint():
+def test_rule_review_treats_ambiguous_alias_relation_endpoint_as_signal():
     text = "同名发布了混元。"
     result, report = backfill_provenance(
         ExtractionResult(
@@ -226,10 +227,12 @@ def test_rule_review_still_rejects_ambiguous_alias_relation_endpoint():
         text,
     )
     review = rule_review(text, result, backfill=report.to_dict())
-    assert review.verdict == ReviewVerdict.NEEDS_FIX
+    # r8 F1：工单明文「这版不做模型补问」，歧义只作为信号保留。
+    assert review.verdict == ReviewVerdict.PASS, review.issues
+    assert report.ambiguous_mentions
     # r5 F4：字面在实体列表里、只是归属不唯一，不能误报“不在实体列表中”。
-    assert any("归属不唯一" in issue for issue in review.issues)
     assert not any("不在实体列表" in issue for issue in review.issues)
+    assert not any("归属不唯一" in issue for issue in review.issues)
 
 
 # ---------------------------------------------------------------------------
