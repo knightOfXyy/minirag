@@ -179,6 +179,16 @@ class ChunkedExtractionPipeline:
         self._cached_domain_fingerprint = (
             self._domain_fingerprint() if result_cache is not None else None)
 
+    @property
+    def slim(self) -> bool:
+        """当前抽取器是否处于瘦身后回填模式（r5 F8：单一判定入口）。"""
+        return bool(getattr(self.extractor, "local_backfill", False))
+
+    @property
+    def _sampling_fingerprint(self) -> str:
+        """影响输出的采样参数摘要；进缓存键，避免换温度后复用旧产物（r5 F7）。"""
+        return getattr(self.extractor, "sampling_fingerprint", "") or ""
+
     def _domain_fingerprint(self) -> str:
         """当前抽取器所用领域配置的版本指纹。
 
@@ -189,7 +199,7 @@ class ChunkedExtractionPipeline:
         domain = getattr(self.extractor, "domain", None)
         # 回填模式（slim/full）换 prompt 与 schema，产物形状不同，必须进指纹；
         # 否则共享缓存会把 slim 的实体/backfill 发给关闭态（r4 B1）。
-        slim = bool(getattr(self.extractor, "local_backfill", False))
+        slim = self.slim
         if isinstance(domain, DomainSpec):
             return domain_fingerprint(domain, slim=slim)
         return (
@@ -210,12 +220,14 @@ class ChunkedExtractionPipeline:
 
         fingerprint = self._cached_domain_fingerprint
         model_name = getattr(self.extractor, "model_name", "") or ""
+        sampling = self._sampling_fingerprint
 
         async def _do_extract() -> ExtractionOutput:
             return await self.extractor.extract(mini_doc)
 
         return await self.result_cache.get_or_extract(
-            fingerprint, model_name, chunk.text, _do_extract)
+            fingerprint, model_name, chunk.text, _do_extract,
+            sampling_fingerprint=sampling)
 
     async def _extract_one_chunk(
         self, chunk: Chunk, metrics: DocumentMetrics,
@@ -363,7 +375,8 @@ class ChunkedExtractionPipeline:
                 model_name = getattr(self.extractor, "model_name", "") or ""
                 all_cached = all([
                     await self.result_cache.has_cached(
-                        self._cached_domain_fingerprint, model_name, c.text)
+                        self._cached_domain_fingerprint, model_name, c.text,
+                        sampling_fingerprint=self._sampling_fingerprint)
                     for c in chunks
                 ])
             if not all_cached:
@@ -414,7 +427,7 @@ class ChunkedExtractionPipeline:
         # 归并口径跟抽取器开关走：关开关时保持 262319b 的旧语义
         # （同一三元组首见赢家），打开才合并后见证据/更高置信度（03 r2）。
         # 抽取器没有该属性时按「关」处理，保证旧对象逐字段等于改造前。
-        slim = bool(getattr(self.extractor, "local_backfill", False))
+        slim = self.slim
         merged = naive_merge(
             partials,
             merge_relation_duplicates=slim,
@@ -423,9 +436,11 @@ class ChunkedExtractionPipeline:
         # 关开关时所有块都是 None -> 保持 None（与改造前一致）。
         # 块内偏移的平移由 merge_backfill_reports 按各块 chunk_start 统一完成。
         # document_text 用于整篇口径的别名幻觉判定：某块漏抽实体时，仍按
-        # 整篇正文确认别名是否真实存在（r4 S1）。
+        # 整篇正文确认别名是否真实存在（r4 S1）。坐标系必须用 source_text：
+        # 返工轮 text 可能追加了审校反馈，反馈里的别名不是正文（r5 F3）。
+        document_text = document.source_text or document.text
         backfill = (merge_backfill_reports(
-            backfill_reports, document_text=document.text).to_dict()
+            backfill_reports, document_text=document_text).to_dict()
             if backfill_reports else None)
         return ExtractionOutput(
             document_id=document.id,

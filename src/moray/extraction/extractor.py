@@ -202,7 +202,17 @@ class Extractor:
         self._system_prompt: str = build_system_prompt(
             self.domain, slim=self.local_backfill
         )
-        self.model_name: str = get_settings()["chat_model"]
+        settings = get_settings()
+        self.model_name: str = settings["chat_model"]
+        # 影响输出的采样参数摘要：由分块 pipeline 并入内容缓存键（r5 F7）。
+        # 未配置的项显式记 '-'，保证 "None" 与 "0.0" 不会拼成同一个键。
+        temperature = settings.get("temperature")
+        thinking = settings.get("thinking")
+        self.sampling_fingerprint: str = (
+            f"temp={temperature if temperature is not None else '-'}"
+            f"|effort={settings.get('reasoning_effort') or '-'}"
+            f"|think={thinking if thinking is not None else '-'}"
+        )
         # 前缀预热去重：一个实例（= 一个领域版本）只探一次，别每次都烧钱
         self._prefix_warmed = False
 

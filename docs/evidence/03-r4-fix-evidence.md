@@ -46,7 +46,9 @@ PYTHONPATH=src python tools/backfill_stress_ab.py \
   `供职于/户籍在/注册地位于/涉案关联`，full/slim 同一域、同一模型
   （`deepseek-flash`）、同一语料（3 篇 / 79,362 字）、同一分块预算
   （1500 units / overlap 200，每模式 78 块）。
-- 3 轮重复，每轮 full+slim 各一遍；下表为 `aggregate` 的均值（括号内最小值）。
+- 3 轮重复，每轮 full+slim 各一遍；下表为 `aggregate` 的均值；
+  `*_min_*` 与截断类字段取 3 轮最坏值（r5 F5 修正后 `03-r3-stress-ab.json`
+  的 `aggregate.delta` 已按同一口径重算，`span_ratio_min_before=0.0099`）。
 
 | 指标 | full | slim | 结论（3 轮均值） |
 |---|---|---|---|
@@ -69,6 +71,12 @@ PYTHONPATH=src python tools/backfill_stress_ab.py \
 但单轮经验区间仍到 −1.30pt，且 seed20261104 逐篇均值 −2.88pt。这正是
 r4 N3 指出的单次采样脆弱性：本轮用 3 轮均值/最小值把它显式暴露，不再用
 单次 +0.93pt 宣称稳健。
+
+**r5 F10 口径说明（不擅自改验收门槛）**：上面的「达成」仅指工单原文的
+3 轮均值口径；若改成 **worst-of-N**（任一轮/任一篇都不得超过 −0.5pt），
+本轮实测 **未达标**（单轮 −1.30pt、seed20261104 −2.88pt）。是否把放量门槛
+改成 worst-of-N、或扩大语料/轮数让区间收敛，属产品/工单 owner 决策，
+本修复轮不擅自改门槛，只把两种口径的结论同时写清。
 
 ## 三、工单 03 十条验收复核（本轮修复后）
 

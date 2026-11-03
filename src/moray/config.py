@@ -177,6 +177,7 @@ def describe() -> dict:
         "api_key_masked": _mask(s["api_key"]),
         "reasoning_effort": s["reasoning_effort"],
         "thinking": s["thinking"],
+        "temperature": s["temperature"],
     }
 
 
@@ -246,27 +247,10 @@ def _nonneg_int_env(name: str, default: int) -> int:
     return int(raw)
 
 
-def _positive_float_env(name: str, default: float) -> float:
-    """正数浮点 env：未设置用默认值，非法值启动即报错（N5 同款约定）。"""
-    import math
-
-    raw = _first_env(name)
-    if not raw:
-        return default
-    try:
-        value = float(raw)
-    except ValueError:
-        raise ConfigError(f"{name}={raw!r} 不是数字") from None
-    if not math.isfinite(value) or value <= 0:
-        raise ConfigError(f"{name}={raw!r} 必须是有限正数")
-    return value
-
-
-def _optional_temperature_env(name: str = "LLM_TEMPERATURE") -> float | None:
-    """可选采样温度：未设置返回 None（请求体不带该字段，保持历史行为）。
-
-    A/B 评测需要固定采样参数、可复现地记录 temperature；默认路径不改变。
-    """
+def _optional_float_env(
+    name: str, *, minimum: float, maximum: float
+) -> float | None:
+    """可选浮点 env：未设置返回 None，非法/越界启动即报错（r5 F8 收敛解析）。"""
     import math
 
     raw = _first_env(name)
@@ -276,9 +260,28 @@ def _optional_temperature_env(name: str = "LLM_TEMPERATURE") -> float | None:
         value = float(raw)
     except ValueError:
         raise ConfigError(f"{name}={raw!r} 不是数字") from None
-    if not math.isfinite(value) or not 0.0 <= value <= 2.0:
-        raise ConfigError(f"{name}={raw!r} 必须在 [0, 2] 内")
+    if not math.isfinite(value) or not minimum <= value <= maximum:
+        raise ConfigError(
+            f"{name}={raw!r} 必须是 [{minimum}, {maximum}] 内的有限数")
     return value
+
+
+def _positive_float_env(name: str, default: float) -> float:
+    """正数浮点 env：未设置用默认值，非法值启动即报错（N5 同款约定）。"""
+    value = _optional_float_env(name, minimum=0.0, maximum=float("inf"))
+    if value is None:
+        return default
+    if value <= 0:
+        raise ConfigError(f"{name}={value!r} 必须是有限正数")
+    return value
+
+
+def _optional_temperature_env(name: str = "LLM_TEMPERATURE") -> float | None:
+    """可选采样温度：未设置返回 None（请求体不带该字段，保持历史行为）。
+
+    A/B 评测需要固定采样参数、可复现地记录 temperature；默认路径不改变。
+    """
+    return _optional_float_env(name, minimum=0.0, maximum=2.0)
 
 
 def chunk_settings() -> dict:

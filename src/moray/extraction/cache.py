@@ -46,8 +46,9 @@ logger = logging.getLogger(__name__)
 _PAYLOAD_VERSION = 1
 
 # 提示模板/生成参数版本：domain_fingerprint 覆盖 system prompt + schema，但不含
-# user 消息前缀（Extractor._LEAD_IN）与采样参数。改这些影响输出的模板要素时必须
-# 递增此版本，让旧缓存整体失效（N11）。
+# user 消息前缀（Extractor._LEAD_IN）。影响输出的采样参数（temperature /
+# reasoning_effort / thinking）由调用方作为 sampling_fingerprint 并入键（r5 F7）；
+# 其余模板要素变化时必须递增此版本，让旧缓存整体失效（N11）。
 _PROMPT_TEMPLATE_VERSION = 1
 
 # 内存后端默认上限：长跑 worker 的进程内存不能只增不减（简单 LRU）。
@@ -83,11 +84,19 @@ class ClaimableBackend(Protocol):
     async def release(self, key: str) -> None: ...
 
 
-def build_cache_key(domain_fingerprint: str, model_name: str, chunk_text: str) -> str:
-    """以全部影响输出的输入要素拼键：领域指纹 + 模型 + 正文 + 模板版本。
+def build_cache_key(
+    domain_fingerprint: str,
+    model_name: str,
+    chunk_text: str,
+    *,
+    sampling_fingerprint: str = "",
+) -> str:
+    """以全部影响输出的输入要素拼键：领域指纹 + 模型 + 采样参数 + 正文 + 模板版本。
 
     用真正的长度前缀（``len:value|``）拼装，避免字段边界被内容含分隔符时
     拼成同一字符串；正文取 SHA-256，键长固定且与正文长度无关。
+    ``sampling_fingerprint`` 承载 temperature/思考开关等运行期配置（r5 F7）：
+    它们直接改请求体，换档位后不得复用旧产物。
     """
     body = hashlib.sha256(chunk_text.encode("utf-8")).hexdigest()
     parts = (
@@ -95,6 +104,7 @@ def build_cache_key(domain_fingerprint: str, model_name: str, chunk_text: str) -
         f"t{_PROMPT_TEMPLATE_VERSION}",
         f"fp={domain_fingerprint}",
         f"m={model_name}",
+        f"s={sampling_fingerprint}",
         f"sha={body}",
     )
     raw = "|".join(f"{len(p)}:{p}" for p in parts)
@@ -162,13 +172,17 @@ class ContentResultCache:
         model_name: str,
         chunk_text: str,
         extract: Callable[[], Awaitable[ExtractionOutput]],
+        *,
+        sampling_fingerprint: str = "",
     ) -> tuple[ExtractionOutput, bool]:
         """命中返回 (缓存结果, True)；未命中跑一次 extract 并回写，返回 (结果, False)。
 
         后端读失败/载荷损坏一律按未命中处理；写失败只记日志：缓存是优化，
         绝不能因为它影响真实抽取。
         """
-        key = build_cache_key(domain_fingerprint, model_name, chunk_text)
+        key = build_cache_key(
+            domain_fingerprint, model_name, chunk_text,
+            sampling_fingerprint=sampling_fingerprint)
 
         # ① 锁外先读后端：postgres 的 SELECT 会真正让出事件循环，绝不能塞进
         # 全局锁，否则 chunk_concurrency 会被串行化（S5）。
@@ -235,10 +249,14 @@ class ContentResultCache:
         domain_fingerprint: str,
         model_name: str,
         chunk_text: str,
+        *,
+        sampling_fingerprint: str = "",
     ) -> bool:
         """该分块是否已有可用的缓存结果（只读探测，供预热前判断全命中）。"""
         return await self._safe_get(
-            build_cache_key(domain_fingerprint, model_name, chunk_text)) is not None
+            build_cache_key(
+                domain_fingerprint, model_name, chunk_text,
+                sampling_fingerprint=sampling_fingerprint)) is not None
 
     # -------------------------------------------------- 后端容错读写
     async def _safe_get(self, key: str) -> ExtractionOutput | None:
