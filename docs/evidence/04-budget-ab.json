@@ -2323,9 +2323,9 @@
       "relation_worst_not_lower"
     ],
     "entity_macro_f1_mean_delta_pt": -4.35,
-    "entity_macro_f1_worst_delta_pt": -4.3,
+    "entity_macro_f1_worst_delta_pt": -4.82,
     "relation_f1_mean_delta_pt": -7.48,
-    "relation_f1_worst_delta_pt": -2.5,
+    "relation_f1_worst_delta_pt": -10.36,
     "overlap_unchanged": true,
     "max_entity_drop_pt": 0.5,
     "budgets": {
@@ -2333,7 +2333,21 @@
       "candidate": 3500
     },
     "real_docs_truncated_chunks": 0,
-    "stress_truncated_chunks": 0
+    "stress_truncated_chunks": 0,
+    "derived_note": "worst-of-N 用逐轮配对差；原始逐轮数据由 b86769a 采集，派生字段由 8788d73 的 gate 重算"
   },
-  "cost_note": "只记录 provider 真实 token；金额以账单为准，脚本不估算价格"
+  "cost_note": "只记录 provider 真实 token；金额以账单为准，脚本不估算价格",
+  "paired_round_deltas_pt": {
+    "entity_macro_f1": [
+      -4.78,
+      -4.82,
+      -3.46
+    ],
+    "relation_f1": [
+      -2.06,
+      -10.36,
+      -10.02
+    ],
+    "note": "候选减基线，逐轮配对；worst-of-N = 本数组最小值"
+  }
 }

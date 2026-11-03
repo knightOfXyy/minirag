@@ -1,7 +1,7 @@
-# 工单04 后绿：配置锁定 + 分块偏移不变量
+# 工单04 后绿：配置锁定 + 分块偏移不变量 + gate 严格 worst-of-N
 # 命令：
 #   LLM_PROVIDER=volcengine ARK_API_KEY=test-key python -m pytest tests/test_chunk_budget.py tests/test_chunking.py -q
-# 结果：22 passed
+# 结果：23 passed
 
-......................                                                   [100%]
-22 passed in 0.68s
+.......................                                                  [100%]
+23 passed in 0.72s

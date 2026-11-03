@@ -16,3 +16,15 @@ tests/test_chunk_budget.py:20: in <module>
 E   ModuleNotFoundError: No module named 'moray.evaluation.stress.budget'
 !!!!!!!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!!!!!!!!
 1 error in 0.74s
+
+# 第二轮先红（评审自纠：worst-of-N 必须是逐轮配对差，不是两档最值相减）
+# 命令：
+#   python -m pytest tests/test_chunk_budget.py::test_budget_gate_prefers_explicit_paired_worst_delta -q
+# 实现前输出：
+>       assert gate["entity_macro_f1_worst_delta_pt"] == pytest.approx(-0.8)
+E       assert -0.4 == -0.8 ± 8.0e-07
+E        comparison failed
+E        Obtained: -0.4
+E        Expected: -0.8
+FAILED tests/test_chunk_budget.py::test_budget_gate_prefers_explicit_paired_worst_delta
+1 failed in 0.71s
