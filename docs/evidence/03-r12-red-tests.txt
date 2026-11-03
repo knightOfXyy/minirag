@@ -1,0 +1,214 @@
+FFF.FFFFFFFF                                                             [100%]
+=================================== FAILURES ===================================
+_____ test_slim_merge_normalizes_stored_values_and_ingest_resolves_entity ______
+
+    async def test_slim_merge_normalizes_stored_values_and_ingest_resolves_entity():
+        from moray.kb.ingestor import Ingestor
+    
+        p0 = ExtractionResult(
+            entities=[Entity(name=" 腾讯", type="ORG")],
+            relations=[Relation(head="腾讯 ", predicate="发布", tail="混元 ")],
+        )
+        p1 = ExtractionResult(
+            entities=[Entity(name="腾讯", type="ORG")],
+            relations=[Relation(head="腾讯", predicate="发布", tail="混元")],
+        )
+    
+        merged = naive_merge([p0, p1], **_SLIM_KWARGS)
+        # 去重键与存值必须同口径：不能只合并键、把带空白的原串写回去。
+>       assert [e.name for e in merged.entities] == ["腾讯"]
+E       AssertionError: assert [' 腾讯'] == ['腾讯']
+E         
+E         At index 0 diff: ' 腾讯' != '腾讯'
+E         Use -v to get more diff
+
+tests/test_r12_review_fixes.py:86: AssertionError
+___________ test_ambiguity_dedup_is_linear_on_16k_all_ambiguous_hits ___________
+
+    def test_ambiguity_dedup_is_linear_on_16k_all_ambiguous_hits():
+        import time
+    
+        text = "苹果" * 16000
+        result = ExtractionResult(entities=[
+            Entity(name="苹果", type="ORG"),
+            Entity(name="苹果", type="MISC"),
+        ])
+        t0 = time.perf_counter()
+        _filled, report = backfill_provenance(result, text)
+        elapsed = time.perf_counter() - t0
+    
+        assert len(report.ambiguous_mentions) == 16000
+>       assert elapsed < 1.5, elapsed
+E       AssertionError: 2.023404143983498
+E       assert 2.023404143983498 < 1.5
+
+tests/test_r12_review_fixes.py:120: AssertionError
+_______ test_overlap_relation_candidates_are_deduped_with_source_chunks ________
+
+    async def test_overlap_relation_candidates_are_deduped_with_source_chunks():
+        body = "华为在深圳发布。"
+        chunks = [
+            Chunk(id=f"d#c{i}", text=body, start=0, end=len(body), index=i)
+            for i in range(2)
+        ]
+        out = await ChunkedExtractionPipeline(
+            _OverlapEvidenceFake(), concurrency=1).run(
+                Document(id="d", text=body), chunks)
+    
+        key = next(iter(out.backfill["relation_evidence_candidates"]))
+        cands = out.backfill["relation_evidence_candidates"][key]
+>       assert len(cands) == 1
+E       AssertionError: assert 2 == 1
+E        +  where 2 = len([{'head_start': 0, 'tail_start': 3, 'sent_start': 0, 'sent_end': 8, ...}, {'head_start': 0, 'tail_start': 3, 'sent_start': 0, 'sent_end': 8, ...}])
+
+tests/test_r12_review_fixes.py:160: AssertionError
+________ test_real_extractor_caps_internal_candidates_above_soft_limit _________
+
+    async def test_real_extractor_caps_internal_candidates_above_soft_limit():
+        """50×50=2500 条笛卡尔积：进程内软上限 2000 先兜住，不撑大结果缓存。"""
+        text = "华为深圳" * 50
+        out = await _RealExtractorStub(_dense_reply()).extract(
+            Document(id="d", text=text))
+    
+        key = next(iter(out.backfill["relation_evidence_candidates"]))
+        cands = out.backfill["relation_evidence_candidates"][key]
+>       assert len(cands) == lb.MAX_INTERNAL_RELATION_EVIDENCE_CANDIDATES
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'moray.extraction.local_backfill' has no attribute 'MAX_INTERNAL_RELATION_EVIDENCE_CANDIDATES'
+
+tests/test_r12_review_fixes.py:219: AttributeError
+_________ test_pipeline_caps_merged_candidates_at_internal_soft_limit __________
+
+    async def test_pipeline_caps_merged_candidates_at_internal_soft_limit():
+        text = "华为深圳" * 50
+        chunks = [Chunk(
+            id="d#c0", text=text, start=0, end=len(text), index=0)]
+        out = await ChunkedExtractionPipeline(
+            _DenseChunkFake(50), concurrency=1).run(
+                Document(id="d", text=text), chunks)
+    
+        key = next(iter(out.backfill["relation_evidence_candidates"]))
+        cands = out.backfill["relation_evidence_candidates"][key]
+>       assert len(cands) == lb.MAX_INTERNAL_RELATION_EVIDENCE_CANDIDATES
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'moray.extraction.local_backfill' has no attribute 'MAX_INTERNAL_RELATION_EVIDENCE_CANDIDATES'
+
+tests/test_r12_review_fixes.py:261: AttributeError
+______________ test_cached_backfill_rejects_legacy_owner_argument ______________
+
+    def test_cached_backfill_rejects_legacy_owner_argument():
+        cache: dict = {}
+        result = ExtractionResult(entities=[Entity(name="华为", type="ORG")])
+        first = lb.cached_backfill_provenance(cache, result, "华为在深圳。")
+        second = lb.cached_backfill_provenance(cache, result, "华为在深圳。")
+>       assert second is first
+E       AssertionError: assert (ExtractionResult(entities=[Entity(name='华为', type='ORG', aliases=[], mentions=[EntityMention(surface='华为', span=Span(...reconciled_unattributed=0, relations_without_evidence=[], relation_evidence_candidates={}, chunk_id='', chunk_start=0)) is (ExtractionResult(entities=[Entity(name='华为', type='ORG', aliases=[], mentions=[EntityMention(surface='华为', span=Span(...reconciled_unattributed=0, relations_without_evidence=[], relation_evidence_candidates={}, chunk_id='', chunk_start=0))
+
+tests/test_r12_review_fixes.py:273: AssertionError
+_________ test_partial_single_chunk_still_rescans_document_for_aliases _________
+
+    async def test_partial_single_chunk_still_rescans_document_for_aliases():
+        full = "华为在这里。深圳也有。"
+        prefix = "华为在这里。"
+        chunks = [Chunk(
+            id="d#c0", text=prefix, start=0, end=len(prefix), index=0)]
+        out = await ChunkedExtractionPipeline(
+            _AliasOutsideChunkFake(), concurrency=1).run(
+                Document(id="d", text=full), chunks)
+    
+        # 单块只是整篇的前缀：块外真实存在的别名不能被判成幻觉。
+>       assert out.backfill["unmatched_aliases"] == []
+E       AssertionError: assert [{'type': 'OR...teral': '深圳'}] == []
+E         
+E         Left contains one more item: {'type': 'ORG', 'entity': '华为', 'literal': '深圳'}
+E         Use -v to get more diff
+
+tests/test_r12_review_fixes.py:311: AssertionError
+________________ test_recorder_exposes_reconciled_unattributed _________________
+
+    def test_recorder_exposes_reconciled_unattributed():
+        from moray.observability import RunRecorder
+    
+        fields = RunRecorder._backfill_fields({
+            "reconciled_unattributed": 2,
+            "ambiguous_mentions": [],
+        })
+>       assert fields["reconciled_unattributed"] == 2
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'reconciled_unattributed'
+
+tests/test_r12_review_fixes.py:324: KeyError
+__________ test_serialize_backfill_deep_copies_every_nested_container __________
+
+    def test_serialize_backfill_deep_copies_every_nested_container():
+        original = {
+            "block_confidence": 1.0,
+            "matched_literals": {"k": 1},
+            "seen_literals": ["华为"],
+            "unmatched_aliases": [{"type": "ORG", "literal": "阿里"}],
+            "ambiguous_mentions": [{
+                "surface": "苹果", "start": 0, "end": 2,
+                "candidates": ["a"], "chunk_ids": ["c0"],
+            }],
+            "relations_without_evidence": [{"head": "A", "tail": "B"}],
+            "relation_evidence_candidates": {"k": [{"head_start": 0}]},
+        }
+        out = lb.serialize_backfill_for_output(original)
+    
+        out["matched_literals"]["k"] = 99
+        out["seen_literals"].append("x")
+        out["unmatched_aliases"][0]["literal"] = "x"
+        out["ambiguous_mentions"][0]["candidates"].append("b")
+        out["ambiguous_mentions"][0]["chunk_ids"].append("c1")
+        out["relations_without_evidence"][0]["head"] = "X"
+        out["relation_evidence_candidates"]["k"][0]["head_start"] = 99
+    
+>       assert original["matched_literals"] == {"k": 1}
+E       AssertionError: assert {'k': 99} == {'k': 1}
+E         
+E         Differing items:
+E         {'k': 99} != {'k': 1}
+E         Use -v to get more diff
+
+tests/test_r12_review_fixes.py:365: AssertionError
+________ test_merge_mode_slim_is_a_single_switch_for_all_four_behaviors ________
+
+    def test_merge_mode_slim_is_a_single_switch_for_all_four_behaviors():
+>       from moray.extraction.pipeline import MergeMode
+E       ImportError: cannot import name 'MergeMode' from 'moray.extraction.pipeline' (/home/dell/orca/workspaces/minirag/tmp-yzd-feat-relation-202610-03-mention-span/src/moray/extraction/pipeline.py)
+
+tests/test_r12_review_fixes.py:378: ImportError
+______________ test_relation_candidate_cap_rejects_negative_limit ______________
+
+    def test_relation_candidate_cap_rejects_negative_limit():
+        result = ExtractionResult(
+            entities=[
+                Entity(name="华为", type="ORG"),
+                Entity(name="深圳", type="LOC"),
+            ],
+            relations=[Relation(head="华为", predicate="位于", tail="深圳")],
+        )
+        _filled, report = backfill_provenance(result, "华为深圳")
+        key = next(iter(report.relation_evidence_candidates))
+    
+        assert report.to_dict(
+            max_relation_evidence_candidates=0
+        )["relation_evidence_candidates"][key] == []
+>       with pytest.raises(ValueError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_r12_review_fixes.py:423: Failed
+=========================== short test summary info ============================
+FAILED tests/test_r12_review_fixes.py::test_slim_merge_normalizes_stored_values_and_ingest_resolves_entity
+FAILED tests/test_r12_review_fixes.py::test_ambiguity_dedup_is_linear_on_16k_all_ambiguous_hits
+FAILED tests/test_r12_review_fixes.py::test_overlap_relation_candidates_are_deduped_with_source_chunks
+FAILED tests/test_r12_review_fixes.py::test_real_extractor_caps_internal_candidates_above_soft_limit
+FAILED tests/test_r12_review_fixes.py::test_pipeline_caps_merged_candidates_at_internal_soft_limit
+FAILED tests/test_r12_review_fixes.py::test_cached_backfill_rejects_legacy_owner_argument
+FAILED tests/test_r12_review_fixes.py::test_partial_single_chunk_still_rescans_document_for_aliases
+FAILED tests/test_r12_review_fixes.py::test_recorder_exposes_reconciled_unattributed
+FAILED tests/test_r12_review_fixes.py::test_serialize_backfill_deep_copies_every_nested_container
+FAILED tests/test_r12_review_fixes.py::test_merge_mode_slim_is_a_single_switch_for_all_four_behaviors
+FAILED tests/test_r12_review_fixes.py::test_relation_candidate_cap_rejects_negative_limit
+11 failed, 1 passed in 2.88s

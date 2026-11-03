@@ -52,6 +52,7 @@ from .chunk_metrics import (
 )
 from .document import Document, ExtractionOutput, Usage
 from .local_backfill import (
+    MAX_INTERNAL_RELATION_EVIDENCE_CANDIDATES,
     BackfillReport,
     cached_backfill_provenance,
 )
@@ -485,10 +486,12 @@ class Extractor:
                 attempts=attempt,
                 # 三方合并：瘦身回填信号（03）与分块度量（01，含 latency/截断）
                 # 都保留，互不覆盖。度量统一走 _record，成功/失败字段一致。
-                # 块间/进程内传递保留全量候选；对外落盘（API/作业结果）由
-                # `serialize_backfill_for_output` 按默认上限裁剪（r11 F1）。
+                # 块间/进程内传递保留全量候选；进程内软上限兜住笛卡尔积
+                # （r12 N2），真正出网时由 `serialize_backfill_for_output`
+                # 按默认 20 条裁剪（r11 F1）。
                 backfill=(
-                    backfill.to_dict(max_relation_evidence_candidates=None)
+                    backfill.to_dict(max_relation_evidence_candidates=(
+                        MAX_INTERNAL_RELATION_EVIDENCE_CANDIDATES))
                     if backfill is not None else None),
                 call_metrics=_record(attempt),
             )

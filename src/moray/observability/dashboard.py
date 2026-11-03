@@ -75,6 +75,8 @@ class RunRecorder:
     entities_total: int | None = None
     relation_evidence_ratio: float | None = None
     ambiguous_mentions: int = 0
+    # 跨块 span 对账撤销归属的 mention 数（r12 N7）：0=无撤销，不是未知。
+    reconciled_unattributed: int = 0
 
     @staticmethod
     def _chunk_fields(dm) -> dict:
@@ -164,6 +166,10 @@ class RunRecorder:
             "relation_evidence_ratio": backfill.get("relation_evidence_ratio"),
             "ambiguous_mentions": len(
                 backfill.get("ambiguous_mentions") or []),
+            # 撤销归属数进入看板：block_confidence 仍是 chunk-weighted 口径，
+            # 这里只额外暴露「有多少条归属被撤销」（r12 N7）。
+            "reconciled_unattributed": int(
+                backfill.get("reconciled_unattributed") or 0),
         }
 
     @staticmethod
@@ -242,10 +248,11 @@ class Dashboard:
                reworked_chunks, rework_rate,
                wait_ms, chunk_latency_ms, prefill_ms, decode_ms, chunk_metrics,
                block_confidence, entities_grounded, entities_total,
-               relation_evidence_ratio, ambiguous_mentions)
+               relation_evidence_ratio, ambiguous_mentions,
+               reconciled_unattributed)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
                     $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
-                    $31,$32,$33,$34,$35)
+                    $31,$32,$33,$34,$35,$36)
             RETURNING id
             """,
             r.document_id, r.domain_code, r.source,
@@ -261,6 +268,7 @@ class Dashboard:
             r.chunk_metrics_json,
             r.block_confidence, r.entities_grounded, r.entities_total,
             r.relation_evidence_ratio, r.ambiguous_mentions,
+            r.reconciled_unattributed,
         )
         return row["id"]
 
@@ -295,6 +303,7 @@ class Dashboard:
               sum(entities_total)                                    AS entities_total,
               avg(relation_evidence_ratio)                           AS avg_relation_evidence_ratio,
               coalesce(sum(ambiguous_mentions),0)                    AS ambiguous_mentions,
+              coalesce(sum(reconciled_unattributed),0)               AS reconciled_unattributed,
               coalesce(avg(review_iters),0)                          AS avg_review_iters,
               coalesce(sum(open_issues),0)                           AS total_open_issues,
               coalesce(sum(n_entities),0)                            AS total_entities,
@@ -368,6 +377,7 @@ class Dashboard:
             "chunk_calls, truncated_chunks, truncation_signals, rework_rate, "
             "chunk_latency_ms, prefill_ms, decode_ms, "
             "block_confidence, entities_grounded, entities_total, "
-            "relation_evidence_ratio, ambiguous_mentions "
+            "relation_evidence_ratio, ambiguous_mentions, "
+            "reconciled_unattributed "
             "FROM pipeline_runs ORDER BY id DESC LIMIT $1", limit)
         return [dict(r) for r in rows]

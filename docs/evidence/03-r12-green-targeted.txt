@@ -1,0 +1,46 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /home/dell/orca/workspaces/minirag/moray/.venv/bin/python
+rootdir: /home/dell/orca/workspaces/minirag/tmp-yzd-feat-relation-202610-03-mention-span
+configfile: pyproject.toml
+plugins: anyio-4.15.1, asyncio-1.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 36 items
+
+tests/test_r12_review_fixes.py::test_slim_merge_normalizes_stored_values_and_ingest_resolves_entity PASSED [  2%]
+tests/test_r12_review_fixes.py::test_ambiguity_dedup_is_linear_on_16k_all_ambiguous_hits PASSED [  5%]
+tests/test_r12_review_fixes.py::test_overlap_relation_candidates_are_deduped_with_source_chunks PASSED [  8%]
+tests/test_r12_review_fixes.py::test_real_extractor_keeps_all_30x30_candidates PASSED [ 11%]
+tests/test_r12_review_fixes.py::test_real_extractor_caps_internal_candidates_above_soft_limit PASSED [ 13%]
+tests/test_r12_review_fixes.py::test_pipeline_caps_merged_candidates_at_internal_soft_limit PASSED [ 16%]
+tests/test_r12_review_fixes.py::test_cached_backfill_rejects_legacy_owner_argument PASSED [ 19%]
+tests/test_r12_review_fixes.py::test_partial_single_chunk_still_rescans_document_for_aliases PASSED [ 22%]
+tests/test_r12_review_fixes.py::test_recorder_exposes_reconciled_unattributed PASSED [ 25%]
+tests/test_r12_review_fixes.py::test_serialize_backfill_deep_copies_every_nested_container PASSED [ 27%]
+tests/test_r12_review_fixes.py::test_merge_mode_slim_is_a_single_switch_for_all_four_behaviors PASSED [ 30%]
+tests/test_r12_review_fixes.py::test_relation_candidate_cap_rejects_negative_limit PASSED [ 33%]
+tests/test_r11_review_fixes.py::test_chunked_pipeline_preserves_all_relation_evidence_candidates PASSED [ 36%]
+tests/test_r11_review_fixes.py::test_serialize_backfill_for_output_caps_candidates_and_keeps_selected PASSED [ 38%]
+tests/test_r11_review_fixes.py::test_extract_endpoint_caps_backfill_candidates PASSED [ 41%]
+tests/test_r11_review_fixes.py::test_reconciled_ambiguity_is_deduped_and_carries_source_chunks PASSED [ 44%]
+tests/test_r11_review_fixes.py::test_reconcile_counts_revoked_mentions_without_reweighting_blocks PASSED [ 47%]
+tests/test_r11_review_fixes.py::test_overlap_same_entity_duplicate_span_is_collapsed_to_one_mention PASSED [ 50%]
+tests/test_r11_review_fixes.py::test_serialized_candidates_are_copies_and_do_not_mutate_report PASSED [ 52%]
+tests/test_r11_review_fixes.py::test_cached_backfill_uses_explicit_cache_without_mutating_owner PASSED [ 55%]
+tests/test_r11_review_fixes.py::test_relation_candidate_cap_semantics PASSED [ 58%]
+tests/test_r11_review_fixes.py::test_single_chunk_merge_skips_document_alias_rescan PASSED [ 61%]
+tests/test_r11_review_fixes.py::test_slim_naive_merge_relation_key_ignores_whitespace_but_legacy_keeps_it PASSED [ 63%]
+tests/test_r10_review_fixes.py::test_relation_endpoint_absorbed_literal_is_grounded PASSED [ 66%]
+tests/test_r10_review_fixes.py::test_absorbed_endpoint_does_not_trigger_model_rework PASSED [ 69%]
+tests/test_r10_review_fixes.py::test_overlap_same_span_owned_by_two_entities_is_unattributed PASSED [ 72%]
+tests/test_r10_review_fixes.py::test_overlap_same_entity_keeps_single_span_mention PASSED [ 75%]
+tests/test_r10_review_fixes.py::test_selected_candidate_bounds_match_evidence_span_after_trim PASSED [ 77%]
+tests/test_r10_review_fixes.py::test_merged_candidates_have_exactly_one_selected PASSED [ 80%]
+tests/test_r10_review_fixes.py::test_unmatched_aliases_keep_type_so_same_name_diff_type_do_not_collapse PASSED [ 83%]
+tests/test_r10_review_fixes.py::test_relation_evidence_candidates_are_capped_in_serialized_signal PASSED [ 86%]
+tests/test_r10_review_fixes.py::test_cached_backfill_runs_one_scan_per_result PASSED [ 88%]
+tests/test_r10_review_fixes.py::test_middleware_zero_span_is_unmeasured_and_reuses_extractor_cache PASSED [ 91%]
+tests/test_r10_review_fixes.py::test_extraction_package_init_has_no_duplicate_imports PASSED [ 94%]
+tests/test_r10_review_fixes.py::test_naive_merge_identity_key_can_ignore_surrounding_whitespace PASSED [ 97%]
+tests/test_r10_review_fixes.py::test_naive_merge_does_not_mutate_input_relations PASSED [100%]
+
+============================== 36 passed in 1.05s ==============================

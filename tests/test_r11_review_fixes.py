@@ -304,7 +304,6 @@ def test_cached_backfill_uses_explicit_cache_without_mutating_owner(monkeypatch)
 
     monkeypatch.setattr(ExtractionResult, "model_dump_json", counting_dump)
 
-    owner = SimpleNamespace()
     cache: dict = {}
     result = ExtractionResult(entities=[Entity(name="华为", type="ORG")])
     filled_a, report_a = lb.cached_backfill_provenance(
@@ -315,8 +314,11 @@ def test_cached_backfill_uses_explicit_cache_without_mutating_owner(monkeypatch)
     assert calls["n"] == 1
     assert report_b is report_a
     assert filled_b.entities[0].mentions
-    # 不再把私有缓存挂到任意 owner 上，也不再每次全量 model_dump_json。
-    assert not hasattr(owner, "_audit_backfill_cache")
+    # 缓存是唯一副作用：显式 dict 里恰好一份产物，且命中的是同一份对象。
+    # 旧版这条位置是「owner 从未被传入却断言它没有属性」的永不失败断言
+    # （r12 N4），已替换为可失败的真实行为检查。
+    assert len(cache) == 1
+    assert cache[next(iter(cache))][0] is filled_a
     assert serializations["n"] == 0
 
 
@@ -333,9 +335,9 @@ def test_relation_candidate_cap_semantics():
     assert report.to_dict(
         max_relation_evidence_candidates=0
     )["relation_evidence_candidates"][key] == []
-    assert report.to_dict(
-        max_relation_evidence_candidates=-5
-    )["relation_evidence_candidates"][key] == []
+    # r12 N10：负数不再静默等于「空」，直接拒绝（None=全量 / 0=空）。
+    with pytest.raises(ValueError):
+        report.to_dict(max_relation_evidence_candidates=-5)
 
     # selected 始终在首条：裁剪前 5 条也必须包含它（没有替换末条的分支）。
     kept = report.to_dict(

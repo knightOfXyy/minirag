@@ -229,7 +229,9 @@ def test_merged_candidates_have_exactly_one_selected():
 
     key = next(iter(merged.relation_evidence_candidates))
     cands = merged.relation_evidence_candidates[key]
-    assert len(cands) == 2
+    # r12 N1：两块完全重叠 -> 同一处共现只留一条候选，来源块聚合。
+    assert len(cands) == 1
+    assert set(cands[0]["chunk_ids"]) == {"d#c0", "d#c1"}
     assert len([c for c in cands if c.get("selected")]) == 1
 
 
@@ -393,7 +395,8 @@ def test_naive_merge_identity_key_can_ignore_surrounding_whitespace():
 
     slim = naive_merge([p0, p1], strip_entity_name=True)
     assert len(slim.entities) == 1
-    assert slim.entities[0].name == " 腾讯"
+    # r12 S1：身份键去空白时存值也规范化，入库精确名才能解析到同一实体。
+    assert slim.entities[0].name == "腾讯"
 
     legacy = naive_merge([p0, p1])
     assert len(legacy.entities) == 2

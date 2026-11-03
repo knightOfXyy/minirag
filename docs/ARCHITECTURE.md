@@ -83,27 +83,43 @@
   span）并合并成一条全局 `AmbiguousMention`；不同位置上的同名出现不判歧义。
   歧义条目与 `merge_backfill_reports` 共用同一去重索引（`chunk_ids` 聚合全部
   来源块），同一 owner 在同一 `(start,end)` 的重复 mention 只留一条；
-  被撤销的 mention 数记入 `reconciled_unattributed`（r11 N1/N2/N10）。
-- 关系证据候选（r10 N1/N2/N4、r11 F1）：候选带
+  被撤销的 mention 数记入 `reconciled_unattributed`（r11 N1/N2/N10），并作为
+  `pipeline_runs.reconciled_unattributed` 进入看板（r12 N7）；块加权
+  `block_confidence` 不反算，只额外暴露撤销条数。
+- 回填线性（验收 10、r12 S2）：歧义去重用 `(surface, start)` 集合做 O(1)
+  判重；旧实现对已产出歧义列表做 `any(...)`，全部命中都歧义时是 O(A²)
+  （16000 次命中约 2s），已删除。
+- 关系证据候选（r10 N1/N2/N4、r11 F1、r12 N1/N2）：候选带
   `evidence_start/evidence_end`（裁剪后，与 `Relation.evidence_span` 逐值
-  对齐）与原始 `sent_start/sent_end`；跨块合并后全局只有一条
-  `selected=True`。**块间传递与内存 `BackfillReport` 保留全部候选**；
-  只有 API 响应/作业结果落盘边界用 `serialize_backfill_for_output` 按
+  对齐）与原始 `sent_start/sent_end`；重叠块的同一处共现按
+  `(head_start, tail_start, evidence_start, evidence_end)` 去重，来源块聚合到
+  `chunk_ids`；跨块合并后全局只有一条 `selected=True`。**块间传递保留全量
+  候选**，但进程内有一个明显高于对外窗口的软上限
+  `MAX_INTERNAL_RELATION_EVIDENCE_CANDIDATES=2000`（每条关系），兜住无标点
+  长文/单块大文本的笛卡尔积，避免 05 结果缓存与内存被撑大；只有 API 响应/
+  作业结果落盘边界用 `serialize_backfill_for_output` 按
   `MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES=20` 裁剪（selected 在首条）。
-  `to_dict()` 默认上限仍可用，但传 `None` 表示全量；`limit<=0` 表示空。
-- 实体身份键（r10 N9、r11 N11）：回填与 slim 归并共用 `entity_identity_key`
-  （默认去首尾空白）；关闭态 `naive_merge` 保持 262319b 的精确键。slim 归并
-  的关系去重键同样对 head/tail 去空白（`strip_relation_endpoints`），关闭态
-  保持精确键。`naive_merge` 合并关系时存 `model_copy`，不改写调用方传入的
-  partial（r10 N10）。
-- 回填只扫一次（r10 N5、r11 N4）：质量中间件与抽取器共用
-  `cached_backfill_provenance(cache, result, text)`；`cache` 是调用方显式持有
-  的字典（不再 `setattr` 到 agent），键为 `(原文, 结果内容指纹)`，不做全量
-  `model_dump_json`。中间件在没有可核对 span 时把 `span_ratio` 记 `None`
-  （未测），不再写空转的 1.0。
-- 单块扫描口径（r11 N8）：`merge_backfill_reports(single_chunk_covers_document=True)`
-  时跳过对别名的第二次整篇 AC 扫描（单块的 `seen_literals` 已是全文）；多块
-  或部分块失败时仍补扫，保证别名幻觉判定以整篇正文为准。
+  `to_dict()` 默认上限仍可用，但传 `None` 表示全量、`0` 表示空；负数直接
+  `ValueError`（r12 N10，旧版本曾把 `<=0` 静默当全量/空，语义反转过一次）。
+  `serialize_backfill_for_output` 返回完全独立的深层副本，消费方改嵌套容器
+  不会反向污染内部报告（r12 N8）。
+- 实体身份键（r10 N9、r11 N11、r12 S1）：回填与 slim 归并共用
+  `entity_identity_key`（默认去首尾空白）；关闭态 `naive_merge` 保持 262319b
+  的精确键。SLIM 归并不仅用去空白后的键，**存值/落库值也同步规范化**
+  （实体标准名与关系 head/tail），否则入库 `_resolve` 按精确名匹配不到真实
+  实体、会建 MISC 占位。`naive_merge` 合并关系时存 `model_copy`，不改写调用方
+  传入的 partial（r10 N10）。四个归并口径由 `MergeMode.LEGACY|SLIM` 单一开关
+  表达，四个关键字参数作为兼容 shim 保留（r12 N9）。
+- 回填只扫一次（r10 N5、r11 N4、r12 N5）：质量中间件与抽取器共用
+  `cached_backfill_provenance(cache, result, text)`；`cache` 由抽取器在本次
+  reply 的 agent 上持有（`Extractor.extract` 显式 `setattr`），并显式传给
+  中间件/回填函数；缓存函数内部不再往 owner 写私有属性。键为
+  `(原文, 结果内容指纹)`，不做全量 `model_dump_json`。中间件在没有可核对 span
+  时把 `span_ratio` 记 `None`（未测），不再写空转的 1.0。
+- 单块扫描口径（r11 N8、r12 N6）：仅当 `len(chunks)==1` **且该块
+  `start==0`、`end==len(document_text)`（真正覆盖全文）** 时，
+  `merge_backfill_reports(single_chunk_covers_document=True)` 才跳过对别名的
+  第二次整篇 AC 扫描；前缀块/部分块仍补扫，保证别名幻觉判定以整篇正文为准。
 - 审校口径：`rule_review` 的关系端点与回填共用 `literal_index`——标准名永远
   合法；「唯一归属」的别名只在瘦身模式（有 `backfill` 信号）下放宽。关闭态
   逐字面保持 262319b：只认实体标准名**原样**精确命中（不 strip、不看归属
