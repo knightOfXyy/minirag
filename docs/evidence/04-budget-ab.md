@@ -52,6 +52,17 @@ PYTHONPATH=src .venv/bin/python tools/chunk_budget_ab.py \
 墙钟、截断块/信号、失败块，并用 `usage.input_tokens`（provider 真实 tokenizer）
 记最大单块输入，用 `/models` 的 `context_window` / `max_output_tokens` 算余量。
 
+### 本次 A/B 的真实 token 消耗（只算压力语料 3 轮）
+
+| 预算 | 输入 token（3 轮合计） | 输出 token（3 轮合计） |
+|---|---:|---:|
+| 1500 | 443,214 | 142,979 |
+| 3500 | 249,792 | 104,804 |
+| 合计 | **693,006** | **247,783** |
+
+不含 11 篇真实文档批次（每篇 1 块，量级 ~1.4k input）、冒烟与单篇诊断调用；
+金额以 provider 账单为准，脚本不估算价格。
+
 ## 主表：两档同口径（真实 LLM + slim 回填，3 轮）
 
 | 指标 | 1500 | 3500 | 变化 |
