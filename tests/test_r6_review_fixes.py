@@ -6,7 +6,8 @@
       歧义-only 输入不得触发模型返工。
 * S2：跨块（≥2 chunk）的「歧义-only」不能因为 chunk-weighted 计数被
       误报成「回填命中率不足」；真正漏抽的实体仍要拦。
-* N1：歧义端点的关系不再额外报一句事实错误的「端点在正文中未命中」。
+* N1：歧义端点的关系不再额外报一句事实错误的「端点在正文中未命中」；
+       r8 F1 起进一步降为纯信号：不报 issue、不触发模型补问。
 * N2：关闭态（无 backfill 信号）恢复改造前的口径：
       `names` 不做 strip、只认原样标准名、不引入 `owners` 唯一性
       （r7 F1 修正为与 262319b 逐字面等价）。
@@ -129,7 +130,7 @@ async def test_two_chunk_true_missing_entity_still_needs_fix():
 
 
 # ---------------------------------------------------------------------------
-# N1：歧义端点不再重复报「端点在正文中未命中」
+# N1：歧义端点不再重复报「端点在正文中未命中」；r8 F1 起降为纯信号
 # ---------------------------------------------------------------------------
 def test_ambiguous_endpoint_does_not_emit_false_not_grounded_issue():
     text = "同名发布了X公司。"
@@ -146,10 +147,11 @@ def test_ambiguous_endpoint_does_not_emit_false_not_grounded_issue():
     )
     review = rule_review(text, result, backfill=report.to_dict())
 
-    assert review.verdict == ReviewVerdict.NEEDS_FIX
-    assert any("归属不唯一" in issue for issue in review.issues)
+    # 歧义不是模型靠返工能解决的问题（工单：这版不做模型补问）。
+    assert review.verdict == ReviewVerdict.PASS, review.issues
+    assert report.ambiguous_mentions, "歧义信号必须保留在 BackfillReport"
     assert not any("端点在正文中未命中" in issue for issue in review.issues), (
-        "歧义端点已在 ② 用准确原因拦过，④ 不得再报事实错误的未命中")
+        "歧义端点已作为信号保留，④ 不得再报事实错误的未命中")
 
 
 # ---------------------------------------------------------------------------
