@@ -1,0 +1,127 @@
+F.F.FFF                                                                  [100%]
+=================================== FAILURES ===================================
+_______ test_same_name_different_type_is_ambiguity_not_duplicate_rework ________
+
+    async def test_same_name_different_type_is_ambiguity_not_duplicate_rework():
+        """正文只含歧义字面：2 mention 歧义、模型只调用 1 次、accepted=True。"""
+        text = "苹果发布了新手机，苹果很好吃。"
+        logical = ExtractionResult(entities=[
+            Entity(name="苹果", type="ORG"),
+            Entity(name="苹果", type="MISC"),
+        ])
+        sink: dict = {}
+        calls: list[str | None] = []
+    
+        async def extractor(body: str, feedback: str | None):
+            calls.append(feedback)
+            result, report = backfill_provenance(logical, body)
+            sink["backfill"] = report.to_dict()
+            return result
+    
+        reviewed = await run_extraction_team(
+            text, extractor=extractor, backfill_sink=sink)
+    
+>       assert len(calls) == 1, "同名异型歧义不得触发模型补问/返工"
+E       AssertionError: 同名异型歧义不得触发模型补问/返工
+E       assert 3 == 1
+E        +  where 3 = len([None, '请修正以下问题后重新输出完整结果：\n- 实体列表存在同名重复项，未去重', '请修正以下问题后重新输出完整结果：\n- 实体列表存在同名重复项，未去重'])
+
+tests/test_r6_review_fixes.py:53: AssertionError
+_____________ test_two_chunk_ambiguous_only_passes_without_rework ______________
+
+    async def test_two_chunk_ambiguous_only_passes_without_rework():
+        """两块各自歧义命中：chunk-weighted 计数不得变成假「命中率不足」。"""
+        text = "同名发布了混元。同名也发布了混元。"
+        reviewed = await _run_two_chunks(text, _ChunkExtractor())
+    
+        assert reviewed.backfill["entities_total"] == 6
+        assert reviewed.backfill["entities_grounded"] == 2
+        assert len(reviewed.backfill["ambiguous_mentions"]) == 2
+>       assert reviewed.accepted is True, reviewed.review.issues
+E       AssertionError: ['回填命中率 2/6（块级置信度 0.3333）：有实体未在正文中找到出处']
+E       assert False is True
+E        +  where False = ReviewedExtraction(result=ExtractionResult(entities=[Entity(name='腾讯', type='ORG', aliases=['同名'], mentions=[], confid..._id': 'doc#c0001', 'chunk_ids': ['doc#c0001']}], 'relations_without_evidence': [], 'relation_evidence_candidates': {}}).accepted
+
+tests/test_r6_review_fixes.py:142: AssertionError
+________ test_ambiguous_endpoint_does_not_emit_false_not_grounded_issue ________
+
+    def test_ambiguous_endpoint_does_not_emit_false_not_grounded_issue():
+        text = "同名发布了X公司。"
+        result, report = backfill_provenance(
+            ExtractionResult(
+                entities=[
+                    Entity(name="腾讯", type="ORG", aliases=["同名"]),
+                    Entity(name="网易", type="ORG", aliases=["同名"]),
+                    Entity(name="X公司", type="ORG"),
+                ],
+                relations=[Relation(head="同名", predicate="发布", tail="X公司")],
+            ),
+            text,
+        )
+        review = rule_review(text, result, backfill=report.to_dict())
+    
+        assert review.verdict == ReviewVerdict.NEEDS_FIX
+        assert any("归属不唯一" in issue for issue in review.issues)
+>       assert not any("端点在正文中未命中" in issue for issue in review.issues), (
+            "歧义端点已在 ② 用准确原因拦过，④ 不得再报事实错误的未命中")
+E       AssertionError: 歧义端点已在 ② 用准确原因拦过，④ 不得再报事实错误的未命中
+E       assert not True
+E        +  where True = any(<generator object test_ambiguous_endpoint_does_not_emit_false_not_grounded_issue.<locals>.<genexpr> at 0x7fa328787ac0>)
+
+tests/test_r6_review_fixes.py:177: AssertionError
+____________ test_off_mode_does_not_strip_names_for_duplicate_check ____________
+
+    def test_off_mode_does_not_strip_names_for_duplicate_check():
+        text = "腾讯发布财报。"
+        review = rule_review(
+            text,
+            ExtractionResult(entities=[
+                Entity(name="腾讯", type="ORG"),
+                Entity(name=" 腾讯", type="ORG"),
+            ]),
+            backfill=None,
+        )
+    
+>       assert review.verdict == ReviewVerdict.PASS, review.issues
+E       AssertionError: ['实体列表存在同名重复项，未去重']
+E       assert 'needs_fix' == 'pass'
+E         
+E         - pass
+E         + needs_fix
+
+tests/test_r6_review_fixes.py:195: AssertionError
+_________ test_off_mode_same_name_different_type_endpoint_not_exempted _________
+
+    def test_off_mode_same_name_different_type_endpoint_not_exempted():
+        text = "腾讯发布了混元。"
+        result, report = backfill_provenance(
+            ExtractionResult(
+                entities=[
+                    Entity(name="腾讯", type="ORG"),
+                    Entity(name="腾讯", type="MISC"),
+                    Entity(name="混元", type="MISC"),
+                ],
+                relations=[Relation(
+                    head="腾讯", predicate="发布", tail="混元",
+                    evidence_span=Span(start=0, end=2, text="腾讯"))],
+            ),
+            text,
+        )
+        off = rule_review(text, result, backfill=None)
+        slim = rule_review(text, result, backfill=report.to_dict())
+    
+        assert off.verdict == ReviewVerdict.NEEDS_FIX
+>       assert any(
+            "关系头实体「腾讯」" in issue for issue in off.issues), off.issues
+E       AssertionError: ['实体列表存在同名重复项，未去重', '关系 腾讯-[发布]->混元 无原文证据（置信度未知）']
+E       assert False
+E        +  where False = any(<generator object test_off_mode_same_name_different_type_endpoint_not_exempted.<locals>.<genexpr> at 0x7fa328128a00>)
+
+tests/test_r6_review_fixes.py:217: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_r6_review_fixes.py::test_same_name_different_type_is_ambiguity_not_duplicate_rework
+FAILED tests/test_r6_review_fixes.py::test_two_chunk_ambiguous_only_passes_without_rework
+FAILED tests/test_r6_review_fixes.py::test_ambiguous_endpoint_does_not_emit_false_not_grounded_issue
+FAILED tests/test_r6_review_fixes.py::test_off_mode_does_not_strip_names_for_duplicate_check
+FAILED tests/test_r6_review_fixes.py::test_off_mode_same_name_different_type_endpoint_not_exempted
+5 failed, 2 passed in 0.72s
