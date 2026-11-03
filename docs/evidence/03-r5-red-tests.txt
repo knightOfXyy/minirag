@@ -8,7 +8,7 @@ ____ test_rule_review_rejects_unique_alias_endpoint_when_backfill_disabled _____
         review = rule_review(text, result, backfill=None)
 >       assert review.verdict == ReviewVerdict.NEEDS_FIX
 E       AssertionError: assert 'pass' == 'needs_fix'
-E         
+E
 E         - needs_fix
 E         + pass
 
@@ -23,16 +23,16 @@ _____________ test_ambiguous_mention_does_not_trigger_model_rework _____________
         ])
         sink: dict = {}
         calls: list[str | None] = []
-    
+
         async def extractor(body: str, feedback: str | None):
             calls.append(feedback)
             result, report = backfill_provenance(logical, body)
             sink["backfill"] = report.to_dict()
             return result
-    
+
         reviewed = await run_extraction_team(
             text, extractor=extractor, backfill_sink=sink)
-    
+
 >       assert len(calls) == 1, "歧义不得触发模型补问/返工"
 E       AssertionError: 歧义不得触发模型补问/返工
 E       assert 3 == 1
@@ -49,12 +49,12 @@ _________ test_whole_document_alias_scan_uses_source_text_not_feedback _________
         out = await ChunkedExtractionPipeline(
             _AliasOnlyInFeedbackFake(), concurrency=1).run(
                 Document(id="d", text=body, source_text=original), chunks)
-    
+
         # 「鹅厂」只在反馈里出现，原始正文没有 -> 必须仍算幻觉
 >       assert out.backfill["unmatched_aliases"] == [
             {"entity": "腾讯", "literal": "鹅厂"}]
 E       AssertionError: assert [] == [{'entity': '...teral': '鹅厂'}]
-E         
+E
 E         Right contains one more item: {'entity': '腾讯', 'literal': '鹅厂'}
 E         Use -v to get more diff
 
@@ -90,7 +90,7 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7268b2bf0230>
     def test_describe_includes_temperature(monkeypatch):
         monkeypatch.setenv("ARK_API_KEY", "ark-fake-key-for-tests-0000")
         from moray.config import get_settings
-    
+
         get_settings.cache_clear()
         d = describe()
 >       assert "temperature" in d
@@ -101,9 +101,9 @@ _______________ test_cache_key_changes_with_sampling_fingerprint _______________
 
     def test_cache_key_changes_with_sampling_fingerprint():
         import inspect
-    
+
         from moray.extraction.cache import build_cache_key
-    
+
 >       assert "sampling_fingerprint" in inspect.signature(build_cache_key).parameters
 E       assert 'sampling_fingerprint' in mappingproxy(OrderedDict({'domain_fingerprint': <Parameter "domain_fingerprint: 'str'">, 'model_name': <Parameter "model_name: 'str'">, 'chunk_text': <Parameter "chunk_text: 'str'">}))
 E        +  where mappingproxy(OrderedDict({'domain_fingerprint': <Parameter "domain_fingerprint: 'str'">, 'model_name': <Parameter "model_name: 'str'">, 'chunk_text': <Parameter "chunk_text: 'str'">})) = <Signature (domain_fingerprint: 'str', model_name: 'str', chunk_text: 'str') -> 'str'>.parameters
@@ -119,14 +119,14 @@ ________ test_shared_cache_does_not_reuse_result_across_sampling_params ________
         low = _SamplingFake("temp=0.0")
         high = _SamplingFake("temp=1.0")
         chunks = [Chunk(id="d#c0", text=text, start=0, end=len(text), index=0)]
-    
+
         await ChunkedExtractionPipeline(
             low, concurrency=1, result_cache=cache).run(
                 Document(id="d", text=text), chunks)
         await ChunkedExtractionPipeline(
             high, concurrency=1, result_cache=cache).run(
                 Document(id="d", text=text), chunks)
-    
+
         assert low.calls == 1
 >       assert high.calls == 1, "采样参数不同不得命中同一缓存键"
 E       AssertionError: 采样参数不同不得命中同一缓存键
@@ -169,7 +169,7 @@ env = <_pytest.monkeypatch.MonkeyPatch object at 0x726876cecec0>
 >       assert set(d) == {"provider", "base_url", "chat_model", "api_key_masked",
                           "reasoning_effort", "thinking", "temperature"}
 E       AssertionError: assert {'api_key_mas...', 'thinking'} == {'api_key_mas...erature', ...}
-E         
+E
 E         Extra items in the right set:
 E         'temperature'
 E         Use -v to get more diff

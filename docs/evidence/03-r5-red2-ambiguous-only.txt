@@ -12,16 +12,16 @@ _____________ test_ambiguous_mention_does_not_trigger_model_rework _____________
         ])
         sink: dict = {}
         calls: list[str | None] = []
-    
+
         async def extractor(body: str, feedback: str | None):
             calls.append(feedback)
             result, report = backfill_provenance(logical, body)
             sink["backfill"] = report.to_dict()
             return result
-    
+
         reviewed = await run_extraction_team(
             text, extractor=extractor, backfill_sink=sink)
-    
+
 >       assert len(calls) == 1, "歧义不得触发模型补问/返工"
 E       AssertionError: 歧义不得触发模型补问/返工
 E       assert 3 == 1
