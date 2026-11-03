@@ -11,7 +11,10 @@
 
 字段语义（务必与 tests/test_chunk_metrics.py 对齐）：
   * wait_s     该块在并发信号量上排队等待的时间（从 run 开始调度到真正发出）；
-  * prefill_s  首 token 耗时（请求发出 -> 第一个输出 token）；
+  * latency_s  一次完整模型调用（agent.reply）的墙钟耗时；非流式也测得到，
+               但它**不是** prefill/decode，只是"这一步总共花了多久"的诚实归因；
+  * prefill_s  首 token 耗时（响应头到达 -> 第一个输出 token；**下界**，
+               不含网络 RTT 与服务端排队——计时起点在解析器首次迭代）；
   * decode_s   解码耗时（首 token -> 调用结束）。
 非流式网关一次性返回、拿不到首 token 时间点时，prefill_s/decode_s 如实记
 ``None``，**绝不用总延迟冒充**——下游聚合会跳过 None，而不是拿 0 拉低均值。
@@ -59,6 +62,9 @@ class ChunkCallMetrics:
     wait_s: float
     prefill_s: float | None
     decode_s: float | None
+    # 一次模型调用的墙钟耗时：非流式也能测，但不等同 prefill/decode。
+    # 缺省 None = 这条遥测路径没有测（不是 0）。
+    latency_s: float | None = None
     # 该块各次尝试的结束原因（attempts 条）；末位即 finish_reason
     attempt_finish_reasons: list[str] = field(default_factory=list)
     # 该块是否出现过任何一次截断（可能截断后又返工成功，仍要计数暴露）
@@ -85,6 +91,7 @@ class ChunkCallMetrics:
             "output_tokens": self.output_tokens,
             "cached_input_tokens": self.cached_input_tokens,
             "wait_s": round(self.wait_s, 6),
+            "latency_s": self.latency_s,
             "prefill_s": self.prefill_s,
             "decode_s": self.decode_s,
             "reworked": self.reworked,
@@ -101,6 +108,12 @@ def _sum(values: list[float | None]) -> float | None:
     """
     known = [v for v in values if v is not None]
     return round(sum(known), 6) if known else None
+
+
+def _chunk_sort_key(record: ChunkCallMetrics) -> tuple:
+    """稳定排序键：块完成顺序受并发影响，序列化必须按块序而不是完成序。"""
+    base, _, tail = record.chunk_id.rpartition("#c")
+    return (base, int(tail) if tail.isdigit() else -1, record.chunk_id)
 
 
 def merge_call_metrics(records: list[ChunkCallMetrics]) -> ChunkCallMetrics:
@@ -124,6 +137,9 @@ def merge_call_metrics(records: list[ChunkCallMetrics]) -> ChunkCallMetrics:
         cached_input_tokens=sum(r.cached_input_tokens for r in records),
         wait_s=sum(r.wait_s for r in records),
         # 任一轮测到就累加；全测不到才为 None
+        latency_s=(round(sum(r.latency_s for r in records
+                             if r.latency_s is not None), 6)
+                   if any(r.latency_s is not None for r in records) else None),
         prefill_s=(round(sum(r.prefill_s for r in records
                              if r.prefill_s is not None), 6)
                    if any(r.prefill_s is not None for r in records) else None),
@@ -189,6 +205,8 @@ class DocumentMetrics:
             "rework_rate": round(self.reworked_chunks / n, 6) if n else 0.0,
             "reworked_chunks": self.reworked_chunks,
             "wait_s": _sum([c.wait_s for c in self.chunks]),
+            # 非流式也测得到的墙钟归因；None=没测到，不拿 0 冒充
+            "latency_s": _sum([c.latency_s for c in self.chunks]),
             "prefill_s": _sum([c.prefill_s for c in self.chunks]),
             "decode_s": _sum([c.decode_s for c in self.chunks]),
             "input_tokens": sum(c.input_tokens for c in self.chunks),
@@ -202,6 +220,7 @@ class DocumentMetrics:
             "document_id": self.document_id,
             "n_chunks": self.n_chunks or len(self.chunks),
             "summary": self.summary(),
-            "chunks": [c.to_dict() for c in self.chunks],
+            "chunks": [
+                c.to_dict() for c in sorted(self.chunks, key=_chunk_sort_key)],
             "warmup": self.warmup,
         }

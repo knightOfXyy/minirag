@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Type
 
 from pydantic import BaseModel, ValidationError
@@ -96,6 +97,22 @@ def _finish_reason_from_msg(reply) -> str:
     return str(reason).strip().lower() or FINISH_UNKNOWN
 
 
+def _finish_reasons_from_msg(reply) -> list[str]:
+    """取本次 reply 内【所有】模型调用的结束原因（按调用顺序）。
+
+    一次 agentscope agent.reply 可能包含多次模型调用（截断 -> 工具参数 JSON
+    残缺 -> 自纠）。模型埋点把每次调用的 reason 累积在 metadata['finish_reasons']；
+    这里全部带出，Extractor 才能逐次识别截断而不是只看最后一次。
+    老假模型/单次调用路径退回单个 finish_reason。
+    """
+    metadata = getattr(reply, "metadata", None)
+    if isinstance(metadata, dict):
+        reasons = metadata.get("finish_reasons")
+        if isinstance(reasons, list) and reasons:
+            return [str(r).strip().lower() for r in reasons if r is not None]
+    return [_finish_reason_from_msg(reply)]
+
+
 def _phase_timing_from_msg(reply) -> tuple[float | None, float | None]:
     """取 (prefill_s, decode_s) 分段计时。
 
@@ -121,6 +138,21 @@ def _phase_timing_from_msg(reply) -> tuple[float | None, float | None]:
         float(prefill) if prefill is not None else None,
         float(decode) if decode is not None else None,
     )
+
+
+def _latency_from_msg(reply) -> float | None:
+    """取一次完整模型调用的墙钟耗时（非流式也测得到）。
+
+    生产默认非流式，prefill/decode 协议层不存在；latency_s 是"这一步总共
+    花了多久"的诚实归因，绝不拿它冒充分段耗时。
+    """
+    metadata = getattr(reply, "metadata", None)
+    if isinstance(metadata, dict):
+        value = metadata.get("latency_s")
+        if value is not None:
+            return float(value)
+    value = getattr(reply, "latency_s", None)
+    return float(value) if value is not None else None
 
 
 def _usage_from_msg(reply) -> Usage:
@@ -230,20 +262,60 @@ class Extractor:
         流式分段计时，Instrumented*ChatModel 在响应经过时把它们写进模型
         实例的 moray_last_signals 槽位；这里在 reply 完成后取出、挂到 Msg
         上（与离线假模型直接挂属性的接缝保持同构）。
+
+        B1：信号槽按"模型调用"累积。reply 前 reset，reply 后把**所有**调用的
+        finish_reason 挂到 metadata['finish_reasons']，避免同一次 reply 里的
+        截断信号被后续自纠调用覆盖。
         """
+        model = getattr(agent, "model", None)
+        signals = getattr(model, "moray_last_signals", None)
+        reset = getattr(signals, "reset", None)
+        if callable(reset):
+            reset()
+        started_at = time.perf_counter()
         reply = await agent.reply(
             UserMsg(name="user", content=content),
             structured_schema=self._schema_model,
         )
-        model = getattr(agent, "model", None)
-        signals = getattr(model, "moray_last_signals", None)
+        # S1：非流式也能测的墙钟归因（覆盖这次 reply 内的全部模型调用）。
+        # 它不等于 prefill/decode，汇总字段名单独叫 latency_s。
+        latency_s = round(time.perf_counter() - started_at, 6)
+        if signals is not None:
+            meta = dict(getattr(reply, "metadata", None) or {})
+            meta.setdefault("latency_s", latency_s)
+            reply.metadata = meta
+        elif latency_s is not None:
+            try:
+                reply.metadata = dict(
+                    getattr(reply, "metadata", None) or {},
+                    latency_s=latency_s)
+            except (AttributeError, TypeError):
+                # 离线假 Msg 可能不允许挂 metadata；退回直接挂属性
+                try:
+                    reply.latency_s = latency_s
+                except AttributeError:
+                    pass
         if signals is not None:
             # Msg 没有 finish_reason/timing 字段，统一走 metadata（与
             # Instrumented*ChatModel 挂 ChatResponse.metadata 同一条通道）。
             meta = dict(getattr(reply, "metadata", None) or {})
+            reasons = getattr(signals, "finish_reasons", None)
+            if reasons:
+                meta["finish_reasons"] = [
+                    r for r in reasons if r is not None]
             if signals.finish_reason is not None:
                 meta.setdefault("finish_reason", signals.finish_reason)
-            if signals.prefill_s is not None or signals.decode_s is not None:
+            calls = getattr(signals, "calls", None) or []
+            if calls:
+                # 同一 attempt 内多次模型调用的分段耗时累加（只加真实测到的）
+                prefill = _sum_known([c.get("prefill_s") for c in calls])
+                decode = _sum_known([c.get("decode_s") for c in calls])
+                if prefill is not None or decode is not None:
+                    meta.setdefault("timing", {
+                        "prefill_s": prefill, "decode_s": decode})
+            elif (signals.prefill_s is not None
+                  or signals.decode_s is not None):
+                # 兼容只实现单槽的旧假模型/旧埋点（无 calls 列表）
                 meta.setdefault("timing", {
                     "prefill_s": signals.prefill_s,
                     "decode_s": signals.decode_s})
@@ -266,34 +338,45 @@ class Extractor:
         attempt_reasons: list[str] = []
         attempt_prefill: list[float | None] = []
         attempt_decode: list[float | None] = []
+        attempt_latency: list[float | None] = []
         truncated_attempts = 0
 
         for attempt in range(1, total_attempts + 1):
             reply = await self._call_structured(agent, content)
             attempt_usage = _usage_from_msg(reply)
             usage.add(attempt_usage)
-            reason = _finish_reason_from_msg(reply)
+            # B1：一次 reply 内可能调了多次模型；逐次记录结束原因，
+            # 最后一次作为本次 attempt 的最终 finish_reason。
+            reasons = _finish_reasons_from_msg(reply)
+            reason = reasons[-1]
             prefill_s, decode_s = _phase_timing_from_msg(reply)
-            attempt_reasons.append(reason)
+            attempt_reasons.extend(reasons)
             attempt_prefill.append(prefill_s)
             attempt_decode.append(decode_s)
+            attempt_latency.append(_latency_from_msg(reply))
 
             # 截断护栏：finish_reason=length 必须显式可见。截断的 JSON 往往
             # 同时让下面的 schema 校验失败并触发返工，这里先于校验识别，
             # 用带结构化字段的 WARNING 打出来——它绝不能伪装成"普通校验失败"。
-            if is_length_finish_reason(reason):
+            # 同一 attempt 内每一次 length 都要计数/告警（截断后自纠救回也一样）。
+            for call_index, call_reason in enumerate(reasons, start=1):
+                if not is_length_finish_reason(call_reason):
+                    continue
                 truncated_attempts += 1
                 logger.warning(
                     "结构化输出被长度上限截断 event=output_truncated "
-                    "document_id=%s domain=%s attempt=%d/%d "
+                    "document_id=%s domain=%s attempt=%d/%d model_call=%d/%d "
                     "in_tokens=%d out_tokens=%d finish_reason=%s truncated=True",
                     document.id, self.domain.code, attempt, total_attempts,
+                    call_index, len(reasons),
                     attempt_usage.input_tokens, attempt_usage.output_tokens,
-                    reason,
+                    call_reason,
                     extra={"event": "output_truncated", "truncated": True,
                            "document_id": document.id,
                            "domain_code": self.domain.code,
-                           "attempt": attempt, "finish_reason": reason,
+                           "attempt": attempt,
+                           "model_call": call_index,
+                           "finish_reason": call_reason,
                            "input_tokens": attempt_usage.input_tokens,
                            "output_tokens": attempt_usage.output_tokens},
                 )
@@ -334,6 +417,7 @@ class Extractor:
                     wait_s=0.0,  # 排队耗时由分块流水线在更上层测量填入
                     prefill_s=_sum_known(attempt_prefill),
                     decode_s=_sum_known(attempt_decode),
+                    latency_s=_sum_known(attempt_latency),
                     attempt_finish_reasons=attempt_reasons,
                     truncated_attempts=truncated_attempts,
                 ),
@@ -350,6 +434,7 @@ class Extractor:
             wait_s=0.0,
             prefill_s=_sum_known(attempt_prefill),
             decode_s=_sum_known(attempt_decode),
+            latency_s=_sum_known(attempt_latency),
             attempt_finish_reasons=attempt_reasons,
             truncated_attempts=truncated_attempts,
             error=last_error,

@@ -167,6 +167,8 @@ async def run_chunked_team(
     chunk_overlap_units: int = 200,
     chunk_concurrency: int = 4,
     usage=None,
+    document_id: str | None = None,
+    metrics_sink: list | None = None,
 ) -> ReviewedExtraction:
     """超过分块阈值且有真 Extractor 可取时，走「分块 map → 全局坐标归并 →
     单轮规则审校」；否则逐字节保持 :func:`run_extraction_team` 旧行为。
@@ -192,21 +194,24 @@ async def run_chunked_team(
     chunker = Chunker(max_units=chunk_max_units, overlap_units=chunk_overlap_units)
     if chunker.count(text) <= chunk_threshold_units:
         # 短文档虽然不走分块 pipeline，仍可能有 finish_reason=length：
-        # 若 provider 支持度量回传，就收集本轮（含审校返工轮）的 call_metrics，
-        # 包成"1 块"的文档级度量，截断信号才能进看板（F4）。
-        sink: list = []
+        # 调用方显式传 metrics_sink 时，才向 provider 要"带度量回传"的闭包，
+        # 收集本轮（含审校返工轮）的 call_metrics，包成"1 块"的文档级度量。
+        # 不隐式替换调用方传入的 extractor：换实现必须由调用方显式请求。
         short_extractor = extractor
-        provider_extract = getattr(provider, "extract", None)
-        if provider_extract is not None:
-            params = inspect.signature(provider_extract).parameters
-            if "metrics_sink" in params:
-                short_extractor = await provider_extract(
-                    domain_code, usage_sink=usage, metrics_sink=sink)
+        if metrics_sink is not None:
+            provider_extract = getattr(provider, "extract", None)
+            if provider_extract is not None:
+                params = inspect.signature(provider_extract).parameters
+                if "metrics_sink" in params:
+                    short_extractor = await provider_extract(
+                        domain_code, usage_sink=usage,
+                        metrics_sink=metrics_sink)
         reviewed = await run_extraction_team(
             text, extractor=short_extractor, max_iters=max_iters)
-        if sink:
-            dm = DocumentMetrics(document_id="chunked", n_chunks=1)
-            dm.add(merge_call_metrics(sink))
+        if metrics_sink:
+            dm = DocumentMetrics(
+                document_id=document_id or "chunked", n_chunks=1)
+            dm.add(merge_call_metrics(metrics_sink))
             reviewed.document_metrics = dm
         return reviewed
 
@@ -218,7 +223,8 @@ async def run_chunked_team(
     # 只加观测：某块重试耗尽时仍像改动前一样整篇抛错（不把失败吞成部分结果）。
     # pipeline 会把文档级度量挂到异常上，截断/返工信号不会随异常蒸发。
     output = await pipeline.run(
-        _Doc(id="chunked", text=text, source="chunked", domain_code=domain_code),
+        _Doc(id=document_id or "chunked", text=text, source="chunked",
+             domain_code=domain_code),
         chunks)
     if usage is not None:
         usage.add(output.usage)

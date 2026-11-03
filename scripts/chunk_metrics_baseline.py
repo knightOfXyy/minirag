@@ -81,7 +81,9 @@ async def run_once(text: str, sample_name: str, *, stream: bool):
         "wall_s": round(wall_s, 4),
         "chunk_settings": cs,
         "summary": dm.summary(),
-        "chunks": [c.to_dict() for c in dm.chunks],
+        # 并发的完成顺序会抖；用 DocumentMetrics.to_dict() 的稳定块序，
+        # 让 --repeat 的基线 JSON 可直接 diff（nit5）。
+        "chunks": dm.to_dict()["chunks"],
         "output_tokens_mean": (
             round(statistics.mean(
                 [c.output_tokens for c in dm.chunks]), 2)

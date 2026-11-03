@@ -61,7 +61,7 @@
 ## 测试
 
 ```bash
-python -m pytest tests/ -q                 # 123 个离线确定性单测（CI 同款）
+python -m pytest tests/ -q                 # 132 个离线确定性单测（CI 同款）
 RUN_DB_TESTS=1 python -m pytest tests/ -q  # 全量 175（+52 个 pgvector/MCP/API/作业/合并集成）
 ```
 

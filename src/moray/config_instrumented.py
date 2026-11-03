@@ -12,6 +12,8 @@
   * ``ChatResponse.metadata["finish_reason"]``：供应商原生结束原因；
   * ``ChatResponse.metadata["timing"] = {"prefill_s", "decode_s"}``：
     仅流式可测；非流式两者均为 None（不用总延迟冒充）。
+    注意 prefill_s 的计时起点是 ``_parse_stream_response`` 首次迭代（响应头
+    已到），**不含**网络 RTT 与服务端排队，因此它是 prefill 的下界。
 
 信号随后由 :class:`moray.extraction.extractor.Extractor` 读取并计入
 ChunkCallMetrics。三家 provider（火山方舟/DeepSeek/OpenAI 兼容）都走
@@ -20,49 +22,81 @@ OpenAI 风格的 completion 对象，故埋点逻辑共用一份。
 
 from __future__ import annotations
 
-import inspect
 import time
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
 
 @dataclass
 class LastCallSignals:
-    """模型实例上"最近一次响应"的观测信号（线程/实例内单写者）。
+    """模型实例上"本次 reply 内各次响应"的观测信号（线程/实例内单写者）。
 
     为什么不用 ChatResponse.metadata 一路透传：agentscope 的 agent.reply
     走 ReAct + 内置结构化工具路径，最终 Msg 由框架重建，metadata 在这一步
     被丢弃；但同一个 model 实例的响应只有当前这一次在途调用（Extractor
     每篇/每块 await 完成后才读），挂实例槽位等价于"随响应一起返回"，
     又不用改 agentscope。
+
+    为什么按"模型调用"累积而不是单槽：一次 agent.reply 是 ReAct 循环，可能
+    包含多次模型调用。最典型的正是本单要防的截断路径——首次输出撞
+    max_tokens -> 工具参数 JSON 残缺 -> 工具报错 -> 同一个 reply 内再调一次
+    模型自纠。若只保留最后一次，第一次的 finish_reason=length 会被第二次的
+    stop 覆盖，截断计数与 WARNING 全静默。
     """
 
-    finish_reason: str | None = None
-    prefill_s: float | None = None
-    decode_s: float | None = None
+    calls: list[dict[str, Any]] = field(default_factory=list)
+
+    def reset(self) -> None:
+        """开始一次 agent.reply 前清空：信号只属于本次 reply。"""
+        self.calls.clear()
 
     def update(self, *, finish_reason=None, prefill_s=None, decode_s=None) -> None:
-        # 每次调用都重置，不能沿用上一次尝试的值：供应商某次没回 finish_reason
-        # 时若保留上一轮的 length，会把一次正常返工误记成截断（信号虚高）。
-        self.finish_reason = (
-            str(finish_reason).strip().lower()
-            if finish_reason is not None else None)
-        self.prefill_s = prefill_s
-        self.decode_s = decode_s
+        # 每次模型调用都 append 一条，不覆盖：同一次 reply 里的截断信号
+        # 不能被后续自纠调用抹掉。
+        self.calls.append({
+            "finish_reason": (
+                str(finish_reason).strip().lower()
+                if finish_reason is not None else None),
+            "prefill_s": prefill_s,
+            "decode_s": decode_s,
+        })
+
+    @property
+    def last(self) -> dict[str, Any] | None:
+        return self.calls[-1] if self.calls else None
+
+    @property
+    def finish_reason(self) -> str | None:
+        last = self.last
+        return last["finish_reason"] if last else None
+
+    @property
+    def prefill_s(self) -> float | None:
+        last = self.last
+        return last["prefill_s"] if last else None
+
+    @property
+    def decode_s(self) -> float | None:
+        last = self.last
+        return last["decode_s"] if last else None
+
+    @property
+    def finish_reasons(self) -> list[str | None]:
+        """本次 reply 内每次模型调用的结束原因（按调用顺序）。"""
+        return [call["finish_reason"] for call in self.calls]
 
 
 def attach_response_signals(
     resp: Any,
     completion: Any,
     *,
-    start: datetime,
     native_finish_reason: str | None = None,
 ) -> Any:
     """把供应商原生 finish_reason 挂到一帧（非流式）ChatResponse.metadata。
 
     completion：openai 类型的 ChatCompletion（取 choices[0].finish_reason）；
     native_finish_reason：已经取好的值（流式末帧）直接传，跳过 choices。
+    非流式没有首 token 时间点，本函数不接收 start/不产出分段计时。
     """
     reason = native_finish_reason
     if reason is None:
@@ -177,24 +211,13 @@ def _make_instrumented(base_cls: type):
 
         def _parse_completion_response(
                 self, start_datetime, response, *args, **kwargs):
-            # 各家签名不一致：Volcengine 的同名方法是 async def，DeepSeek/
-            # OpenAI 是普通 def。统一 await（非协程直接取值），三份子类共用。
-            # OpenAI 基类按 3 个位置参数调用（多一个 audio_format），必须
-            # 原样转发 *args/**kwargs，否则 LLM_PROVIDER=openai 每次非流式
-            # 调用都会 TypeError。
+            # 三家安装版（agentscope 2.0.10）的解析器都是同步 def：
+            # Volcengine/DeepSeek 2 个位置参数，OpenAI 多一个 audio_format，
+            # 必须原样转发 *args/**kwargs，否则 LLM_PROVIDER=openai 每次
+            # 非流式调用都会 TypeError。
             result = super()._parse_completion_response(
                 start_datetime, response, *args, **kwargs)
-
-            async def _awrap(coro):
-                resp = await coro
-                attach_response_signals(resp, response, start=start_datetime)
-                self.moray_last_signals.update(
-                    finish_reason=resp.metadata.get("finish_reason"))
-                return resp
-
-            if inspect.isawaitable(result):
-                return _awrap(result)
-            attach_response_signals(result, response, start=start_datetime)
+            attach_response_signals(result, response)
             self.moray_last_signals.update(
                 finish_reason=result.metadata.get("finish_reason"))
             return result

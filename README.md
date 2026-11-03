@@ -87,5 +87,5 @@ data/gold/           L15 黄金评测集（tagged 语料 + 关系 sidecar）
 
 ```bash
 python lessons/l15_evaluation.py   # 离线黄金集 P/R/F1：规则基线 vs 改进版
-python -m pytest tests/ -q         # 123 离线单测；RUN_DB_TESTS=1 全量 175
+python -m pytest tests/ -q         # 132 离线单测；RUN_DB_TESTS=1 全量 175
 ```

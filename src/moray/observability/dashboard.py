@@ -58,6 +58,8 @@ class RunRecorder:
     reworked_chunks: int = 0          # 发生校验返工的块数
     rework_rate: float = 0.0          # reworked_chunks / chunk_calls
     wait_ms: int = 0                  # 并发/配额排队总耗时
+    # 非流式也测得到的墙钟归因（不是 prefill/decode）；None=没测到，不是 0。
+    chunk_latency_ms: int | None = None
     # 生产默认非流式时网关拿不到首 token 时间点：None=不可测，不是 0。
     prefill_ms: int | None = None     # 首 token（prefill）总耗时
     decode_ms: int | None = None      # 解码总耗时
@@ -82,6 +84,7 @@ class RunRecorder:
             "rework_rate": float(s.get("rework_rate", 0.0)),
             "wait_ms": (int(s["wait_s"] * 1000)
                         if s.get("wait_s") is not None else 0),
+            "chunk_latency_ms": _ms("latency_s"),
             "prefill_ms": _ms("prefill_s"),
             "decode_ms": _ms("decode_s"),
             "chunk_metrics_json": (
@@ -131,6 +134,23 @@ class RunRecorder:
             **chunk_fields,
         )
 
+    @staticmethod
+    def _tokens_from_document_metrics(document_metrics) -> dict:
+        """失败行也保留已花 token：从分块明细汇总三类成本。
+
+        失败块在 pipeline 里已经烧掉 token（并累进 document_metrics.chunks），
+        若看板行写 0，成本会被系统性低估——API/作业响应对、成本看板不对。
+        没有分块度量时返回空 dict，由调用方显式传入的 usage 兜底。
+        """
+        chunks = getattr(document_metrics, "chunks", None) or []
+        if not chunks:
+            return {}
+        return {
+            "input_tokens": sum(c.input_tokens for c in chunks),
+            "output_tokens": sum(c.output_tokens for c in chunks),
+            "cached_input_tokens": sum(c.cached_input_tokens for c in chunks),
+        }
+
     @classmethod
     def from_failure(
         cls,
@@ -142,14 +162,26 @@ class RunRecorder:
         source: str = "job",
         latency_ms: int = 0,
         model_name: str = "",
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cached_input_tokens: int | None = None,
     ) -> RunRecorder:
-        """抽取整篇失败时仍落一行：截断/返工信号不能随异常蒸发（F5）。"""
+        """抽取整篇失败时仍落一行：截断/返工信号与成本不能随异常蒸发（F5/S3）。
+
+        token 优先取分块明细（失败块已花的部分），没有分块度量时（短文档在
+        旧闭环里直接抛错）再用调用方传入的 usage 累加器兜底。
+        """
+        tokens = cls._tokens_from_document_metrics(document_metrics)
         return cls(
             document_id=document_id,
             domain_code=domain_code,
             source=source,
             review_passed=False,
             open_issues=1 if error else 0,
+            input_tokens=tokens.get("input_tokens", input_tokens or 0),
+            output_tokens=tokens.get("output_tokens", output_tokens or 0),
+            cached_input_tokens=tokens.get(
+                "cached_input_tokens", cached_input_tokens or 0),
             latency_ms=latency_ms,
             model_name=model_name,
             **cls._chunk_fields(document_metrics),
@@ -174,9 +206,9 @@ class Dashboard:
                latency_ms, model_name, trace_id,
                chunk_calls, total_attempts, truncated_chunks, truncation_signals,
                reworked_chunks, rework_rate,
-               wait_ms, prefill_ms, decode_ms, chunk_metrics)
+               wait_ms, chunk_latency_ms, prefill_ms, decode_ms, chunk_metrics)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-                    $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
+                    $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
             RETURNING id
             """,
             r.document_id, r.domain_code, r.source,
@@ -187,7 +219,7 @@ class Dashboard:
             r.latency_ms, r.model_name, r.trace_id,
             r.chunk_calls, r.total_attempts, r.truncated_chunks,
             r.truncation_signals, r.reworked_chunks, r.rework_rate,
-            r.wait_ms, r.prefill_ms, r.decode_ms,
+            r.wait_ms, r.chunk_latency_ms, r.prefill_ms, r.decode_ms,
             # jsonb 由连接 codec 自动编解码（见 kb.store._init_connection）
             r.chunk_metrics_json,
         )
@@ -233,11 +265,16 @@ class Dashboard:
               coalesce(sum(truncation_signals),0)                    AS truncation_signals,
               coalesce(sum(reworked_chunks),0)                       AS reworked_chunks,
               coalesce(sum(wait_ms),0)                               AS wait_ms,
+              coalesce(sum(chunk_latency_ms),0)                      AS chunk_latency_ms,
               coalesce(sum(prefill_ms),0)                            AS prefill_ms,
               coalesce(sum(decode_ms),0)                             AS decode_ms,
-              -- 真实测到分段耗时的行数：0 表示这些 run 全是非流式、不可测
-              count(prefill_ms)                                      AS prefill_measured_runs,
-              count(decode_ms)                                       AS decode_measured_runs
+              -- 真实测到耗时的行数：0 表示这些 run 全是非流式、不可测。
+              -- 旧库列曾是 NOT NULL DEFAULT 0，历史行仍是 0；按 >0 排除，
+              -- 避免把"没测到"当成"测到 0ms"。
+              count(chunk_latency_ms) FILTER (
+                  WHERE chunk_latency_ms > 0)                        AS chunk_latency_measured_runs,
+              count(prefill_ms) FILTER (WHERE prefill_ms > 0)        AS prefill_measured_runs,
+              count(decode_ms) FILTER (WHERE decode_ms > 0)          AS decode_measured_runs
             FROM pipeline_runs {where}
             """,
             *params,
@@ -259,7 +296,9 @@ class Dashboard:
         d["chunk_rework_rate"] = (
             round((d["reworked_chunks"] or 0) / chunk_calls, 6)
             if chunk_calls else 0.0)
-        # 分段耗时：没有任何一行测到时返回 None（不可测），不拿 0 冒充。
+        # 耗时：没有任何一行测到时返回 None（不可测），不拿 0 冒充。
+        if not d.get("chunk_latency_measured_runs"):
+            d["chunk_latency_ms"] = None
         if not d.get("prefill_measured_runs"):
             d["prefill_ms"] = None
         if not d.get("decode_measured_runs"):
@@ -276,6 +315,6 @@ class Dashboard:
             "input_tokens, output_tokens, cached_input_tokens, "
             "latency_ms, created_at, "
             "chunk_calls, truncated_chunks, truncation_signals, rework_rate, "
-            "prefill_ms, decode_ms "
+            "chunk_latency_ms, prefill_ms, decode_ms "
             "FROM pipeline_runs ORDER BY id DESC LIMIT $1", limit)
         return [dict(r) for r in rows]
