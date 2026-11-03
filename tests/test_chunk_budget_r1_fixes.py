@@ -28,12 +28,6 @@ from moray.schema import Entity, EntityMention, ExtractionResult, Relation, Span
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT))
 
-from tools.chunk_budget_ab import (  # noqa: E402
-    _delta_summary_pt,
-    _doc_row,
-    _real_doc_coverage,
-)
-
 
 # ---------------------------------------------------------------------------
 # B2：实体类型前缀标签归一化
@@ -263,6 +257,7 @@ def test_relation_chunk_profile_accepts_generator_and_duplicate_names():
 def test_doc_row_is_shared_by_stress_and_real_doc_paths():
     """两种批次共用同一行构造器；字段集合是公开可核对的行为面。"""
     from moray.extraction import Chunker
+    from tools.chunk_budget_ab import _doc_row
 
     class _Metrics:
         chunks: list = []
@@ -290,6 +285,8 @@ def test_doc_row_is_shared_by_stress_and_real_doc_paths():
 
 
 def test_delta_summary_reports_unpaired_ci_and_worst_round():
+    from tools.chunk_budget_ab import _delta_summary_pt
+
     summary = _delta_summary_pt([-2.06, -10.36, -10.02])
     assert summary["n"] == 3
     assert summary["mean_pt"] == pytest.approx(-7.48, abs=0.01)
@@ -299,6 +296,8 @@ def test_delta_summary_reports_unpaired_ci_and_worst_round():
 
 
 def test_real_doc_coverage_flags_when_candidate_budget_is_not_exercised():
+    from tools.chunk_budget_ab import _real_doc_coverage
+
     out = _real_doc_coverage(
         {"rows": [{"max_chunk_units": 1423}], "max_chunk_units": 1423},
         candidate_budget=3500)
