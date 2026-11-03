@@ -171,6 +171,8 @@ async def run_chunked_team(
     chunk_concurrency: int = 4,
     usage=None,
     result_cache=None,
+    document_id: str | None = None,
+    metrics_sink: list | None = None,
 ) -> ReviewedExtraction:
     """超过分块阈值且有真 Extractor 可取时，走「分块 map → 全局坐标归并 →
     单轮规则审校」；否则逐字节保持 :func:`run_extraction_team` 旧行为。
@@ -191,6 +193,11 @@ async def run_chunked_team(
     配置指纹+模型名+块正文，命中不调模型、用量记 cache_hits 而非真实 token。
     调用方应在【同一篇文档的多次运行/多个作业】间复用同一个缓存实例，断点续跑、
     失败重试、重复提交才能命中；缺省 None，行为与无缓存逐字节一致。
+
+    ``document_id`` 是写进度量记录的真实文档 id（缺省占位 "chunked"，
+    便于看板把度量行对回具体文档）；``metrics_sink`` 由调用方**显式**传入时
+    才为短文档路径收集调用度量——不传就完全用调用方自己的 extractor，
+    不隐式换实现（nit4），因此 document_metrics 保持 None。
     """
     if provider is None:
         return await run_extraction_team(text, extractor=extractor, max_iters=max_iters)
@@ -201,26 +208,30 @@ async def run_chunked_team(
     chunker = Chunker(max_units=chunk_max_units, overlap_units=chunk_overlap_units)
     if chunker.count(text) <= chunk_threshold_units:
         # 短文档虽然不走分块 pipeline，仍可能有 finish_reason=length：
-        # 若 provider 支持度量回传，就收集本轮（含审校返工轮）的 call_metrics，
-        # 包成"1 块"的文档级度量，截断信号才能进看板（F4）。
-        sink: list = []
+        # 调用方**显式**传 metrics_sink 时，才向 provider 要"带度量回传"的闭包，
+        # 收集本轮（含审校返工轮）的 call_metrics，包成"1 块"的文档级度量，
+        # 截断信号才能进看板（F4）。不隐式替换调用方传入的 extractor：
+        # 换实现必须由调用方显式请求（nit4）。
+        sink: list = metrics_sink if metrics_sink is not None else []
         short_backfill: dict = {}
         short_extractor = extractor
-        provider_extract = getattr(provider, "extract", None)
-        if provider_extract is not None:
-            params = inspect.signature(provider_extract).parameters
-            if "metrics_sink" in params:
-                extra_kwargs: dict = {}
-                # 回填信号同样不能因为换短文档闭包而丢（03 特性）。
-                if "backfill_sink" in params:
-                    extra_kwargs["backfill_sink"] = short_backfill
-                short_extractor = await provider_extract(
-                    domain_code, usage_sink=usage, metrics_sink=sink,
-                    **extra_kwargs)
+        if metrics_sink is not None:
+            provider_extract = getattr(provider, "extract", None)
+            if provider_extract is not None:
+                params = inspect.signature(provider_extract).parameters
+                if "metrics_sink" in params:
+                    extra_kwargs: dict = {}
+                    # 回填信号同样不能因为换短文档闭包而丢（03 特性）。
+                    if "backfill_sink" in params:
+                        extra_kwargs["backfill_sink"] = short_backfill
+                    short_extractor = await provider_extract(
+                        domain_code, usage_sink=usage, metrics_sink=sink,
+                        **extra_kwargs)
         reviewed = await run_extraction_team(
             text, extractor=short_extractor, max_iters=max_iters)
         if sink:
-            dm = DocumentMetrics(document_id="chunked", n_chunks=1)
+            dm = DocumentMetrics(
+                document_id=document_id or "chunked", n_chunks=1)
             dm.add(merge_call_metrics(sink))
             reviewed.document_metrics = dm
         if reviewed.backfill is None:
@@ -236,7 +247,8 @@ async def run_chunked_team(
     # 只加观测：某块重试耗尽时仍像改动前一样整篇抛错（不把失败吞成部分结果）。
     # pipeline 会把文档级度量挂到异常上，截断/返工信号不会随异常蒸发。
     output = await pipeline.run(
-        _Doc(id="chunked", text=text, source="chunked", domain_code=domain_code),
+        _Doc(id=document_id or "chunked", text=text, source="chunked",
+             domain_code=domain_code),
         chunks)
     if usage is not None:
         usage.add(output.usage)

@@ -148,3 +148,42 @@ async def test_summary_aggregates_chunk_metrics_and_truncation(dash):
     row = await pool.fetchrow(
         "SELECT chunk_metrics FROM pipeline_runs WHERE document_id='chunked'")
     assert row["chunk_metrics"][0]["chunk_id"] == "x#c0000"
+
+
+@pytest.mark.asyncio
+async def test_summary_excludes_legacy_zero_phase_timings_from_measured():
+    """nit2：旧库 prefill_ms/decode_ms 是 NOT NULL DEFAULT 0，不能被当"已测"。
+
+    不依赖 DB：用假 pool 捕获 SQL，确认聚合按 >0 过滤；返回"零测量"行时
+    summary 必须给 None，而不是 0。
+    """
+    from moray.observability.dashboard import Dashboard
+
+    captured = {}
+
+    class _Pool:
+        async def fetchrow(self, query, *params):
+            captured["query"] = query
+            return {
+                "runs": 2, "passed": 1, "avg_span_ratio": 1.0,
+                "avg_review_iters": 1.0, "total_open_issues": 0,
+                "total_entities": 0, "total_relations": 0,
+                "auto_merged": 0, "queued": 0, "created": 0,
+                "input_tokens": 0, "output_tokens": 0,
+                "cached_input_tokens": 0, "avg_latency_ms": 0.0,
+                "chunk_calls": 1, "total_attempts": 1,
+                "truncated_chunks": 0, "truncation_signals": 0,
+                "reworked_chunks": 0, "wait_ms": 0,
+                "chunk_latency_ms": 0, "prefill_ms": 0, "decode_ms": 0,
+                # 旧库两行都是 0（默认值），但按 >0 过滤后一行都没测到
+                "chunk_latency_measured_runs": 0,
+                "prefill_measured_runs": 0, "decode_measured_runs": 0,
+            }
+
+    s = await Dashboard(_Pool()).summary()
+    q = captured["query"]
+    assert "count(prefill_ms) FILTER (WHERE prefill_ms > 0)" in q
+    assert "count(decode_ms) FILTER (WHERE decode_ms > 0)" in q
+    assert "count(chunk_latency_ms) FILTER" in q
+    assert s["prefill_ms"] is None and s["decode_ms"] is None
+    assert s["chunk_latency_ms"] is None

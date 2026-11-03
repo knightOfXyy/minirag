@@ -173,7 +173,8 @@ def create_app(
             reviewed = await run_chunked_team(
                 req.text, extractor=extractor_fn,
                 provider=d.extractor_provider, domain_code=req.domain_code,
-                max_iters=3, usage=usage,
+                max_iters=3, usage=usage, document_id=doc_id,
+                metrics_sink=[],
                 chunk_threshold_units=cs["threshold_units"],
                 chunk_max_units=cs["max_units"],
                 chunk_overlap_units=cs["overlap_units"],
@@ -190,6 +191,14 @@ def create_app(
                         document_id=doc_id, domain_code=req.domain_code,
                         document_metrics=getattr(exc, "document_metrics", None),
                         error=str(exc), source="api", model_name="api",
+                        # 短文档在旧闭环直接抛错时异常上没有分块度量，
+                        # 用它已经累加过的 usage 兜底，token 成本不能丢。
+                        input_tokens=(usage.input_tokens
+                                      if usage is not None else 0),
+                        output_tokens=(usage.output_tokens
+                                       if usage is not None else 0),
+                        cached_input_tokens=(usage.cached_input_tokens
+                                             if usage is not None else 0),
                         latency_ms=int(
                             (time.perf_counter() - extract_started_at) * 1000)))
                 except Exception:  # noqa: BLE001 观测失败不能掩盖原始抽取错误

@@ -231,19 +231,32 @@ class ChunkedExtractionPipeline:
                 output, hit = await self._extract_chunk_output(mini_doc, chunk)
             except ExtractionError as exc:
                 record = exc.metrics
-                if record is not None:
+                if record is None:
+                    # 兜底：底层异常没带度量时也要留一条 unknown 记录，
+                    # 否则 chunk_calls < 块数，聚合会静默少算一块。
+                    logger.warning(
+                        "分块失败但异常未带度量，补一条 unknown 记录 "
+                        "chunk_id=%s error=%r", chunk.id, str(exc))
+                    record = ChunkCallMetrics(
+                        chunk_id=chunk.id, attempts=1,
+                        finish_reason=FINISH_UNKNOWN,
+                        input_tokens=0, output_tokens=0,
+                        cached_input_tokens=0, wait_s=wait_s,
+                        prefill_s=None, decode_s=None,
+                        error=str(exc))
+                else:
                     # Extractor 不知道排队耗时，在这一层补上
                     record.wait_s = wait_s
-                    metrics.add(record)
-                    if record.truncated:
-                        logger.error(
-                            "分块最终因长度截断失败 event=chunk_truncated "
-                            "chunk_id=%s attempts=%d out_tokens=%d truncated=True",
-                            chunk.id, record.attempts, record.output_tokens,
-                            extra={"event": "chunk_truncated", "truncated": True,
-                                   "chunk_id": chunk.id,
-                                   "attempts": record.attempts},
-                        )
+                metrics.add(record)
+                if record.truncated:
+                    logger.error(
+                        "分块最终因长度截断失败 event=chunk_truncated "
+                        "chunk_id=%s attempts=%d out_tokens=%d truncated=True",
+                        chunk.id, record.attempts, record.output_tokens,
+                        extra={"event": "chunk_truncated", "truncated": True,
+                               "chunk_id": chunk.id,
+                               "attempts": record.attempts},
+                    )
                 # 失败块已经花掉的 token 也要进文档用量：只记成功块会让
                 # 成本被系统性低估（尤其在截断导致整块返工失败时）。
                 failed_usage = Usage(

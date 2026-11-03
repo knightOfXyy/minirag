@@ -1,17 +1,16 @@
 {
   "meta": {
-    "provider": "volcengine",
-    "chat_model": "deepseek-v4-flash-ga",
-    "generated_at": "2026-11-03",
-    "artifact_commit": "74f8fc6",
-    "meta_source": "backfilled from docs/chunk-metrics-01.md 与 .env.example 默认值；之后的新基线由 scripts/chunk_metrics_baseline.py 自动写入完整 meta（含 git_sha）"
+    "provider": "deepseek",
+    "chat_model": "deepseek-flash",
+    "generated_at": "2026-11-03T02:16:35.444082+00:00",
+    "git_sha": "1ede5610a554b093d0e2eaa1c5ad184cbe8b4600"
   },
   "runs": [
     {
       "sample": "news_long_002.txt",
       "mode": "non_stream",
       "n_chunks": 3,
-      "wall_s": 13.8923,
+      "wall_s": 7.3272,
       "chunk_settings": {
         "threshold_units": 4000,
         "max_units": 1500,
@@ -28,22 +27,24 @@
         "rework_rate": 0.0,
         "reworked_chunks": 0,
         "wait_s": 1.3e-05,
+        "latency_s": 19.747907,
         "prefill_s": null,
         "decode_s": null,
-        "input_tokens": 11661,
-        "output_tokens": 9636,
-        "cached_input_tokens": 10880
+        "input_tokens": 7487,
+        "output_tokens": 5935,
+        "cached_input_tokens": 6912
       },
       "chunks": [
         {
-          "chunk_id": "doc#c0001",
+          "chunk_id": "doc#c0000",
           "attempts": 1,
           "finish_reason": "tool_calls",
           "truncated": false,
-          "input_tokens": 2503,
-          "output_tokens": 1924,
+          "input_tokens": 2497,
+          "output_tokens": 1857,
           "cached_input_tokens": 2304,
-          "wait_s": 5e-06,
+          "wait_s": 4e-06,
+          "latency_s": 6.149633,
           "prefill_s": null,
           "decode_s": null,
           "reworked": false,
@@ -54,14 +55,15 @@
           "error": ""
         },
         {
-          "chunk_id": "doc#c0000",
+          "chunk_id": "doc#c0001",
           "attempts": 1,
           "finish_reason": "tool_calls",
           "truncated": false,
-          "input_tokens": 6671,
-          "output_tokens": 3165,
-          "cached_input_tokens": 6272,
-          "wait_s": 4e-06,
+          "input_tokens": 2503,
+          "output_tokens": 2168,
+          "cached_input_tokens": 2304,
+          "wait_s": 5e-06,
+          "latency_s": 7.266724,
           "prefill_s": null,
           "decode_s": null,
           "reworked": false,
@@ -77,9 +79,10 @@
           "finish_reason": "tool_calls",
           "truncated": false,
           "input_tokens": 2487,
-          "output_tokens": 4547,
+          "output_tokens": 1910,
           "cached_input_tokens": 2304,
-          "wait_s": 3e-06,
+          "wait_s": 4e-06,
+          "latency_s": 6.33155,
           "prefill_s": null,
           "decode_s": null,
           "reworked": false,
@@ -90,7 +93,7 @@
           "error": ""
         }
       ],
-      "output_tokens_mean": 3212
+      "output_tokens_mean": 1978.33
     }
   ]
 }

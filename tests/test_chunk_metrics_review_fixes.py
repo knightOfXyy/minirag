@@ -107,7 +107,7 @@ async def test_short_document_truncation_signal_reaches_document_metrics():
 
     reviewed = await run_chunked_team(
         "短文本", extractor=extractor_fn, provider=provider,
-        chunk_threshold_units=4000)
+        chunk_threshold_units=4000, metrics_sink=[])
     dm = reviewed.document_metrics
     assert dm is not None
     s = dm.summary()
@@ -178,6 +178,12 @@ async def test_api_failure_records_document_metrics_with_truncation(monkeypatch)
     assert row.truncated_chunks >= 1
     assert row.truncation_signals >= 1
     assert row.chunk_metrics_json[0]["truncated"] is True
+    # S3：失败块的 token 成本必须进看板行（每块 200/400，按块汇总）
+    assert row.input_tokens == sum(
+        c["input_tokens"] for c in row.chunk_metrics_json)
+    assert row.output_tokens == sum(
+        c["output_tokens"] for c in row.chunk_metrics_json)
+    assert row.input_tokens > 0 and row.output_tokens > 0
 
 
 @pytest.mark.asyncio
@@ -220,6 +226,10 @@ async def test_batch_handler_failure_records_document_metrics(monkeypatch, tmp_p
     assert dash.rows[0].source == "job"
     assert dash.rows[0].truncated_chunks >= 1
     assert dash.rows[0].review_passed is False
+    # S3（批量侧）：失败块 token 成本同样不能丢
+    assert dash.rows[0].input_tokens == sum(
+        c["input_tokens"] for c in dash.rows[0].chunk_metrics_json)
+    assert dash.rows[0].input_tokens > 0
 
 
 # 8 个块：c1 校验返工；c3 首次 length 后救回；其余一次过
@@ -317,13 +327,19 @@ async def test_api_and_batch_handler_share_same_chunk_field_set_offline(
 
     assert set(api_cm["summary"]) == set(job_cm["summary"])
     assert set(api_cm["chunks"][0]) == set(job_cm["chunks"][0])
+    # nit1：文档级度量必须带真实 document_id，不能写占位串 "chunked"
+    assert api_cm["document_id"] == "api-offline"
+    assert job_cm["document_id"] == "job-offline"
     assert api_cm["summary"]["chunk_calls"] == 8
     assert api_cm["summary"]["total_attempts"] == 10
     assert api_cm["summary"]["truncation_signals"] == 1
-    # wait_s 是真实排队计时，两个进程入口不可能逐字相同；其余字段必须一致。
-    api_summary = {k: v for k, v in api_cm["summary"].items() if k != "wait_s"}
-    job_summary = {k: v for k, v in job_cm["summary"].items() if k != "wait_s"}
+    # wait_s 是真实排队计时，两个进程入口不可能逐字相同；document_id 各自
+    # 真实（上面已单独断言）。其余字段必须逐字一致。
+    skip = {"wait_s", "document_id"}
+    api_summary = {k: v for k, v in api_cm["summary"].items() if k not in skip}
+    job_summary = {k: v for k, v in job_cm["summary"].items() if k not in skip}
     assert api_summary == job_summary
+    assert set(api_cm["summary"]) == set(job_cm["summary"])
 
     assert api_dash.rows[0].source == "api"
     assert job_dash.rows[0].source == "job"
@@ -331,3 +347,55 @@ async def test_api_and_batch_handler_share_same_chunk_field_set_offline(
     assert job_dash.rows[0].truncation_signals == 1
 
 
+
+
+@pytest.mark.asyncio
+async def test_short_document_does_not_implicitly_replace_caller_extractor():
+    """nit4：短文档默认使用调用方传入的 extractor，不偷偷换成 provider 闭包。
+
+    需要 provider 的 metrics_sink 时由调用方显式传 metrics_sink=...；否则
+    保持"传什么就用什么"的语义（避免隐式换实现带来的行为漂移）。
+    """
+    class _ProviderMustNotBeUsed:
+        def __init__(self):
+            self.extract_calls = 0
+
+        async def extract(self, domain_code, usage_sink=None, metrics_sink=None):
+            self.extract_calls += 1
+
+            async def _fn(text, feedback=None):
+                raise AssertionError("不该隐式替换调用方的 extractor")
+
+            return _fn
+
+    async def extractor_fn(text, feedback=None):
+        return ExtractionResult(entities=[], relations=[])
+
+    provider = _ProviderMustNotBeUsed()
+    reviewed = await run_chunked_team(
+        "短文本", extractor=extractor_fn, provider=provider,
+        chunk_threshold_units=4000)
+    assert reviewed.accepted is True
+    assert provider.extract_calls == 0
+    assert reviewed.document_metrics is None
+
+
+@pytest.mark.asyncio
+async def test_short_document_collects_metrics_when_sink_explicitly_requested():
+    """nit4：显式传 metrics_sink 时才向 provider 要带度量的闭包。"""
+    extractor = _ProbeExtractor([
+        (_BAD, {"finish_reason": "length", "output_tokens": 200}),
+        (_GOOD, {"finish_reason": "stop"}),
+    ])
+    provider = _ShortProvider(extractor)
+
+    async def extractor_fn(text, feedback=None):
+        raise AssertionError("显式请求 metrics_sink 时应使用 provider 闭包")
+
+    sink: list = []
+    reviewed = await run_chunked_team(
+        "短文本", extractor=extractor_fn, provider=provider,
+        chunk_threshold_units=4000, metrics_sink=sink)
+    assert len(sink) >= 1
+    assert reviewed.document_metrics is not None
+    assert reviewed.document_metrics.summary()["truncation_signals"] == 1

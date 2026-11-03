@@ -1,17 +1,16 @@
 {
   "meta": {
-    "provider": "volcengine",
-    "chat_model": "deepseek-v4-flash-ga",
-    "generated_at": "2026-11-03",
-    "artifact_commit": "74f8fc6",
-    "meta_source": "backfilled from docs/chunk-metrics-01.md 与 .env.example 默认值；之后的新基线由 scripts/chunk_metrics_baseline.py 自动写入完整 meta（含 git_sha）"
+    "provider": "deepseek",
+    "chat_model": "deepseek-flash",
+    "generated_at": "2026-11-03T02:17:11.145675+00:00",
+    "git_sha": "1ede5610a554b093d0e2eaa1c5ad184cbe8b4600"
   },
   "runs": [
     {
       "sample": "news_long_002.txt",
       "mode": "stream",
       "n_chunks": 3,
-      "wall_s": 18.5903,
+      "wall_s": 29.0782,
       "chunk_settings": {
         "threshold_units": 4000,
         "max_units": 1500,
@@ -27,25 +26,27 @@
         "truncation_signals": 0,
         "rework_rate": 0.0,
         "reworked_chunks": 0,
-        "wait_s": 1.3e-05,
-        "prefill_s": 2.049943,
-        "decode_s": 26.30638,
-        "input_tokens": 7487,
-        "output_tokens": 9392,
-        "cached_input_tokens": 6912
+        "wait_s": 1.4e-05,
+        "latency_s": 41.722613,
+        "prefill_s": 2.332291,
+        "decode_s": 38.146375,
+        "input_tokens": 14996,
+        "output_tokens": 13589,
+        "cached_input_tokens": 14208
       },
       "chunks": [
         {
-          "chunk_id": "doc#c0001",
+          "chunk_id": "doc#c0000",
           "attempts": 1,
           "finish_reason": "tool_calls",
           "truncated": false,
-          "input_tokens": 2503,
-          "output_tokens": 1454,
+          "input_tokens": 2497,
+          "output_tokens": 1812,
           "cached_input_tokens": 2304,
-          "wait_s": 6e-06,
-          "prefill_s": 0.679247,
-          "decode_s": 4.223152,
+          "wait_s": 4e-06,
+          "latency_s": 6.090179,
+          "prefill_s": 0.520827,
+          "decode_s": 5.232756,
           "reworked": false,
           "truncated_attempts": 0,
           "attempt_finish_reasons": [
@@ -54,16 +55,17 @@
           "error": ""
         },
         {
-          "chunk_id": "doc#c0000",
+          "chunk_id": "doc#c0001",
           "attempts": 1,
           "finish_reason": "tool_calls",
           "truncated": false,
-          "input_tokens": 2497,
-          "output_tokens": 1622,
+          "input_tokens": 2503,
+          "output_tokens": 2023,
           "cached_input_tokens": 2304,
-          "wait_s": 3e-06,
-          "prefill_s": 0.625775,
-          "decode_s": 4.70087,
+          "wait_s": 7e-06,
+          "latency_s": 6.631905,
+          "prefill_s": 0.371148,
+          "decode_s": 5.993536,
           "reworked": false,
           "truncated_attempts": 0,
           "attempt_finish_reasons": [
@@ -76,21 +78,23 @@
           "attempts": 1,
           "finish_reason": "tool_calls",
           "truncated": false,
-          "input_tokens": 2487,
-          "output_tokens": 6316,
-          "cached_input_tokens": 2304,
+          "input_tokens": 9996,
+          "output_tokens": 9754,
+          "cached_input_tokens": 9600,
           "wait_s": 4e-06,
-          "prefill_s": 0.744921,
-          "decode_s": 17.382358,
+          "latency_s": 29.000529,
+          "prefill_s": 1.440316,
+          "decode_s": 26.920083,
           "reworked": false,
           "truncated_attempts": 0,
           "attempt_finish_reasons": [
+            "tool_calls",
             "tool_calls"
           ],
           "error": ""
         }
       ],
-      "output_tokens_mean": 3130.67
+      "output_tokens_mean": 4529.67
     }
   ]
 }

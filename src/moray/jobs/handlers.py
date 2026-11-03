@@ -89,7 +89,8 @@ async def build_document_handler(
             reviewed = await run_chunked_team(
                 text, extractor=active_extractor,
                 provider=extractor_provider, domain_code=domain_code,
-                max_iters=3, usage=usage,
+                max_iters=3, usage=usage, document_id=doc.id,
+                metrics_sink=[],
                 chunk_threshold_units=_cs["threshold_units"],
                 chunk_max_units=_cs["max_units"],
                 chunk_overlap_units=_cs["overlap_units"],
@@ -106,6 +107,10 @@ async def build_document_handler(
                         document_id=doc.id, domain_code=doc.domain_code,
                         document_metrics=getattr(exc, "document_metrics", None),
                         error=str(exc), source="job", model_name=model_name,
+                        # 短文档直接抛错时没有分块度量，用 usage 兜底成本
+                        input_tokens=usage.input_tokens,
+                        output_tokens=usage.output_tokens,
+                        cached_input_tokens=usage.cached_input_tokens,
                         latency_ms=int((time.perf_counter() - t0) * 1000)))
                 except Exception:  # noqa: BLE001 观测失败不能掩盖原始抽取错误
                     logger.warning(

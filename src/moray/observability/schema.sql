@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     reworked_chunks     INTEGER NOT NULL DEFAULT 0,  -- 发生校验返工的块数
     rework_rate         REAL    NOT NULL DEFAULT 0,  -- reworked_chunks/chunk_calls
     wait_ms             INTEGER NOT NULL DEFAULT 0,  -- 排队/限流等待总耗时
+    -- 非流式也测得到的墙钟总耗时（一次 agent.reply），不是 prefill/decode
+    chunk_latency_ms    INTEGER,
     -- NULL=该请求形态下不可测（生产默认非流式）；不要写 0 冒充"测到了"
     prefill_ms          INTEGER,                     -- 首 token（prefill）总耗时
     decode_ms           INTEGER,                     -- 解码总耗时
@@ -62,6 +64,7 @@ ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS truncation_signals INTEGER NO
 ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS reworked_chunks INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS rework_rate REAL NOT NULL DEFAULT 0;
 ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS wait_ms INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS chunk_latency_ms INTEGER;
 ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS prefill_ms INTEGER;
 ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS decode_ms INTEGER;
 ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS chunk_metrics JSONB;

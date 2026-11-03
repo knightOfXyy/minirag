@@ -463,3 +463,56 @@ async def test_run_chunked_team_keeps_raising_on_permanent_chunk_failure():
     dm = getattr(excinfo.value, "document_metrics", None)
     assert dm is not None, "失败也要带文档级度量，截断信号不能被异常吞掉"
     assert dm.summary()["truncated_chunks"] == 1
+
+
+def test_document_summary_carries_measurable_latency_without_phase_split():
+    """S1：非流式分段不可测时，文档级仍有可测的墙钟延迟（不是 0 冒充）。"""
+    docs = DocumentMetrics(document_id="d", n_chunks=2)
+    docs.add(ChunkCallMetrics(
+        chunk_id="c0", attempts=1, finish_reason="stop",
+        input_tokens=1, output_tokens=1, cached_input_tokens=0,
+        wait_s=0.0, prefill_s=None, decode_s=None, latency_s=0.4))
+    docs.add(ChunkCallMetrics(
+        chunk_id="c1", attempts=1, finish_reason="stop",
+        input_tokens=1, output_tokens=1, cached_input_tokens=0,
+        wait_s=0.0, prefill_s=None, decode_s=None, latency_s=0.6))
+    s = docs.summary()
+    assert s["latency_s"] == pytest.approx(1.0)
+    assert s["prefill_s"] is None and s["decode_s"] is None
+
+
+def test_document_metrics_chunks_are_serialized_in_stable_order():
+    """nit5：并发完成顺序会抖；序列化按 chunk_id 排序，基线 JSON 可稳定 diff。"""
+    dm = DocumentMetrics(document_id="d", n_chunks=3)
+    for cid in ("d#c0002", "d#c0000", "d#c0001"):
+        dm.add(ChunkCallMetrics(
+            chunk_id=cid, attempts=1, finish_reason="stop",
+            input_tokens=1, output_tokens=1, cached_input_tokens=0,
+            wait_s=0.0, prefill_s=None, decode_s=None))
+    assert [c["chunk_id"] for c in dm.to_dict()["chunks"]] == [
+        "d#c0000", "d#c0001", "d#c0002"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_synthesizes_unknown_record_when_metrics_missing():
+    """nit6：异常上没挂 metrics 时也要补一条 unknown，保证调用数=块数。"""
+    from moray.extraction import ExtractionError
+
+    text = "甲公司与乙公司签约。" * 8
+    chunks = Chunker(max_units=40, overlap_units=0).chunk_text(text)
+
+    class _NoMetricsExtractor:
+        domain = SimpleNamespace(code="general")
+        model_name = "fake"
+
+        async def extract(self, document):
+            raise ExtractionError("底层没带度量")
+
+    out = await ChunkedExtractionPipeline(
+        _NoMetricsExtractor(), concurrency=1).run(
+        Document(id="doc6", text=text), chunks, raise_on_chunk_error=False)
+    s = out.document_metrics.summary()
+    assert s["chunk_calls"] == len(chunks)
+    assert len(out.document_metrics.chunks) == len(chunks)
+    assert all(c.finish_reason == FINISH_UNKNOWN
+               for c in out.document_metrics.chunks)
