@@ -363,10 +363,7 @@ class Extractor:
         agent = self._build_agent()
         # 回填/审计用的原文：返工轮 document.text 可能已追加反馈，不能拿它
         # 当 span 坐标系（否则反馈里的实体名会回填出越界 span）。
-        source_text = (
-            document.source_text
-            if document.source_text is not None else document.text
-        )
+        source_text = document.audit_text
         # 供 ExtractionMetricsMiddleware 核对 span（中间件存在时才有用）
         setattr(agent, "_audit_source_text", source_text)
         # 同一次 reply 的回填缓存：中间件与抽取器显式传同一个字典（r11 N4），

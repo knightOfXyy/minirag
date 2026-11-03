@@ -585,10 +585,7 @@ class ChunkedExtractionPipeline:
         # 返工轮 text 可能追加了审校反馈，反馈里的别名不是正文（r5 F3）。
         # 空字符串是合法的「空正文」，不能回退到 text（r9 N12）：与
         # extractor 的 `is not None` 口径保持一致。
-        document_text = (
-            document.source_text
-            if document.source_text is not None else document.text
-        )
+        document_text = document.audit_text
         backfill: dict | None = None
         if backfill_reports:
             merged_report = merge_backfill_reports(

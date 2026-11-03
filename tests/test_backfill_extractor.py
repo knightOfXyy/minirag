@@ -188,8 +188,14 @@ async def test_chunked_pipeline_backfills_then_maps_to_global(monkeypatch):
     assert out.backfill["relations_with_evidence"] == 2
 
 
-async def test_switch_off_does_not_backfill_model_fields_preserved():
-    """开关关：模型没给 mentions/confidence 时内核保持默认，不做任何回填。"""
+async def test_switch_off_does_not_backfill_and_keeps_field_defaults():
+    """关态不触发回填，模型缺省字段保持 Pydantic 默认值（r15 F6）。
+
+    注意：这条**不是**验收 7 的「逐字段一致」证据——它只断言瘦身 payload
+    喂给 full schema 时的字段默认值。真正的关闭态 golden 对拍见
+    ``test_r3_review_fixes.py::test_switch_off_extraction_output_matches_262319b_golden``
+    与 ``test_slim_schema.py::test_full_schema_and_prompt_match_pre_change_golden``。
+    """
     out = await _run(False)
     # 关闭路径完全不触碰回填，backfill 信号为 None，mentions 为空、置信度为模型值(全量 schema 缺省0)
     assert out.backfill is None

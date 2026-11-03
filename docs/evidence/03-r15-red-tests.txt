@@ -1,0 +1,136 @@
+FF.FFF                                                                   [100%]
+=================================== FAILURES ===================================
+________ test_overlap_block_ambiguity_blocks_later_single_owner_mention ________
+
+    @pytest.mark.asyncio
+    async def test_overlap_block_ambiguity_blocks_later_single_owner_mention():
+        """块内已判歧义时，后续块只抽到一个实体也不能写 mention（r15 F1）。"""
+        out = await _run_overlap_single_owner()
+    
+        owners = [e for e in out.result.entities if e.name == "苹果"]
+        assert {e.type for e in owners} == {"ORG", "MISC"}
+>       assert all(e.mentions == [] for e in owners), (
+            "歧义 span 不得归属任何实体，否则结果与 ambiguous_mentions 自相矛盾")
+E       AssertionError: 歧义 span 不得归属任何实体，否则结果与 ambiguous_mentions 自相矛盾
+E       assert False
+E        +  where False = all(<generator object test_overlap_block_ambiguity_blocks_later_single_owner_mention.<locals>.<genexpr> at 0x745c617d0860>)
+
+tests/test_r15_review_fixes.py:74: AssertionError
+____ test_merge_drops_missing_relation_when_overlapping_block_has_evidence _____
+
+    def test_merge_drops_missing_relation_when_overlapping_block_has_evidence():
+        """块 0 同句有证据、块 1 只命中一个端点：不能同时报「无证据」。"""
+        text0 = "张三创立腾飞公司。"
+        text1 = "张三到了会场。"
+        relations = [Relation(head="张三", predicate="创立", tail="腾飞公司")]
+        r0 = _report(
+            text0, "d#c0", 0,
+            entities=[Entity(name="张三", type="PER"),
+                      Entity(name="腾飞公司", type="ORG")],
+            relations=relations)
+        r1 = _report(
+            text1, "d#c1", len(text0),
+            entities=[Entity(name="张三", type="PER"),
+                      Entity(name="腾飞公司", type="ORG")],
+            relations=relations)
+        assert r0.relation_evidence_candidates
+        assert r1.relations_without_evidence
+    
+        merged = merge_backfill_reports([r0, r1])
+    
+        assert merged.relation_evidence_candidates
+>       assert merged.relations_without_evidence == [], (
+            "同一三元组已有证据时，文档级「无证据」信号必须对账删除")
+E       AssertionError: 同一三元组已有证据时，文档级「无证据」信号必须对账删除
+E       assert [{'head': '张三... 'd#c1', ...}] == []
+E         
+E         Left contains one more item: {'head': '张三', 'predicate': '创立', 'tail': '腾飞公司', 'chunk_id': 'd#c1', ...}
+E         Use -v to get more diff
+
+tests/test_r15_review_fixes.py:123: AssertionError
+_____________ test_merged_candidates_are_globally_distance_sorted ______________
+
+    def test_merged_candidates_are_globally_distance_sorted():
+        """后一个块更近的候选不能被「块顺序」挤到后面（r15 F4）。"""
+        key = '["张三", "创立", "腾飞公司"]'
+        r0 = BackfillReport(
+            chunk_id="d#c0", chunk_start=0,
+            relation_evidence_candidates={
+                key: [_candidate(50, 500, selected=True), _candidate(60, 600)]})
+        r1 = BackfillReport(
+            chunk_id="d#c1", chunk_start=1000,
+            relation_evidence_candidates={
+                key: [_candidate(1, 1000), _candidate(2, 2000)]})
+    
+        merged = merge_backfill_reports([r0, r1])
+        cands = merged.relation_evidence_candidates[key]
+    
+        # selected（块 0 真正用于 evidence_span 的对）固定首条。
+        assert cands[0]["selected"] is True
+        assert cands[0]["distance"] == 50
+        # 其余按全局距离升序，而不是「块 0 全部在前、块 1 在后」。
+>       assert [c["distance"] for c in cands[1:]] == [1, 2, 60]
+E       assert [60, 1, 2] == [1, 2, 60]
+E         
+E         At index 0 diff: 60 != 1
+E         Use -v to get more diff
+
+tests/test_r15_review_fixes.py:179: AssertionError
+_____________ test_document_audit_text_preserves_empty_source_text _____________
+
+    def test_document_audit_text_preserves_empty_source_text():
+        """空字符串是合法空正文，不能回退到带反馈的 text。"""
+>       assert Document(id="d", text="正文+反馈", source_text="").audit_text == ""
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_r15_review_fixes.py:192: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = Document(id='d', text='正文+反馈', source_text='', title='', source='unknown', domain_code='general')
+item = 'audit_text'
+
+    def __getattr__(self, item: str) -> Any:
+        private_attributes = object.__getattribute__(self, '__private_attributes__')
+        if item in private_attributes:
+            attribute = private_attributes[item]
+            if hasattr(attribute, '__get__'):
+                return attribute.__get__(self, type(self))  # type: ignore
+    
+            try:
+                # Note: self.__pydantic_private__ cannot be None if self.__private_attributes__ has items
+                return self.__pydantic_private__[item]  # type: ignore
+            except KeyError as exc:
+                raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}') from exc
+        else:
+            # `__pydantic_extra__` can fail to be set if the model is not yet fully initialized.
+            # See `BaseModel.__repr_args__` for more details
+            try:
+                pydantic_extra = object.__getattribute__(self, '__pydantic_extra__')
+            except AttributeError:
+                pydantic_extra = None
+    
+            if pydantic_extra and item in pydantic_extra:
+                return pydantic_extra[item]
+            else:
+                if hasattr(self.__class__, item):
+                    return super().__getattribute__(item)  # Raises AttributeError if appropriate
+                else:
+                    # this is the current error
+>                   raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E                   AttributeError: 'Document' object has no attribute 'audit_text'
+
+/home/dell/orca/workspaces/minirag/moray/.venv/lib/python3.12/site-packages/pydantic/main.py:1105: AttributeError
+__________ test_resolve_backfill_prefers_reviewed_then_sink_and_caps ___________
+
+    def test_resolve_backfill_prefers_reviewed_then_sink_and_caps():
+>       from moray.extraction.local_backfill import resolve_backfill
+E       ImportError: cannot import name 'resolve_backfill' from 'moray.extraction.local_backfill' (/tmp/opencode/r15-red/src/moray/extraction/local_backfill.py)
+
+tests/test_r15_review_fixes.py:197: ImportError
+=========================== short test summary info ============================
+FAILED tests/test_r15_review_fixes.py::test_overlap_block_ambiguity_blocks_later_single_owner_mention
+FAILED tests/test_r15_review_fixes.py::test_merge_drops_missing_relation_when_overlapping_block_has_evidence
+FAILED tests/test_r15_review_fixes.py::test_merged_candidates_are_globally_distance_sorted
+FAILED tests/test_r15_review_fixes.py::test_document_audit_text_preserves_empty_source_text
+FAILED tests/test_r15_review_fixes.py::test_resolve_backfill_prefers_reviewed_then_sink_and_caps
+5 failed, 1 passed in 0.84s

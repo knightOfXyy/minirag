@@ -18,7 +18,8 @@
   归属冲突），该次出现被标记为「歧义未归属」，不写进任何实体，只计入质量信号。
 * **关系证据**：按「头、尾实体在同一句中共现」定位；一句内有多对时取最近的
   一对作为 evidence_span，候选按距离保留最近的至多 2000 条（进程内软上限，
-  见 r14 F1）；跨句/跨块不臆造，证据留空。
+  见 r14 F1）；跨块汇总后 selected 固定首条，其余候选按全局距离排序（r15
+  F4）；跨句/跨块不臆造，证据留空。
 
 本模块是纯函数，不调模型、不读环境、不可变地返回一个新的 ExtractionResult，
 便于离线单测与评测复现。全局偏移不在此处理——调用方对块文本回填得到「块内
@@ -220,6 +221,20 @@ def serialize_backfill_for_output(
             backfill.get("relation_evidence_candidates") or {}).items()
     }
     return data
+
+
+def resolve_backfill(reviewed, sink: dict | None = None) -> dict | None:
+    """取本次抽取的回填信号并在出网边界统一裁剪（r15 F8）。
+
+    API ``/extract`` 与批量作业两条主链此前各自复制同一段
+    ``reviewed.backfill if ... else sink.get(...)`` + 序列化表达式；以后再加
+    一个上限或语义改动很容易漏改一边。这里集中成单一入口：分块/审校路径
+    优先用 ``reviewed.backfill``，整篇闭包路径回退到 ``backfill_sink``。
+    """
+    backfill = getattr(reviewed, "backfill", None)
+    if backfill is None:
+        backfill = (sink or {}).get("backfill")
+    return serialize_backfill_for_output(backfill)
 
 
 @dataclass
@@ -847,12 +862,16 @@ def _upsert_ambiguous_mention(
     reason: str,
     source_chunks: list[str],
 ) -> None:
-    """按 (surface,start,end,candidates) 去重写入歧义条目并聚合来源块。
+    """按 (surface,start,end) 去重写入歧义条目、合并候选并聚合来源块。
 
     ``merge_backfill_reports`` 与 ``reconcile_span_ambiguity`` 共用同一套索引，
-    否则重叠块会在两条路径各产一条完全相同的歧义记录（r11 N1/ST5）。
+    否则重叠块会在两条路径各产一条歧义记录（r11 N1/ST5）。
+
+    r15 F1：键不再包含 candidates。同一处原文在不同块可能看到不同的候选
+    集合（块 0 同时抽到 ORG+MISC，块 1 只抽到 ORG）；它们必须合并成**一条**
+    记录、候选取并集，不能按候选集合拆成两条自相矛盾的歧义信号。
     """
-    key = (surface, start, end, tuple(sorted(candidates)))
+    key = (surface, start, end)
     chunks = [c for c in source_chunks if c]
     existing = index.get(key)
     if existing is None:
@@ -868,6 +887,9 @@ def _upsert_ambiguous_mention(
         index[key] = merged_am
         target.ambiguous_mentions.append(merged_am)
         return
+    for candidate in candidates:
+        if candidate not in existing.candidates:
+            existing.candidates.append(candidate)
     for cid in chunks:
         if cid not in existing.chunk_ids:
             existing.chunk_ids.append(cid)
@@ -897,7 +919,12 @@ def merge_backfill_reports(
     AC 扫描：真实分块里某块可能漏抽实体，导致它的别名从未进入该块的
     ``seen_literals``；只有整篇正文都找不到的字面才是幻觉（r4 S1）。
     ``relations_without_evidence`` 按三元组去重（不同块重复命中同一关系时
-    只保留一条，chunk_ids 记录来源块），避免按块堆叠把计数放大。
+    只保留一条，chunk_ids 记录来源块），避免按块堆叠把计数放大。合并结束后
+    再与 ``relation_evidence_candidates`` 对账：同一三元组只要在任一重叠块
+    拿到了证据，就从「文档级无证据」列表里删掉（r15 F3），两条路径不再
+    自相矛盾。``relation_evidence_candidates`` 每个 bucket 在跨块拼接后按
+    全局 ``(distance, head_start, tail_start)`` 排序，selected（首个提供证据
+    的块）固定首条（r15 F4），对外截断不会因块顺序丢掉更近的候选。
 
     ``single_chunk_covers_document``：本次汇总的报告就是整篇正文（单块文档）。
     此时块扫描已经覆盖全文，别名幻觉判定不需要再做第二次整篇 AC 扫描
@@ -993,6 +1020,26 @@ def merge_backfill_reports(
         if len(selected_indices) > 1:
             for i in selected_indices[1:]:
                 bucket[i]["selected"] = False
+        # 跨块候选窗口必须是「全局最近」而不是「块 0 的候选全部在前」
+        # （r15 F4）。selected 固定首条（对外裁剪保证证据 span 可观测），
+        # 其余按 (distance, head_start, tail_start) 稳定排序。
+        bucket.sort(key=lambda c: (
+            0 if c.get("selected") else 1,
+            c.get("distance") if c.get("distance") is not None else 0,
+            c.get("head_start") if c.get("head_start") is not None else 0,
+            c.get("tail_start") if c.get("tail_start") is not None else 0,
+        ))
+    # 同一三元组在块 0 有证据、在块 1 只命中一个端点时，两条路径会各留
+    # 一条记录。合并结束后以「有证据」为准，删掉 missing 里的重复项
+    # （r15 F3）：``relations_without_evidence`` 的语义是文档级无证据。
+    evidence_keys = set(merged.relation_evidence_candidates)
+    if evidence_keys:
+        merged.relations_without_evidence = [
+            entry for entry in merged.relations_without_evidence
+            if json.dumps(
+                [entry.get("head"), entry.get("predicate"), entry.get("tail")],
+                ensure_ascii=False) not in evidence_keys
+        ]
     # 真实分块的盲点：某块漏抽实体时，该实体的别名不会进入那一块的模式集，
     # 于是 seen_literals 里没有它，即使正文里明明存在。对「仍可能被判幻觉」
     # 的候选别名在整篇正文上补一次 AC 扫描（候选数远小于实体别名数，仍是
@@ -1042,10 +1089,24 @@ def reconcile_span_ambiguity(
     索引：块内已判歧义、另外两块各归属一方的场景只留一条，``chunk_ids``
     聚合全部参与块（``span_chunk_ids`` 由 pipeline 从各块结果反查）。
 
+    r15 F1：``report.ambiguous_mentions`` 里已经是全局坐标的歧义 span 也算
+    「虚拟 owner」。否则「块 0 同时抽到 ORG+MISC 判歧义、重叠块 1/2 只抽到
+    ORG」时，归并结果只看到一个 ORG owner，会把 mention 写给 ORG，与歧义
+    信号自相矛盾。落在这类 span 上的 mention 一律撤销，候选与已有歧义条目
+    求并集（``_upsert_ambiguous_mention`` 按 span 去重）。
+
     计数口径不变：``entities_grounded`` 等仍是 chunk-weighted 计数（r4 N4），
     这里只修「写进哪个实体」的归属冲突，不重算块加权比率；被撤销的 mention
     数量单独记进 ``reconciled_unattributed``（r11 N2）。
     """
+    # 块内歧义已经是全局坐标（merge_backfill_reports 已平移）；候选 >1 的
+    # span 代表「这里明确不能归属任何单一实体」。
+    ambiguous_spans: dict[tuple[str, int, int], list[str]] = {}
+    for am in report.ambiguous_mentions:
+        if len(am.candidates) > 1:
+            ambiguous_spans.setdefault(
+                (am.surface, am.start, am.end), list(am.candidates))
+
     owners: dict[tuple[str, int, int], list[int]] = {}
     deduped: list[Entity] = []
     for ei, ent in enumerate(result.entities):
@@ -1068,7 +1129,10 @@ def reconcile_span_ambiguity(
             ent if len(mentions) == len(ent.mentions)
             else ent.model_copy(update={"mentions": mentions}))
 
-    conflicts = {key: eis for key, eis in owners.items() if len(eis) > 1}
+    conflicts = {
+        key: eis for key, eis in owners.items()
+        if len(eis) > 1 or key in ambiguous_spans
+    }
     if not conflicts:
         return (
             ExtractionResult(
@@ -1098,17 +1162,23 @@ def reconcile_span_ambiguity(
 
     # 复用 merge 的歧义去重索引：块内已产出的同一处歧义只补来源块，不再 append。
     ambiguous_index = {
-        (am.surface, am.start, am.end, tuple(sorted(am.candidates))): am
+        (am.surface, am.start, am.end): am
         for am in report.ambiguous_mentions
     }
     for (surface, start, end), eis in sorted(
             conflicts.items(), key=lambda kv: (kv[0][1], kv[0][2], kv[0][0])):
         source_chunks = list(
             (span_chunk_ids or {}).get((surface, start, end)) or [])
+        candidates = [entity_signal_key(result.entities[i]) for i in eis]
+        # 与块内歧义已有的候选求并集：块 1/2 只抽到 ORG 时，也不能把
+        # MISC 从「归属多个实体」的信号里抹掉（r15 F1）。
+        for candidate in ambiguous_spans.get((surface, start, end), ()):
+            if candidate not in candidates:
+                candidates.append(candidate)
         _upsert_ambiguous_mention(
             ambiguous_index, report,
             surface=surface, start=start, end=end,
-            candidates=[entity_signal_key(result.entities[i]) for i in eis],
+            candidates=candidates,
             reason="同一处原文归属多个逻辑实体（跨块归并）",
             source_chunks=source_chunks)
 
