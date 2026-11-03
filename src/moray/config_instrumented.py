@@ -224,6 +224,8 @@ def _make_instrumented(base_cls: type):
 
         async def _parse_stream_response(self, start_datetime, response):
             tee = _NativeStreamTee(response)
+            # 计时起点是解析器首次迭代（响应头已到），不含网络 RTT/服务端
+            # 排队；因此 prefill_s 是下界，不是"请求发出 -> 首 token"的全量。
             started = time.perf_counter()
             base_stream = super()._parse_stream_response(start_datetime, tee)
             async for frame in instrument_stream_with_signals(

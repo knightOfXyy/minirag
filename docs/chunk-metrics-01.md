@@ -68,21 +68,23 @@ python scripts/chunk_metrics_baseline.py --repeat-tokens 12 --stream \
 ```
 
 非流式 `data/gold/chunk_metrics_baseline.json`：3 块，输出 token 均值
-**4540/块**，截断 0、返工 0；墙钟 29.8s（并发 4）。**该文件的分段耗时为
-`null`**（生产非流式不可测），但每块有真实的 `latency_s`（6.0–29.7s），
-`summary.latency_s=41.77s`（并发调用的墙钟之和，会大于总墙钟）。
+**1978.33/块**，截断 0、返工 0；墙钟 7.33s（并发 4）。**该文件的分段耗时为
+`null`**（生产非流式不可测），但每块有真实的 `latency_s`（6.15/7.27/6.33s），
+`summary.latency_s=19.75s`（并发调用的墙钟之和，会大于总墙钟）。
 
 流式 `data/gold/chunk_metrics_baseline_stream.json`（实测分段）：
 
 | 块 | prefill_s | decode_s | latency_s | out tokens |
 |---|---|---|---|---|
-| c0 | 0.395 | 5.308 | — | 1861 |
-| c1 | 0.646 | 4.708 | — | 1628 |
-| c2 | 0.610 | 5.025 | — | 1676 |
+| c0 | 0.521 | 5.233 | 6.09 | 1812 |
+| c1 | 0.371 | 5.994 | 6.63 | 2023 |
+| c2 | 1.440 | 26.920 | 29.00 | 9754 |
 
-总 prefill 1.65s、decode 15.04s（占绝大部分）——**时间几乎全在解码**，
-这正是工单 03（输出瘦身）与 04（块预算）的数据依据。绝对值随模型生成长度抖动，
-对比时看比例与截断计数，不看单次绝对值。
+总 prefill 2.33s、decode 38.15s（占二者之和的 ~94%）——**时间几乎全在解码**，
+这正是工单 03（输出瘦身）与 04（块预算）的数据依据。本轮流式的 c2 在同一个
+`reply` 内发生了 2 次模型调用（`attempt_finish_reasons=["tool_calls","tool_calls"]`），
+token 按调用累计；绝对值随模型生成长度抖动，对比时看比例与截断计数，
+不看单次绝对值。
 
 ## 契约样例（不联网假模型，POST /extract，ingest=false，8 块含 1 返工 + 1 截断救回）
 
