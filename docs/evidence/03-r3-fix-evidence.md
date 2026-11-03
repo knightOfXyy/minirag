@@ -6,7 +6,7 @@
   再在其上补 r3 修复（合并方式经协调者确认，仅动临时分支）。
 - 测试：`ARK_API_KEY=dummy PYTHONPATH=src python -m pytest -q` →
   **308 passed, 65 skipped**；其中 r3 回归文件
-  `tests/test_r3_review_fixes.py` 17 passed（修复前 13 failed）。
+  `tests/test_r3_review_fixes.py` 17 passed（修复前 13 failed；N9 看板用例另补 1 red）。
 - golden：`tests/golden/r3_switch_off_262319b.json` 由 **262319b 源码**
   + 固定模型桩生成（脚本 `/tmp/opencode/gen_r3_golden.py`，非被测实现自证）。
 
@@ -26,7 +26,7 @@
 | N10 | `naive_merge` 默认值改变关闭态直接调用行为 | 默认改回 `merge_relation_duplicates=False`（262319b 旧语义）；pipeline 仅在 slim 打开时显式传 True | `test_naive_merge_default_keeps_pre_change_semantics` |
 | N11 | 内核 `confidence` 默认 0.0 → None | 保留 None（未知语义正确），标为**刻意破坏性变更**并写明迁移方式（见 `docs/ARCHITECTURE.md`）；full 动态 schema 契约仍为 0.0 | `test_core_confidence_default_is_none_and_full_contract_stays_zero` |
 | N12 | 关系端点只认标准名 | `_backfill_relations` 用「标准名+别名 → 实体」索引；仅唯一归属才解析，歧义不猜 | `test_relation_endpoint_resolves_unique_alias_literal`、`test_relation_endpoint_ambiguous_alias_is_not_guessed` |
-| N13 | 验收 1 的「先红」不可审计 | 历史不改写：明确标注首版多模式回填的测试与实现同提交，**不可追溯**；本轮 r3 修复为先红（13 failed → 16 passed） | 本文件 + `git log`（本轮 red 见提交说明） |
+| N13 | 验收 1 的「先红」不可审计 | 历史不改写：明确标注首版多模式回填的测试与实现同提交，**不可追溯**；本轮 r3 修复为先红（13 failed；后续 N9 看板用例再补 1 条 red，最终 17 passed） | 本文件 + `git log`（本轮 red 见提交说明） |
 | N14 | 重叠块重复记录歧义 mention | 合并时按 `(surface, start, end, candidates)` 去重，来源块收进 `chunk_ids` | `test_overlapping_chunks_dedupe_ambiguous_mentions` |
 
 ## 二、验收 8/9 的真实 LLM 证据（02 压力语料）
