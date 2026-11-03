@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ...schema import ExtractionResult
-from ..metrics import PRF
+from ..metrics import EvalReport, PRF, entity_keys
 
 
 @dataclass
@@ -27,7 +27,7 @@ class CaseEvaluation:
     seed: int
     pred: ExtractionResult
     gold: ExtractionResult
-    report: object  # EvalReport
+    report: EvalReport
 
 
 def evaluate_case(name: str, seed: int,
@@ -40,22 +40,14 @@ def evaluate_case(name: str, seed: int,
 
 def _count_keys(pred: ExtractionResult, gold: ExtractionResult,
                 etype: str, *, strict: bool) -> tuple[int, int, int]:
-    """某一实体类型的 (tp, fp, fn)。strict 用带 span 的 mention key。"""
+    """某一实体类型的 (tp, fp, fn)。strict 用带 span 的 mention key。
+
+    键构造直接复用 L15 的 :func:`entity_keys`，只按类型过滤；避免在此复刻
+    strict/relaxed 的键形状，否则换口径时顶层数与按类型数会悄悄分叉。
+    """
     def keys_of(result: ExtractionResult) -> set:
-        out: set = set()
-        for e in result.entities:
-            if e.type != etype:
-                continue
-            if strict:
-                for m in e.mentions:
-                    if m.span is not None:
-                        from ..metrics import norm_name
-                        out.add((e.type, norm_name(m.surface),
-                                 m.span.start, m.span.end))
-            else:
-                from ..metrics import norm_name
-                out.add((e.type, norm_name(e.name)))
-        return out
+        return {key for key in entity_keys(result, strict=strict)
+                if key[0] == etype}
 
     pk, gk = keys_of(pred), keys_of(gold)
     return len(pk & gk), len(pk - gk), len(gk - pk)
@@ -81,7 +73,10 @@ def aggregate_cases(evaluations: list[CaseEvaluation]) -> dict:
         relation.fp += ev.report.relation.fp
         relation.fn += ev.report.relation.fn
 
-    types = sorted({e.type for ev in evaluations for e in ev.gold.entities})
+    # 同时收金标与预测的类型：只遍历金标会把"金标里没有的类型"的 FP
+    # 丢出按类型表（顶层 entity_relaxed 仍计入），两张表对不上账。
+    types = sorted({e.type for ev in evaluations
+                    for e in (*ev.gold.entities, *ev.pred.entities)})
     by_type: dict[str, dict] = {}
     for etype in types:
         tp = fp = fn = 0
@@ -109,20 +104,20 @@ def relation_recall_for_predicates(
 
     谓词按 metrics 的归一表归一后比较；返回 {tp,fn,recall}。
     """
-    from ..metrics import _predicate_norm, norm_name
+    from ..metrics import norm_name, predicate_norm
 
+    wanted = {predicate_norm(p) for p in predicates}
     tp = fn = 0
     for ev in evaluations:
         pred_keys = {
-            (norm_name(r.head), _predicate_norm(r.predicate),
+            (norm_name(r.head), predicate_norm(r.predicate),
              norm_name(r.tail))
             for r in ev.pred.relations
         }
         for r in ev.gold.relations:
-            if _predicate_norm(r.predicate) not in {
-                    _predicate_norm(p) for p in predicates}:
+            if predicate_norm(r.predicate) not in wanted:
                 continue
-            key = (norm_name(r.head), _predicate_norm(r.predicate),
+            key = (norm_name(r.head), predicate_norm(r.predicate),
                    norm_name(r.tail))
             if key in pred_keys:
                 tp += 1

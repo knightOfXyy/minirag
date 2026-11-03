@@ -22,9 +22,10 @@
   指向），卷五句面重复头名，供句内规则抽取；
 · 超长无句号句：逼 Chunker 走 _hard_split，并在硬切点附近密集堆实体名；
 · 高密度列举：同一句并列多个公司/人名，压召回随块预算的变化；
-· **块预算敏感关系长句**：一条 >1500 units 的句子里同时含关系头/尾，
-  1500 档必被硬切拆开、3500 档可整句保留——给「调大块预算→关系召回提升」
-  一个真实可测的信号（而不是所有块预算下关系指标恒定）。
+· **块预算敏感关系长句**：每条 >1500 units 的句子里同时含关系头/尾，
+  1500 档必被硬切拆开、3500 档可整句保留；每篇 4 条不同头名/谓词
+  （办案地位于 / 追赃方向指向 / 关联物证）——给「调大块预算→关系召回
+  提升」一个两位数条关系的真实信号（而不是 1% 余量或指标恒定）。
 
 本模块只造数据、不做抽取，纯函数式、零副作用（写盘交给 serialize/CLI）。
 """
@@ -167,14 +168,20 @@ def long_runon(rng: random.Random, orgs: list[str], people: list[str],
 
 
 def long_relation_sentence(rng: random.Random, head: str, tail: str,
-                           target_units: int) -> str:
+                           target_units: int, *,
+                           trigger: str = "办案地位于",
+                           joiner: str = "的") -> str:
     """一条 >生产块预算、含关系头/尾且中间无句末标点的长句。
 
-    头与触发词在句首、尾在句尾，中间填满不含地名/句末标点的叙述：
+    头与触发词在句首、尾在句尾，中间填满不含实体名/句末标点的叙述：
     1500 档 Chunker 会 hard_split 把它拆成两半（头尾分居两块，关系必丢），
     3500 档整句留在同一块（关系可抽到）。
+
+    ``trigger`` 是正文里的触发词；``joiner`` 是头名与触发词之间的连接
+    （组织用「的」，人后接逗号）。不同谓词共用这一种结构，保证长句语义
+    仍是「头-谓词-尾」的直接陈述，而不是靠头尾同现的松校验。
     """
-    parts: list[str] = [f"{head}的办案地位于"]
+    parts: list[str] = [f"{head}{joiner}{trigger}"]
     total = len(parts[0])
     while total < target_units:
         token = rng.choice(FILLER_VERB)
@@ -334,17 +341,27 @@ def build_text(rng: random.Random, *, target_chars: int,
     md.append("")
 
     # ---- 卷六：块预算敏感的关系长句（>1500 units、<3500 units）----
-    long_head = orgs[4]
-    long_loc = tail_locs[0]
+    # 4 条不同头名/谓词的长句：1500→3500 的关系召回差异是两位数条关系，
+    # 而不是 1% 余量；其中两类谓词（办案地位于/追赃方向指向/关联物证）
+    # 分别覆盖 ORG-LOC 与 PER-MISC 两种类型组合。
     md.append("## 六、协作续查\n")
     # 长句前放一条 >48 字、且不含任何实体名的过渡句：保证长句头名的
-    # 左侧 48 字窗口里没有别的 ORG，避免"就近回填"抓错头。
-    md.append("办案人员对异地协作与追赃事项逐项复核后，未发现新的涉案单位线索，"
-              "相关材料已按程序归档备查，手续齐全，不存在遗漏。")
-    md.append(long_relation_sentence(
-        rng, long_head, long_loc, target_units=max_units + 400))
-    md.append("")
-    relations.append(StressRelation(long_head, "办案地位于", long_loc))
+    # 左侧 48 字窗口里没有别的实体，避免"就近回填"抓错头。
+    transition = ("办案人员对异地协作与追赃事项逐项复核后，未发现新的涉案单位线索，"
+                  "相关材料已按程序归档备查，手续齐全，不存在遗漏。")
+    long_relations = [
+        (orgs[4], tail_locs[0], "办案地位于", "办案地位于", "的"),
+        (orgs[5], tail_locs[1], "追赃方向指向", "追赃方向指向", "的"),
+        (people[0], CLUE_ITEMS[5], "关联物证", "关联到关键物证", "，"),
+        (people[1], CLUE_ITEMS[0], "关联物证", "关联到关键物证", "，"),
+    ]
+    for head, tail, predicate, trigger, joiner in long_relations:
+        md.append(transition)
+        md.append(long_relation_sentence(
+            rng, head, tail, target_units=max_units + 400,
+            trigger=trigger, joiner=joiner))
+        md.append("")
+        relations.append(StressRelation(head, predicate, tail))
 
     text = "\n".join(md)
 
