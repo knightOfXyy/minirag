@@ -1,0 +1,17 @@
+[F1] full/off  : needs_fix ['关系头实体「鹅厂」不在实体列表中（疑似臆测或漏抽实体）']
+[F1] slim/on   : pass []
+[F2] 模型调用次数: 1
+[F2] accepted     : True
+[F2] review issues: []
+[F2] 歧义信号条数 : 1
+[F3] unmatched_aliases: [{'entity': '腾讯', 'literal': '鹅厂'}]
+[F3] seen_literals    : ['腾讯']
+[F5] aggregate.delta.span_ratio_min_before: 0.0099
+[F5] aggregate.delta.truncated_chunks_before: 6
+[F6] describe(temperature unset): None
+[F6] describe(temperature=0.0): 0.0
+[F7] key(temp=-) : chunk:d28e2ce6db1a2b4012
+[F7] key(temp=0.0): chunk:283fb8f8f4001ad943
+[F7] 两次真实调用次数: 1 1
+[F9] full fingerprint: e084408b3bbb25dd
+[F9] slim fingerprint: 8b9e2ebfd4afb900
