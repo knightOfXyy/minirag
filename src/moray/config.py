@@ -212,6 +212,37 @@ def _int_env(name: str, default: int) -> int:
     return int(raw) if raw.isdigit() and int(raw) > 0 else default
 
 
+def _nonneg_int_env(name: str, default: int) -> int:
+    """非负整数 env：未设置用默认值，非法值启动即报错（不静默回落）。
+
+    与 ``_int_env`` 的区别：后者是“宽松读设置”（历史行为），这里用于
+    缓存 TTL 这类语义敏感项——把 ``12h``/``-1`` 静默当成 0=永不清理会让
+    运维以为开了清理其实没有（N5）。
+    """
+    raw = _first_env(name)
+    if not raw:
+        return default
+    if not raw.isdigit():
+        raise ConfigError(f"{name}={raw!r} 不是非负整数")
+    return int(raw)
+
+
+def _positive_float_env(name: str, default: float) -> float:
+    """正数浮点 env：未设置用默认值，非法值启动即报错（N5 同款约定）。"""
+    import math
+
+    raw = _first_env(name)
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ConfigError(f"{name}={raw!r} 不是数字") from None
+    if not math.isfinite(value) or value <= 0:
+        raise ConfigError(f"{name}={raw!r} 必须是有限正数")
+    return value
+
+
 def chunk_settings() -> dict:
     """长文分块阈值与并发（波次 4 双路接线用）。env 可覆盖，缺省走保守值。
 
@@ -244,7 +275,12 @@ def result_cache_settings() -> dict:
         · postgres：复用作业库（extraction_result_cache 表），跨 worker
           副本/重启共享缓存内容，并用占位行做跨进程单飞。
       MORAY_RESULT_CACHE_TTL_HOURS：postgres 行保留小时数，0=不清理。
+      MORAY_RESULT_CACHE_REMOTE_WAIT_SECONDS：跨进程单飞等待上限（秒），
+        默认 300（明显高于 p99 单块抽取耗时）。占位行有租约，leader 崩溃
+        时等待方会在一个租约内接管，不会真的等满这个窗口。
     """
+    from .extraction.cache import DEFAULT_REMOTE_WAIT_SECONDS
+
     enabled = _first_env("MORAY_RESULT_CACHE_ENABLED").lower() in _ENABLED_WORDS
     backend = _first_env("MORAY_RESULT_CACHE_BACKEND") or "memory"
     if backend not in _RESULT_CACHE_BACKENDS:
@@ -254,7 +290,10 @@ def result_cache_settings() -> dict:
     return {
         "enabled": enabled,
         "backend": backend,
-        "ttl_hours": _int_env("MORAY_RESULT_CACHE_TTL_HOURS", 0),
+        "ttl_hours": _nonneg_int_env("MORAY_RESULT_CACHE_TTL_HOURS", 0),
+        "remote_wait_seconds": _positive_float_env(
+            "MORAY_RESULT_CACHE_REMOTE_WAIT_SECONDS",
+            DEFAULT_REMOTE_WAIT_SECONDS),
     }
 
 
@@ -270,8 +309,13 @@ async def build_result_cache(settings: dict | None = None, *, pool=None):
     if not s.get("enabled"):
         return None
     backend_name = s.get("backend", "memory")
-    from .extraction.cache import ContentResultCache, InMemoryCacheBackend
+    from .extraction.cache import (
+        DEFAULT_REMOTE_WAIT_SECONDS,
+        ContentResultCache,
+        InMemoryCacheBackend,
+    )
 
+    wait_seconds = s.get("remote_wait_seconds", DEFAULT_REMOTE_WAIT_SECONDS)
     if backend_name == "postgres":
         if pool is None:
             raise ConfigError(
@@ -280,8 +324,10 @@ async def build_result_cache(settings: dict | None = None, *, pool=None):
         from .extraction.cache import PostgresCacheBackend
 
         return ContentResultCache(
-            PostgresCacheBackend(pool, ttl_hours=s.get("ttl_hours", 0)))
-    return ContentResultCache(InMemoryCacheBackend())
+            PostgresCacheBackend(pool, ttl_hours=s.get("ttl_hours", 0)),
+            remote_wait_seconds=wait_seconds)
+    return ContentResultCache(
+        InMemoryCacheBackend(), remote_wait_seconds=wait_seconds)
 
 
 def build_chat_model(*, stream: bool = False):

@@ -3,6 +3,7 @@
 from .chunking import Chunk, Chunker, estimate_tokens, split_sentences
 from .cache import (
     CacheBackend,
+    ClaimableBackend,
     ContentResultCache,
     InMemoryCacheBackend,
     PostgresCacheBackend,
@@ -32,6 +33,7 @@ __all__ = [
     "naive_merge",
     "remap_spans",
     "CacheBackend",
+    "ClaimableBackend",
     "ContentResultCache",
     "InMemoryCacheBackend",
     "PostgresCacheBackend",

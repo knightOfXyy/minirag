@@ -27,7 +27,7 @@ from ..schema import (
     domain_fingerprint,
 )
 from .chunking import Chunk
-from .document import Document, ExtractionOutput, Usage
+from .document import CacheSavings, Document, ExtractionOutput, Usage
 from .extractor import Extractor
 
 
@@ -156,8 +156,8 @@ class ChunkedExtractionPipeline:
             return domain_fingerprint(domain)
         return f"code:{getattr(domain, 'code', 'unknown')}|repr:{domain!r}"
 
-    async def _extract_one_chunk(self, chunk: Chunk) -> tuple[ExtractionResult, Usage, str]:
-        """抽单个块（带限流）。返回换算后的结果、用量、块 id。
+    async def _extract_one_chunk(self, chunk: Chunk) -> tuple[ExtractionResult, Usage, str, int]:
+        """抽单个块（带限流）。返回换算后的结果、用量、块 id、真实模型尝试次数。
 
         有缓存时以 (领域指纹, 模型名, 块正文) 为键取【块内】产物：命中则不发起
         模型调用，用量只记一次 cache_hits；偏移换算仍在缓存之外做，语义不变。
@@ -184,16 +184,19 @@ class ChunkedExtractionPipeline:
                     chunk.text, _do_extract)
                 if hit:
                     # 命中：还原结构化结果与【用量记录】；但不计真实 token，
-                    # 把缓存里的 input/output 记到独立的 reused_* 字段（S4），
-                    # 成本/看板只汇总真实计量字段。
+                    # 把缓存里的 input/output 记到独立的 cache_savings（S4/N2），
+                    # 成本/看板只汇总真实计量字段。命中块没有模型尝试（N4）。
                     usage = Usage(
                         cache_hits=1,
-                        reused_input_tokens=output.usage.input_tokens,
-                        reused_output_tokens=output.usage.output_tokens,
+                        cache_savings=CacheSavings(
+                            input_tokens=output.usage.input_tokens,
+                            output_tokens=output.usage.output_tokens,
+                        ),
                     )
-                    return remap_spans(output.result, chunk), usage, chunk.id
+                    return remap_spans(output.result, chunk), usage, chunk.id, 0
 
-            return remap_spans(output.result, chunk), output.usage, chunk.id
+            return (remap_spans(output.result, chunk), output.usage,
+                    chunk.id, output.attempts)
 
     async def run(
         self,
@@ -208,19 +211,30 @@ class ChunkedExtractionPipeline:
 
         # 只有多块才值得预热（单块文档预热等于白烧一次前缀）。
         # 探测请求本身的开销记在触发它这篇文档上：宁可多记，不要漏记成本。
+        # 但若所有块都已命中缓存，预热会凭空造出一次真实模型调用，与“第二次
+        # 零调用”冲突（N3）：先只读探测一遍，全命中就跳过预热。
         if self.warm_prefix and total >= 2:
-            usage.add(await self.extractor.warm_prefix())
+            all_cached = False
+            if self.result_cache is not None:
+                model_name = getattr(self.extractor, "model_name", "") or ""
+                all_cached = all([
+                    await self.result_cache.has_cached(
+                        self._cached_domain_fingerprint, model_name, c.text)
+                    for c in chunks
+                ])
+            if not all_cached:
+                usage.add(await self.extractor.warm_prefix())
 
-        async def worker(chunk: Chunk) -> tuple[ExtractionResult, Usage, str]:
-            res, u, cid = await self._extract_one_chunk(chunk)
+        async def worker(chunk: Chunk) -> tuple[ExtractionResult, Usage, str, int]:
+            res, u, cid, attempts = await self._extract_one_chunk(chunk)
             if on_chunk:
                 on_chunk(res, cid, total)
-            return res, u, cid
+            return res, u, cid, attempts
 
         settled = await asyncio.gather(*(worker(c) for c in chunks))
 
         partials = [item[0] for item in settled]
-        for _, u, _ in settled:
+        for _, u, _, _ in settled:
             usage.add(u)
 
         merged = naive_merge(partials)
@@ -230,5 +244,7 @@ class ChunkedExtractionPipeline:
             result=merged,
             model_name=self.extractor.model_name,
             usage=usage,
-            attempts=total,
+            # 实际模型尝试次数：命中块计 0，真实抽取块按提取器上报的次数累加。
+            # 全命中时是 0 而不是块数（N4）。
+            attempts=sum(item[3] for item in settled),
         )

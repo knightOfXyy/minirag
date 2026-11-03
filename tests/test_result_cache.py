@@ -4,6 +4,8 @@
 不把命中计成真实 token；同进程并发同键只抽一次（单飞）；后端损坏自动降级。
 """
 
+import asyncio
+
 import pytest
 
 from moray.extraction.cache import (
@@ -184,6 +186,195 @@ async def test_concurrent_same_key_extracts_once():
     assert calls["n"] == 1
     assert [r.result.model_dump() for r, _ in results] == (
         [results[0][0].result.model_dump()] * 8)
+    # 等待方拿到的是独立副本（N1）：改写一个不影响其它并发结果与缓存。
+    assert results[1][0] is not results[0][0]
+    results[1][0].result.entities[0].name = "被等待方改写"
+    again, hit = await cache.get_or_extract(
+        "fp", "m", "并发同正文", extract)
+    assert hit is True
+    assert again.result.entities[0].name == "华为"
+    assert results[0][0].result.entities[0].name == "华为"
+
+
+# ---------------------------------------------------------------------------
+# 跨进程单飞：不依赖 PostgreSQL 的可抢占后端（S1，默认 CI 必跑）
+# ---------------------------------------------------------------------------
+class _ClaimableFakeBackend:
+    """dict + 带租约的占位行，完整实现 ClaimableBackend 契约。
+
+    内存后端不实现 try_claim（只在单进程内单飞）；这里补一个不依赖 PG 的
+    等价物，让 try_claim / _wait_remote / release / renew_claim 这些新分支
+    在默认 CI 里也有覆盖。
+    """
+
+    def __init__(self):
+        self._store: dict[str, str] = {}
+        self._claims: dict[str, float] = {}
+        self.gets = 0
+        self.claims = 0
+        self.renews = 0
+        self.releases = 0
+
+    async def get(self, key):
+        await asyncio.sleep(0)
+        self.gets += 1
+        if key in self._store:
+            return self._store[key]
+        if key in self._claims:
+            return ""          # 空载荷 = leader 占位行
+        return None
+
+    async def set(self, key, value):
+        await asyncio.sleep(0)
+        self._store[key] = value
+        self._claims.pop(key, None)
+
+    async def try_claim(self, key, lease_seconds):
+        await asyncio.sleep(0)
+        now = asyncio.get_running_loop().time()
+        expires = self._claims.get(key)
+        if expires is not None and expires > now:
+            return False       # 占位仍有效：健康 leader 在续租
+        self.claims += 1
+        self._claims[key] = now + lease_seconds
+        return True
+
+    async def renew_claim(self, key, lease_seconds):
+        await asyncio.sleep(0)
+        now = asyncio.get_running_loop().time()
+        expires = self._claims.get(key)
+        if expires is None or expires <= now:
+            return False
+        self.renews += 1
+        self._claims[key] = now + lease_seconds
+        return True
+
+    async def release(self, key):
+        await asyncio.sleep(0)
+        self.releases += 1
+        self._claims.pop(key, None)
+
+
+def test_inmemory_backend_is_not_claimable():
+    """内存后端只做进程内单飞，不冒充跨进程契约（N6）。"""
+    assert not hasattr(InMemoryCacheBackend(), "try_claim")
+
+
+@pytest.mark.asyncio
+async def test_claimable_two_instances_concurrent_same_key_one_call():
+    """两个缓存实例（模拟两个 worker）共享可抢占后端并发同键：只真抽一次（S1）。"""
+    backend = _ClaimableFakeBackend()
+    cache_a = ContentResultCache(backend)
+    cache_b = ContentResultCache(backend)
+    calls = {"n": 0}
+
+    async def extract():
+        calls["n"] += 1
+        await asyncio.sleep(0.05)      # 模拟模型耗时，让另一个实例进入等待
+        return _output()
+
+    results = await asyncio.gather(
+        cache_a.get_or_extract("fp", "m", "跨进程同块", extract),
+        cache_b.get_or_extract("fp", "m", "跨进程同块", extract))
+    assert calls["n"] == 1
+    assert sorted(hit for _, hit in results) == [False, True]
+    assert results[0][0].result.model_dump() == results[1][0].result.model_dump()
+
+
+@pytest.mark.asyncio
+async def test_claimable_leader_failure_hands_over_to_waiter():
+    """leader 抛错并释放占位后，等待方接管并成功抽取（S1）。"""
+    backend = _ClaimableFakeBackend()
+    cache_a = ContentResultCache(backend)
+    cache_b = ContentResultCache(backend, poll_seconds=0.01)
+    calls = {"n": 0}
+    started = asyncio.Event()
+
+    async def failing():
+        calls["n"] += 1
+        started.set()
+        await asyncio.sleep(0.05)
+        raise RuntimeError("模拟 leader 崩溃")
+
+    async def succeeding():
+        calls["n"] += 1
+        return _output()
+
+    leader = asyncio.create_task(
+        cache_a.get_or_extract("fp", "m", "leader 会挂", failing))
+    await started.wait()
+    waiter = asyncio.create_task(
+        cache_b.get_or_extract("fp", "m", "leader 会挂", succeeding))
+    await asyncio.sleep(0.01)            # 让等待方先进入轮询
+
+    with pytest.raises(RuntimeError):
+        await leader
+    out, hit = await waiter
+    assert hit is False                  # 等待方自己真抽，不是缓存命中
+    assert out.result.entities[0].name == "华为"
+    assert calls["n"] == 2
+    assert backend.releases >= 1
+
+    # 接管方回写后，第三个调用方应命中
+    _, hit_again = await cache_b.get_or_extract(
+        "fp", "m", "leader 会挂", succeeding)
+    assert hit_again is True
+
+
+@pytest.mark.asyncio
+async def test_stale_claim_taken_over_after_lease_not_full_wait():
+    """占位行残留（leader 崩溃未回写）→ 一个租约后接管，不等满等待窗口（S1/S2）。"""
+    backend = _ClaimableFakeBackend()
+    cache = ContentResultCache(
+        backend, remote_wait_seconds=5.0,
+        poll_seconds=0.01, claim_lease_seconds=0.05)
+    key = build_cache_key("fp", "m", "占位残留")
+    assert await backend.try_claim(key, 0.01)   # 死掉的 leader，只占位不回写
+    await asyncio.sleep(0.02)                   # 让租约过期
+    calls = {"n": 0}
+
+    async def extract():
+        calls["n"] += 1
+        return _output()
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    out, hit = await cache.get_or_extract("fp", "m", "占位残留", extract)
+    elapsed = loop.time() - started
+    assert hit is False
+    assert calls["n"] == 1                       # 只多这一次真实调用
+    assert out.result.entities[0].name == "华为"
+    assert elapsed < 1.0                         # 远小于 remote_wait_seconds=5
+
+
+@pytest.mark.asyncio
+async def test_slow_healthy_leader_renews_lease_and_is_not_duplicated():
+    """慢但健康的 leader 持续续租：等待方不抢占，只发生一次真调；轮询指数退避（S2/N9）。"""
+    backend = _ClaimableFakeBackend()
+    cache_a = ContentResultCache(backend, claim_lease_seconds=0.2)
+    cache_b = ContentResultCache(
+        backend, claim_lease_seconds=0.2,
+        poll_seconds=0.01, remote_wait_seconds=5.0)
+    calls = {"n": 0}
+
+    async def slow():
+        calls["n"] += 1
+        await asyncio.sleep(0.5)             # 超过两个租约
+        return _output()
+
+    leader = asyncio.create_task(
+        cache_a.get_or_extract("fp", "m", "慢 leader", slow))
+    await asyncio.sleep(0.02)                # 确保 leader 先抢到占位
+    out, hit = await cache_b.get_or_extract("fp", "m", "慢 leader", slow)
+    leader_out, _ = await leader
+
+    assert calls["n"] == 1                   # 没有第二次真调
+    assert hit is True
+    assert backend.claims == 1               # 等待方从未抢到第二份占位
+    assert backend.renews >= 2               # leader 确实在续租
+    assert out.result.model_dump() == leader_out.result.model_dump()
+    # 指数退避：0.5s 内约 6~8 次读；固定 50ms 会是 10 次，固定 10ms 会是 50 次。
+    assert backend.gets < 20
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +543,34 @@ def test_memory_backend_evicts_least_recently_used():
     assert asyncio.run(backend.get("c")) == "3"
 
 
+class _RecordingPool:
+    """只记录 SQL 的假 asyncpg pool（不需要真 PostgreSQL）。"""
+
+    def __init__(self):
+        self.executed: list[str] = []
+
+    async def execute(self, sql, *args):
+        self.executed.append(sql)
+        return None
+
+    async def fetchval(self, sql, *args):
+        self.executed.append(sql)
+        return None
+
+
+@pytest.mark.asyncio
+async def test_postgres_purge_is_throttled_not_on_every_write():
+    """TTL 清理不能每次写入都 DELETE：一篇 30 块文档不该打出 30 条清理（N7）。"""
+    from moray.extraction.cache import PostgresCacheBackend
+
+    pool = _RecordingPool()
+    backend = PostgresCacheBackend(pool, ttl_hours=1)
+    for i in range(5):
+        await backend.set(f"k{i}", "v")
+    deletes = [sql for sql in pool.executed if "DELETE" in sql]
+    assert len(deletes) == 1          # 首次清理后，间隔期内不再重复
+
+
 # ---------------------------------------------------------------------------
 # 端到端：接入 ChunkedExtractionPipeline
 # ---------------------------------------------------------------------------
@@ -415,6 +634,9 @@ async def test_pipeline_second_run_makes_no_calls_and_matches_exactly():
     assert calls_first >= 2                       # 第一次确实抽了多块
     assert real.calls == calls_first              # 第二次零模型调用
     assert out2.result.model_dump() == out1.result.model_dump()
+    # 实际模型尝试次数：首跑=真抽块数，全命中=0，而不是块数（N4）
+    assert out1.attempts == len(_chunks(text))
+    assert out2.attempts == 0
     # 全局偏移逐字段一致，且都能对回原文
     for e in out2.result.entities:
         for m in e.mentions:
@@ -424,6 +646,43 @@ async def test_pipeline_second_run_makes_no_calls_and_matches_exactly():
     # 命中不产生任何真实 token
     assert out2.usage.input_tokens == 0
     assert out2.usage.output_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_warm_prefix_is_skipped_when_all_chunks_are_cached():
+    """warm_prefix 与结果缓存同开时，全命中的第二次不能凭空发一次真实调用（N3）。"""
+    class _WarmExtractor(_CountingRealExtractor):
+        def __init__(self, domain):
+            super().__init__(domain)
+            self.warm_calls = 0
+
+        async def warm_prefix(self):
+            self.warm_calls += 1
+            return Usage(input_tokens=5, output_tokens=1)
+
+    text = _long_text()
+    chunks = _chunks(text)
+    real = _WarmExtractor(
+        DomainSpec(code="general", name="通用",
+                   types=(TypeSpec("ORG", "机构", "机构"),)))
+    cache = ContentResultCache(InMemoryCacheBackend())
+    Document = __import__("moray.extraction.document", fromlist=["Document"]).Document
+    doc = Document(id="d", text=text, source="t")
+
+    def pipe():
+        return ChunkedExtractionPipeline(
+            real, concurrency=2, warm_prefix=True, result_cache=cache)
+
+    out1 = await pipe().run(doc, chunks)
+    assert real.warm_calls == 1                  # 首跑有未命中，预热一次
+    calls_first = real.calls
+
+    out2 = await pipe().run(doc, chunks)
+    assert real.warm_calls == 1                  # 全命中 → 不再预热
+    assert real.calls == calls_first             # 也没有任何真实抽取
+    assert out2.usage.input_tokens == 0          # 预热 token 未混进来
+    assert out2.usage.cache_hits == len(chunks)
+    assert out2.attempts == 0
 
 
 @pytest.mark.asyncio
@@ -621,13 +880,18 @@ async def test_cached_usage_excluded_from_real_cost_fields():
     assert out2.usage.output_tokens == 0
     assert out2.usage.cached_input_tokens == 0
     assert out2.usage.cache_hits == n_chunks
-    # 命中时缓存里还原出来的用量记到独立的「复用」字段，不计真实成本（S4）
-    assert out2.usage.reused_input_tokens == 3 * n_chunks
-    assert out2.usage.reused_output_tokens == 2 * n_chunks
+    # 命中时缓存里还原出来的用量嵌在独立命名空间，不计真实成本（S4/N2）
+    assert out2.usage.cache_savings.input_tokens == 3 * n_chunks
+    assert out2.usage.cache_savings.output_tokens == 2 * n_chunks
     # 序列化（作业结果/API 响应/看板都走 model_dump）带上这一列
     dumped = out2.usage.model_dump()
     assert dumped["cache_hits"] == n_chunks
     assert dumped["input_tokens"] == 0
+    # 没有与真实 token 同级的 reused_*_tokens：任何 *_tokens 求和都不会误算
+    assert not [k for k in dumped if k.endswith("_tokens") and "saved" in k]
+    assert "reused_input_tokens" not in dumped
+    assert dumped["cache_savings"] == {
+        "input_tokens": 3 * n_chunks, "output_tokens": 2 * n_chunks}
     # 提示缓存命中率仍是真实 token 口径，不被内容缓存命中污染（分母 0 → 0）
     assert dumped["cache_hit_rate"] == 0.0
 

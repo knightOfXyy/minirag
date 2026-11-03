@@ -23,6 +23,17 @@ class Document(BaseModel):
     domain_code: str = Field(default="general", description="抽取时使用的领域配置 code")
 
 
+class CacheSavings(BaseModel):
+    """命中【分块结果内容级缓存】时“本可花费”的用量估算。
+
+    故意不叫 ``*_tokens`` 也不放在 Usage 顶层：任何对未来所有顶层 token 字段
+    求和的新看板/评测都不会把它误算成真实成本（N2）。它只用于估算省了多少。
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
 class Usage(BaseModel):
     """一次或多次模型调用累计的 token 用量（成本核算的原始数据）。
 
@@ -39,10 +50,9 @@ class Usage(BaseModel):
     # 不产生 input/output token。与 cached_input_tokens（提示缓存命中的真实
     # 计费 token）严格区分：成本/看板统计只汇总前三个真实计量字段。
     cache_hits: int = 0
-    # 命中时从缓存还原出来的“本可花费”的用量：只用于估算省了多少，绝不加进
-    # input_tokens/output_tokens，成本汇总不会把它误算成真实 LLM token（S4）。
-    reused_input_tokens: int = 0
-    reused_output_tokens: int = 0
+    # 命中时缓存里还原出来的“本可花费”的用量：嵌在独立命名空间里，绝不加进
+    # input_tokens/output_tokens，也不与真实 token 字段同级（N2）。
+    cache_savings: CacheSavings = Field(default_factory=CacheSavings)
 
     @computed_field
     @property
@@ -62,8 +72,8 @@ class Usage(BaseModel):
         self.output_tokens += other.output_tokens
         self.cached_input_tokens += other.cached_input_tokens
         self.cache_hits += other.cache_hits
-        self.reused_input_tokens += other.reused_input_tokens
-        self.reused_output_tokens += other.reused_output_tokens
+        self.cache_savings.input_tokens += other.cache_savings.input_tokens
+        self.cache_savings.output_tokens += other.cache_savings.output_tokens
 
 
 class ExtractionOutput(BaseModel):

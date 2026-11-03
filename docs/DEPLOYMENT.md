@@ -167,9 +167,13 @@ python -m moray.jobs.worker --offline --once
   `MORAY_RESULT_CACHE_BACKEND=postgres`（复用作业库，表
   `extraction_result_cache`，由 worker/API 启动时自动建表）。
 - **跨进程单飞**：postgres 后端用空载荷占位行抢 leader，其余 worker 等它回写；
-  leader 崩溃/超时后等待方会重新抢占位，至多多一次真实调用，不会永久卡住。
-- **容量**：`MORAY_RESULT_CACHE_TTL_HOURS` 控制 PG 行保留时间（0=不清理）；
-  内存后端有 LRU 上限，长跑不会无限增长。
+  占位行带 30s 租约，leader 抽取期间按 1/3 租约续期——健康但慢的 leader 不会被
+  抢，崩溃/卡死的 leader 会在一个租约内被接管，等待方不必付满等待窗口。
+  `MORAY_RESULT_CACHE_REMOTE_WAIT_SECONDS` 控制等待上限（默认 300s），
+  应明显大于 p99 单块抽取耗时（推理模型 + 校验重试可能远超 1 分钟）。
+- **容量**：`MORAY_RESULT_CACHE_TTL_HOURS` 控制 PG 行保留时间（0=不清理，
+  非法值启动即 `ConfigError`）；过期清理最多每 60s 跑一次，不会每块写入都
+  `DELETE`。内存后端有 LRU 上限，长跑不会无限增长。
 - 后端名写错会在启动时直接 `ConfigError`，不会静默退回 memory。
 
 ## 4c. 动态领域配置（domain_configs 配置中心，热更）
