@@ -11,8 +11,8 @@
 
 装载时把规范名在正文中的【每一次字面出现】都建成带 span 的 mention，
 这样 strict 口径（type+surface+span）与按块统计都能直接用；
-并再次跑 :func:`validate_case` 口径，发现不可定位的答案直接报错——
-黄金语料必须自洽，宁可早炸也不拿脏答案算分。
+并再次跑 :func:`validate_case` 口径（可定位 + 句面语义），发现不可信的
+答案直接报错——黄金语料必须自洽，宁可早炸也不拿脏答案算分。
 """
 
 from __future__ import annotations

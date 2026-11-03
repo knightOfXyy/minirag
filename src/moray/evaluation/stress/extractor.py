@@ -25,7 +25,8 @@ from ...extraction.chunking import Chunker
 from ...extraction.document import Document
 from ...extraction.pipeline import naive_merge, remap_spans
 from ...schema import Entity, EntityMention, ExtractionResult, Relation, Span
-from .corpus import CLUE_ITEMS, GIVEN, LOC_POOL, SURNAMES
+from .corpus import (
+    CLUE_ITEMS, GIVEN, LOC_POOL, PREDICATE_TRIGGERS, SURNAMES)
 
 # 组织后缀。必须把「集团有限公司」排在「集团」之前，否则非贪婪前缀会在
 # 「…实业集团」处先命中「集团」，把规范名截断（「有限公司」同理要长后缀在前）。
@@ -50,16 +51,17 @@ _ORG_LEAD_TRIM = set("在曾前往与和到把被对")
 _ORG_PUNCT = set("，。、；：！？\n\r \t（）()「」《》")
 
 # 每个 gold 谓词 -> (左触发, 右触发, 头类型, 尾类型)。
-# 一张表同时表达句面触发与类型约束，新增谓词只改这一处。
+# 一张表同时表达句面触发与类型约束；左触发词统一取 ``corpus.PREDICATE_TRIGGERS``
+# （生成器写句、测试语义闸门共用同一来源，文案不会三处漂移）。
 # 注意 gold 的规范谓词不一定逐字出现：供职于在案卷里写作"曾在 X 任职"。
 _PREDICATE_SPECS: dict[str, tuple[str, str | None, str, str]] = {
-    "供职于": ("曾在", "任职", "PER", "ORG"),
-    "户籍在": ("户籍地", None, "PER", "LOC"),
-    "注册地位于": ("注册地位于", None, "ORG", "LOC"),
-    "涉案关联": ("案件编号", None, "PER", "EVENT"),
-    "关联物证": ("关联到关键物证", None, "PER", "MISC"),
-    "办案地位于": ("办案地位于", None, "ORG", "LOC"),
-    "追赃方向指向": ("追赃方向指向", None, "ORG", "LOC"),
+    "供职于": (PREDICATE_TRIGGERS["供职于"], "任职", "PER", "ORG"),
+    "户籍在": (PREDICATE_TRIGGERS["户籍在"], None, "PER", "LOC"),
+    "注册地位于": (PREDICATE_TRIGGERS["注册地位于"], None, "ORG", "LOC"),
+    "涉案关联": (PREDICATE_TRIGGERS["涉案关联"], None, "PER", "EVENT"),
+    "关联物证": (PREDICATE_TRIGGERS["关联物证"], None, "PER", "MISC"),
+    "办案地位于": (PREDICATE_TRIGGERS["办案地位于"], None, "ORG", "LOC"),
+    "追赃方向指向": (PREDICATE_TRIGGERS["追赃方向指向"], None, "ORG", "LOC"),
 }
 
 # 案卷里"涉案关联"的句面是"案件编号 A-… 涉及 张三、李四 等人员"，头在案号
@@ -208,6 +210,14 @@ def _relations_in_sentence(sent: str, names: list[str],
                     tail_end = ri
             tail_win = sent[tail_start:tail_end]
             head = _resolve_typed(head_win, names, type_of, head_type)
+            if head is None:
+                # 块预算敏感长句把主语放在句首、触发词+尾放在句末（相距
+                # ~1900 units），48 字左窗必然看不到头。回退到句内**最近的
+                # 前置**同类型实体：3500 档整句可见时能锁到句首主语；
+                # 1500 档硬切后句首主语在另一块，这里仍应返回 None（关系
+                # 继续丢失，块预算信号不被抹平）。
+                head = _resolve_typed_nearest(
+                    sent[:li], names, type_of, head_type)
             tail = _resolve_typed(tail_win, names, type_of, tail_type)
             emit(head, tail, predicate)
             cursor = li + len(left)
@@ -242,6 +252,28 @@ def _resolve_typed(window: str, names: list[str], type_of: dict[str, str],
         if idx < 0:
             continue
         if best_pos is None or idx < best_pos or (
+                idx == best_pos and len(n) > len(best_name)):
+            best_pos, best_name = idx, n
+    return best_name
+
+
+def _resolve_typed_nearest(prefix: str, names: list[str],
+                           type_of: dict[str, str],
+                           want_type: str) -> str | None:
+    """在 ``prefix`` 里找**最近的前置**指定类型实体（取最靠右的出现）。
+
+    长句回退用：头在句首、触发词在句末时，48 字左窗为空，只有回看整句前缀
+    才能找到主语。同位置仍取最长名；只回看前缀，绝不跨句或访问块外文本。
+    """
+    best_pos: int | None = None
+    best_name: str | None = None
+    for n in names:
+        if type_of.get(n) != want_type:
+            continue
+        idx = prefix.rfind(n)
+        if idx < 0:
+            continue
+        if best_pos is None or idx > best_pos or (
                 idx == best_pos and len(n) > len(best_name)):
             best_pos, best_name = idx, n
     return best_name

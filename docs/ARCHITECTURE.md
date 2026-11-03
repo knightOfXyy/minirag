@@ -1,7 +1,7 @@
 # Moray 架构总览
 
 企业级实体抽取（NER/RE）+ 实体知识库，基于 **AgentScope 2.0**，15 课增量建成。
-约 5k 行库代码 + 15 个可运行讲义 + 162 个测试。设计主线：**每一层都可离线、
+约 5k 行库代码 + 15 个可运行讲义 + 180 个测试。设计主线：**每一层都可离线、
 确定性地单独验证**，LLM 只出现在明确的接缝处。
 
 ## 数据流
@@ -61,7 +61,7 @@
 ## 测试
 
 ```bash
-python -m pytest tests/ -q                 # 102 个离线确定性单测（CI 同款）
+python -m pytest tests/ -q                 # 133 个默认参与的单测（需 .env 配置模型凭证）
 RUN_DB_TESTS=1 python -m pytest tests/ -q  # +47 个 pgvector/MCP/API/作业/合并集成
 ```
 

@@ -3,9 +3,10 @@
     "name": "StressRuleExtractor",
     "revision": 2
   },
-  "corpus_version": 3,
+  "corpus_version": "sha256:1ef1e7347d4feb32",
   "overlap_note": "overlap 目前是记录维度：当前语料没有只在重叠窗口下才可恢复的构造，因此同一块预算下不同 overlap 的指标相同；它不构成判别力，调 overlap 的工单请先补可观测构造。",
   "entity_axis_note": "实体轴只证明分块/回填接线：被评规则抽取器与语料共用词典，实体召回恒为 1.0 属预期；块预算判据看关系轴。",
+  "gold_scope_note": "gold 是刻意子集：正文里还有未写进答案的关系（每篇 18 句「法定代表人{PER}」、卷四每案 5 名涉案人只记 1 条涉案关联）。确定性规则抽取器不建模这些谓词，故当前无 FP；注入真实 LLM 路径做 A/B 时，模型读出的这些句面会被记 FP，绝对 P 会被低估。A/B 只比较同一被评对象在不同块预算下的增量，不要跨抽取器横比绝对 P。",
   "grids": {
     "1500:0": {
       "documents": 3,
