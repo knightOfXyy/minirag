@@ -124,8 +124,13 @@ async def build_document_handler(
         # ② 包成 ExtractionOutput 交给 L08/L09 入库（幂等）
         # 分块路径的回填信号在 reviewed.backfill；整篇路径（provider 闭包）
         # 通过 backfill_sink 回收。两条路都不能在作业主链丢掉。
-        backfill = (reviewed.backfill if reviewed.backfill is not None
-                    else backfill_sink.get("backfill"))
+        # 内部（块间/内存报告）保留全部关系证据候选；这里是作业结果落盘边界，
+        # 按默认上限裁剪后再进结果/看板/入库产物（r11 F1）。
+        from ..extraction.local_backfill import serialize_backfill_for_output
+
+        backfill = serialize_backfill_for_output(
+            reviewed.backfill if reviewed.backfill is not None
+            else backfill_sink.get("backfill"))
         output = ExtractionOutput(
             document_id=doc.id,
             domain_code=doc.domain_code,

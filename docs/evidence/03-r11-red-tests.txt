@@ -1,0 +1,290 @@
+FFFFFFFFFFF                                                              [100%]
+=================================== FAILURES ===================================
+_______ test_chunked_pipeline_preserves_all_relation_evidence_candidates _______
+
+    @pytest.mark.asyncio
+    async def test_chunked_pipeline_preserves_all_relation_evidence_candidates():
+        out = await _run_dense_pipeline()
+    
+        key = next(iter(out.backfill["relation_evidence_candidates"]))
+        cands = out.backfill["relation_evidence_candidates"][key]
+>       assert len(cands) == 900
+E       AssertionError: assert 20 == 900
+E        +  where 20 = len([{'head_start': 0, 'tail_start': 2, 'sent_start': 0, 'sent_end': 120, ...}, {'head_start': 4, 'tail_start': 2, 'sent_s...ent_start': 0, 'sent_end': 120, ...}, {'head_start': 12, 'tail_start': 10, 'sent_start': 0, 'sent_end': 120, ...}, ...])
+
+tests/test_r11_review_fixes.py:89: AssertionError
+____ test_serialize_backfill_for_output_caps_candidates_and_keeps_selected _____
+
+    def test_serialize_backfill_for_output_caps_candidates_and_keeps_selected():
+        report = _dense_report()
+        key = next(iter(report.relation_evidence_candidates))
+        internal = report.to_dict(max_relation_evidence_candidates=None)
+        assert len(internal["relation_evidence_candidates"][key]) == 900
+    
+>       serialized = lb.serialize_backfill_for_output(internal)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'moray.extraction.local_backfill' has no attribute 'serialize_backfill_for_output'
+
+tests/test_r11_review_fixes.py:99: AttributeError
+________________ test_extract_endpoint_caps_backfill_candidates ________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x72621cb93c20>
+
+    @pytest.mark.asyncio
+    async def test_extract_endpoint_caps_backfill_candidates(monkeypatch):
+        """API 落盘边界：内部 900 条候选，响应体只出默认上限 20 条。"""
+        from httpx import ASGITransport, AsyncClient
+    
+        from moray.api import app as api_app
+        from moray.orchestration.specialists import (
+            ExtractionReview,
+            ReviewedExtraction,
+        )
+    
+        report = _dense_report()
+        internal = report.to_dict(max_relation_evidence_candidates=None)
+        reviewed = ReviewedExtraction(
+            result=ExtractionResult(),
+            accepted=True,
+            review=ExtractionReview(verdict="pass"),
+            backfill=internal,
+        )
+    
+        async def fake_chunked_team(*_args, **_kwargs):
+            return reviewed
+    
+        async def dummy_extractor(_text, _feedback):
+            return ExtractionResult()
+    
+        monkeypatch.setattr(api_app, "run_chunked_team", fake_chunked_team)
+    
+        deps = api_app.AppDeps(
+            pool=None, store=SimpleNamespace(), kb=SimpleNamespace(),
+            ingestor=SimpleNamespace(), extractor_fn=dummy_extractor)
+        app = api_app.create_app(deps)
+        async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://t") as ac:
+            resp = await ac.post(
+                "/extract", json={"text": "华为深圳", "ingest": False})
+    
+        assert resp.status_code == 200, resp.text
+        key = next(iter(internal["relation_evidence_candidates"]))
+        cands = resp.json()["backfill"]["relation_evidence_candidates"][key]
+>       assert len(cands) == lb.MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES
+E       AssertionError: assert 900 == 20
+E        +  where 900 = len([{'head_start': 0, 'tail_start': 2, 'sent_start': 0, 'sent_end': 120, ...}, {'head_start': 4, 'tail_start': 2, 'sent_s...ent_start': 0, 'sent_end': 120, ...}, {'head_start': 12, 'tail_start': 10, 'sent_start': 0, 'sent_end': 120, ...}, ...])
+E        +  and   20 = lb.MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES
+
+tests/test_r11_review_fixes.py:147: AssertionError
+________ test_reconciled_ambiguity_is_deduped_and_carries_source_chunks ________
+
+    @pytest.mark.asyncio
+    async def test_reconciled_ambiguity_is_deduped_and_carries_source_chunks():
+        out = await _run_three_overlap()
+    
+        ambiguous = out.backfill["ambiguous_mentions"]
+>       assert len(ambiguous) == 1
+E       assert 2 == 1
+E        +  where 2 = len([{'surface': '苹果', 'start': 0, 'end': 2, 'candidates': ['["ORG", "苹果"]', '["MISC", "苹果"]'], ...}, {'surface': '苹果', 'start': 0, 'end': 2, 'candidates': ['["ORG", "苹果"]', '["MISC", "苹果"]'], ...}])
+
+tests/test_r11_review_fixes.py:197: AssertionError
+______ test_reconcile_counts_revoked_mentions_without_reweighting_blocks _______
+
+    @pytest.mark.asyncio
+    async def test_reconcile_counts_revoked_mentions_without_reweighting_blocks():
+        out = await _run_three_overlap()
+    
+        # 块 1/2 各有一条 mention 被撤销；计数口径保持 chunk-weighted。
+>       assert out.backfill["reconciled_unattributed"] == 2
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'reconciled_unattributed'
+
+tests/test_r11_review_fixes.py:218: KeyError
+_____ test_overlap_same_entity_duplicate_span_is_collapsed_to_one_mention ______
+
+    @pytest.mark.asyncio
+    async def test_overlap_same_entity_duplicate_span_is_collapsed_to_one_mention():
+        class _SameEntityFake:
+            domain = SimpleNamespace(code="general")
+            model_name = "fake-r11"
+            local_backfill = True
+    
+            async def extract(self, document):
+                logical = ExtractionResult(
+                    entities=[Entity(name="苹果", type="ORG")])
+                result, report = backfill_provenance(logical, document.text)
+                return ExtractionOutput(
+                    document_id=document.id, domain_code="general",
+                    result=result, model_name=self.model_name, usage=Usage(),
+                    attempts=1,
+                    backfill=report.to_dict(max_relation_evidence_candidates=None),
+                )
+    
+        body = "苹果发布了新品。"
+        chunks = [
+            Chunk(id="d#c0", text=body, start=0, end=len(body), index=0),
+            Chunk(id="d#c1", text=body, start=0, end=len(body), index=1),
+        ]
+        out = await ChunkedExtractionPipeline(
+            _SameEntityFake(), concurrency=1).run(
+                Document(id="d", text=body), chunks)
+    
+        [entity] = out.result.entities
+>       assert [m.surface for m in entity.mentions] == ["苹果"]
+E       AssertionError: assert ['苹果', '苹果'] == ['苹果']
+E         
+E         Left contains one more item: '苹果'
+E         Use -v to get more diff
+
+tests/test_r11_review_fixes.py:251: AssertionError
+________ test_serialized_candidates_are_copies_and_do_not_mutate_report ________
+
+    def test_serialized_candidates_are_copies_and_do_not_mutate_report():
+        report = _dense_report()
+        key = next(iter(report.relation_evidence_candidates))
+        before = [dict(c) for c in report.relation_evidence_candidates[key]]
+    
+        serialized = report.to_dict(max_relation_evidence_candidates=None)
+        serialized["relation_evidence_candidates"][key][0]["selected"] = "mutated"
+        serialized["relation_evidence_candidates"][key][0]["distance"] = -1
+    
+>       assert report.relation_evidence_candidates[key] == before
+E       AssertionError: assert [{'head_start...20, ...}, ...] == [{'head_start...20, ...}, ...]
+E         
+E         At index 0 diff: {'head_start': 0, 'tail_start': 2, 'sent_start': 0, 'sent_end': 120, 'evidence_start': 0, 'evidence_end': 120, 'distance': -1, 'selected': 'mutated'} != {'head_start': 0, 'tail_start': 2, 'sent_start': 0, 'sent_end': 120, 'evidence_start': 0, 'evidence_end': 120, 'distance': 2, 'selected': True}
+E         Use -v to get more diff
+
+tests/test_r11_review_fixes.py:267: AssertionError
+_______ test_cached_backfill_uses_explicit_cache_without_mutating_owner ________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7261e0962f60>
+
+    def test_cached_backfill_uses_explicit_cache_without_mutating_owner(monkeypatch):
+        calls = {"n": 0}
+        real = lb.backfill_provenance
+    
+        def counting(result, text):
+            calls["n"] += 1
+            return real(result, text)
+    
+        monkeypatch.setattr(lb, "backfill_provenance", counting)
+    
+        serializations = {"n": 0}
+        real_dump = ExtractionResult.model_dump_json
+    
+        def counting_dump(self, *args, **kwargs):
+            serializations["n"] += 1
+            return real_dump(self, *args, **kwargs)
+    
+        monkeypatch.setattr(ExtractionResult, "model_dump_json", counting_dump)
+    
+        owner = SimpleNamespace()
+        cache: dict = {}
+        result = ExtractionResult(entities=[Entity(name="华为", type="ORG")])
+>       filled_a, report_a = lb.cached_backfill_provenance(
+            cache, result, "华为在深圳。")
+
+tests/test_r11_review_fixes.py:308: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+owner = {}
+result = ExtractionResult(entities=[Entity(name='华为', type='ORG', aliases=[], mentions=[], confidence=None, attributes={}, description='')], relations=[])
+text = '华为在深圳。'
+
+    def cached_backfill_provenance(
+        owner: object,
+        result: ExtractionResult,
+        text: str,
+    ) -> tuple[ExtractionResult, BackfillReport]:
+        """同一份抽取结果的回填只扫描一次，产物缓存在 ``owner`` 上（r10 N5）。
+    
+        质量中间件（审校前）与抽取器（审校后）都需要同一份回填信号。两侧都各跑
+        一遍 ``backfill_provenance`` 会把块正文扫两次。这里按
+        ``(原文, 抽取结果)`` 做确定性缓存：中间件先算，抽取器随后命中同一份产物；
+        结果不同（例如返工后的新输出）则自然未命中、重新计算。
+    
+        ``owner`` 通常是本次 reply 的 agent 对象（一次抽取一个实例），缓存不会跨
+        文档泄漏。
+        """
+        key = (text, result.model_dump_json())
+        cached = getattr(owner, "_audit_backfill_cache", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        filled, report = backfill_provenance(result, text)
+>       setattr(owner, "_audit_backfill_cache", (key, (filled, report)))
+E       AttributeError: 'dict' object has no attribute '_audit_backfill_cache'
+
+src/moray/extraction/local_backfill.py:858: AttributeError
+____________________ test_relation_candidate_cap_semantics _____________________
+
+    def test_relation_candidate_cap_semantics():
+        report = _dense_report()
+        key = next(iter(report.relation_evidence_candidates))
+    
+        assert len(report.to_dict(
+            max_relation_evidence_candidates=None
+        )["relation_evidence_candidates"][key]) == 900
+>       assert report.to_dict(
+            max_relation_evidence_candidates=0
+        )["relation_evidence_candidates"][key] == []
+E       AssertionError: assert [{'head_start...20, ...}, ...] == []
+E         
+E         Left contains 900 more items, first extra item: {'head_start': 0, 'tail_start': 2, 'sent_start': 0, 'sent_end': 120, ...}
+E         Use -v to get more diff
+
+tests/test_r11_review_fixes.py:331: AssertionError
+_____________ test_single_chunk_merge_skips_document_alias_rescan ______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7261e0961670>
+
+    def test_single_chunk_merge_skips_document_alias_rescan(monkeypatch):
+        logical = ExtractionResult(entities=[
+            Entity(name="苹果", type="ORG", aliases=["Acme"]),
+        ])
+        _result, report = backfill_provenance(logical, "苹果发布了新品。")
+        assert report.unmatched_aliases  # Acme 不在正文里，是待判候选
+    
+        constructions = {"n": 0}
+        real_ac = lb.AhoCorasick
+    
+        class _SpyAC(real_ac):
+            def __init__(self, patterns):
+                constructions["n"] += 1
+                super().__init__(patterns)
+    
+        monkeypatch.setattr(lb, "AhoCorasick", _SpyAC)
+    
+>       merged = merge_backfill_reports(
+            [BackfillReport.from_dict(
+                report.to_dict(), chunk_start=0, chunk_id="d#c0")],
+            document_text="苹果发布了新品。",
+            single_chunk_covers_document=True)
+E       TypeError: merge_backfill_reports() got an unexpected keyword argument 'single_chunk_covers_document'
+
+tests/test_r11_review_fixes.py:366: TypeError
+__ test_slim_naive_merge_relation_key_ignores_whitespace_but_legacy_keeps_it ___
+
+    def test_slim_naive_merge_relation_key_ignores_whitespace_but_legacy_keeps_it():
+        p0 = ExtractionResult(relations=[
+            Relation(head="腾讯 ", predicate="发布", tail="混元")])
+        p1 = ExtractionResult(relations=[
+            Relation(head="腾讯", predicate="发布", tail="混元 ")])
+    
+>       slim = naive_merge([p0, p1], strip_relation_endpoints=True)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: naive_merge() got an unexpected keyword argument 'strip_relation_endpoints'
+
+tests/test_r11_review_fixes.py:391: TypeError
+=========================== short test summary info ============================
+FAILED tests/test_r11_review_fixes.py::test_chunked_pipeline_preserves_all_relation_evidence_candidates
+FAILED tests/test_r11_review_fixes.py::test_serialize_backfill_for_output_caps_candidates_and_keeps_selected
+FAILED tests/test_r11_review_fixes.py::test_extract_endpoint_caps_backfill_candidates
+FAILED tests/test_r11_review_fixes.py::test_reconciled_ambiguity_is_deduped_and_carries_source_chunks
+FAILED tests/test_r11_review_fixes.py::test_reconcile_counts_revoked_mentions_without_reweighting_blocks
+FAILED tests/test_r11_review_fixes.py::test_overlap_same_entity_duplicate_span_is_collapsed_to_one_mention
+FAILED tests/test_r11_review_fixes.py::test_serialized_candidates_are_copies_and_do_not_mutate_report
+FAILED tests/test_r11_review_fixes.py::test_cached_backfill_uses_explicit_cache_without_mutating_owner
+FAILED tests/test_r11_review_fixes.py::test_relation_candidate_cap_semantics
+FAILED tests/test_r11_review_fixes.py::test_single_chunk_merge_skips_document_alias_rescan
+FAILED tests/test_r11_review_fixes.py::test_slim_naive_merge_relation_key_ignores_whitespace_but_legacy_keeps_it
+11 failed in 0.83s

@@ -54,7 +54,10 @@
   不同位置上的同名出现仍按块内上下文归属。
 - 探针：两块同为「苹果发布了新品。」（重叠），块 0 只抽 `苹果/ORG`、块 1 只抽
   `苹果/MISC` → 合并后两个实体的 mentions 均变为 `[]`，`ambiguous_mentions`
-  恰 1 条：`surface=苹果, start=0, end=2, candidates=[ORG,MISC]`。
+  恰 1 条：`surface=苹果, start=0, end=2`，`candidates` 是**实体信号键的 JSON
+  字符串**，实际值为
+  `["[\"ORG\", \"苹果\"]", "[\"MISC\", \"苹果\"]"]`（不是裸 `ORG/MISC`；
+  r11 N9(b) 更正了这里的措辞）。
 - 用例：`test_overlap_same_span_owned_by_two_entities_is_unattributed`；
   反向护栏 `test_overlap_same_entity_keeps_single_span_mention`（同一实体在
   重叠块各命中一次不是歧义，不误删）。
@@ -68,7 +71,8 @@
 - 探针：英文两句 → evidence span `(24,48)`；selected 候选
   `sent_start=23, sent_end=48, evidence_start=24, evidence_end=48`。
 - `docs/evidence/03-local-backfill-contract.json` 的请求/响应样例已用当前
-  实现重放，补上 `evidence_start/evidence_end`（diff 仅新增这两个字段）。
+  实现重放，补上 `evidence_start/evidence_end`；同一轮还补了两段
+  `seen_literals`（r11 N9(a) 更正：并非「仅新增这两个字段」）。
 
 ## N2（nit）跨块合并后全局只有一条 selected
 
@@ -104,6 +108,8 @@
 - 修法 2：新增 `cached_backfill_provenance(owner, result, text)`，按
   `(原文, 结果 JSON)` 缓存到本次 reply 的 agent 上；中间件先算，抽取器随后
   复用，块正文只扫一次。结果不同（返工后的新输出）自然未命中重算。
+  （r11 N4 已把签名改为显式 `cache: dict`、键改为轻量内容指纹，见
+  `03-r11-fix-evidence.md`；本段保留 r10 当时实现，便于追溯。）
 - 用例：`test_middleware_zero_span_is_unmeasured_and_reuses_extractor_cache`
   同时断言 `span_ratio is None`、`block_confidence=0.5`、跨边界只有 1 次扫描；
   `test_cached_backfill_runs_one_scan_per_result` 用 monkeypatch 计数。

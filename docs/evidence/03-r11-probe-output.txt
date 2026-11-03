@@ -1,0 +1,26 @@
+== F1: 分块路径保留全部候选 ==
+in-memory: 900 | to_dict(None): 900 | pipeline out: 900
+API/job 边界: 20 selected= 1
+
+== N1/N2/N10: 跨块 span 歧义对账 ==
+ambiguous 条数: 1 | chunk_ids: ['d#c0', 'd#c1', 'd#c2']
+reconciled_unattributed: 2 | entities_grounded/total: 2 / 4
+同 owner 同 span mention 数: 1
+
+== N3: to_dict 候选是副本 ==
+内存候选未被改写: True
+
+== N4: 只扫一次 + 不 model_dump_json ==
+scans: 1 | model_dump_json: 0
+
+== N5: 候选上限语义 ==
+limit=None: 900
+limit=0: 0
+limit=-5: 0
+limit=5: 5
+
+== N8: 单块文档跳过整篇别名补扫 ==
+单块补扫次数: 0 | 多块路径补扫次数: 1
+
+== N11: slim 关系去重键去空白 ==
+slim: 1 | legacy: 2

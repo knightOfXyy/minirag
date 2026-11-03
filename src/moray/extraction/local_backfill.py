@@ -105,17 +105,42 @@ def entity_identity_key(
 
 
 def _cap_relation_candidates(cands: list[dict], limit: int | None) -> list[dict]:
-    """序列化裁剪：保留最近 ``limit`` 条，selected 那条总在其中（r10 N4）。"""
-    if limit is None or limit <= 0 or len(cands) <= limit:
-        return list(cands)
-    kept = list(cands[:limit])
-    if any(c.get("selected") for c in kept):
-        return kept
-    selected = next((c for c in cands if c.get("selected")), None)
-    if selected is None:
-        return kept
-    return kept[:-1] + [selected]
+    """序列化裁剪：``None`` = 全量，``limit <= 0`` = 空，否则保留前 ``limit`` 条。
 
+    两个生产方（``backfill_provenance`` 与 ``merge_backfill_reports``）都把
+    selected 放在首条，所以前 ``limit`` 条天然包含它；旧实现里「selected 不在
+    前 limit 就替换末条」的分支不可达，已删除（r11 N5）。
+
+    返回的是候选 dict 的副本：``to_dict()`` 的消费方修改结果不得污染内存报告
+    或 ``cached_backfill_provenance`` 的共享产物（r11 N3/ST2）。
+    """
+    if limit is None:
+        return [dict(c) for c in cands]
+    if limit <= 0:
+        return []
+    return [dict(c) for c in cands[:limit]]
+
+
+def serialize_backfill_for_output(
+    backfill: dict | None,
+    *,
+    max_relation_evidence_candidates: int | None = (
+        MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES),
+) -> dict | None:
+    """对外落盘边界：把内部全量候选裁到默认上限后返回新字典。
+
+    块间传递与内存 ``BackfillReport`` 保留全量（r11 F1）；API 响应/作业结果
+    才是真正出网的边界，在这里统一裁剪，避免几十 MB 的笛卡尔积外发。
+    """
+    if backfill is None:
+        return None
+    data = dict(backfill)
+    data["relation_evidence_candidates"] = {
+        key: _cap_relation_candidates(cands, max_relation_evidence_candidates)
+        for key, cands in (
+            backfill.get("relation_evidence_candidates") or {}).items()
+    }
+    return data
 
 
 @dataclass
@@ -143,6 +168,10 @@ class BackfillReport:
     # 关系证据命中情况（同上，跨块为 chunk-weighted 计数）
     relations_total: int = 0
     relations_with_evidence: int = 0
+    # 跨块 span 对账撤销归属的 mention 数（r11 N2）。被撤销的 mention 原本已
+    # 计入 entities_grounded/block_confidence；这里不反算块加权计数（口径见
+    # reconcile_span_ambiguity），只额外暴露「有多少条归属被撤销」。
+    reconciled_unattributed: int = 0
     relations_without_evidence: list[dict] = field(default_factory=list)
     # 每条关系的全部同句共现候选（evidence_span 取其中最近的一对）
     relation_evidence_candidates: dict[str, list[dict]] = field(default_factory=dict)
@@ -194,8 +223,10 @@ class BackfillReport:
         report.relations_total = int(data.get("relations_total", 0))
         report.relations_with_evidence = int(
             data.get("relations_with_evidence", 0))
-        report.relations_without_evidence = list(
-            data.get("relations_without_evidence") or [])
+        report.reconciled_unattributed = int(
+            data.get("reconciled_unattributed", 0))
+        report.relations_without_evidence = [
+            dict(x) for x in (data.get("relations_without_evidence") or [])]
         report.relation_evidence_candidates = {
             key: list(cands)
             for key, cands in (data.get("relation_evidence_candidates") or {}).items()
@@ -227,22 +258,26 @@ class BackfillReport:
             "entities_grounded": self.entities_grounded,
             "relations_total": self.relations_total,
             "relations_with_evidence": self.relations_with_evidence,
-            "matched_literals": self.matched_literals,
-            "unmatched_aliases": self.unmatched_aliases,
-            "seen_literals": self.seen_literals,
+            "reconciled_unattributed": self.reconciled_unattributed,
+            # 全部容器/条目都返回副本：调用方修改序列化结果不得污染内存报告
+            # 或 cached_backfill_provenance 的共享产物（r11 N3/ST2）。
+            "matched_literals": dict(self.matched_literals),
+            "unmatched_aliases": [dict(u) for u in self.unmatched_aliases],
+            "seen_literals": list(self.seen_literals),
             "ambiguous_mentions": [
                 {
                     "surface": am.surface,
                     "start": am.start,
                     "end": am.end,
-                    "candidates": am.candidates,
+                    "candidates": list(am.candidates),
                     "reason": am.reason,
                     "chunk_id": am.chunk_id,
-                    "chunk_ids": am.chunk_ids,
+                    "chunk_ids": list(am.chunk_ids),
                 }
                 for am in self.ambiguous_mentions
             ],
-            "relations_without_evidence": self.relations_without_evidence,
+            "relations_without_evidence": [
+                dict(x) for x in self.relations_without_evidence],
             "relation_evidence_candidates": capped_candidates,
         }
 
@@ -643,8 +678,47 @@ def _backfill_relations(
     return out
 
 
+def _upsert_ambiguous_mention(
+    index: dict[tuple, AmbiguousMention],
+    target: BackfillReport,
+    *,
+    surface: str,
+    start: int,
+    end: int,
+    candidates: list[str],
+    reason: str,
+    source_chunks: list[str],
+) -> None:
+    """按 (surface,start,end,candidates) 去重写入歧义条目并聚合来源块。
+
+    ``merge_backfill_reports`` 与 ``reconcile_span_ambiguity`` 共用同一套索引，
+    否则重叠块会在两条路径各产一条完全相同的歧义记录（r11 N1/ST5）。
+    """
+    key = (surface, start, end, tuple(sorted(candidates)))
+    chunks = [c for c in source_chunks if c]
+    existing = index.get(key)
+    if existing is None:
+        merged_am = AmbiguousMention(
+            surface=surface,
+            start=start,
+            end=end,
+            candidates=list(candidates),
+            reason=reason,
+            chunk_id=chunks[0] if chunks else "",
+            chunk_ids=list(chunks),
+        )
+        index[key] = merged_am
+        target.ambiguous_mentions.append(merged_am)
+        return
+    for cid in chunks:
+        if cid not in existing.chunk_ids:
+            existing.chunk_ids.append(cid)
+
+
 def merge_backfill_reports(
-    reports: list[BackfillReport], *, document_text: str | None = None,
+    reports: list[BackfillReport], *,
+    document_text: str | None = None,
+    single_chunk_covers_document: bool = False,
 ) -> BackfillReport:
     """把分块回填信号聚合成整篇信号（计数相加、偏移平移、明细去重）。
 
@@ -666,6 +740,10 @@ def merge_backfill_reports(
     ``seen_literals``；只有整篇正文都找不到的字面才是幻觉（r4 S1）。
     ``relations_without_evidence`` 按三元组去重（不同块重复命中同一关系时
     只保留一条，chunk_ids 记录来源块），避免按块堆叠把计数放大。
+
+    ``single_chunk_covers_document``：本次汇总的报告就是整篇正文（单块文档）。
+    此时块扫描已经覆盖全文，别名幻觉判定不需要再做第二次整篇 AC 扫描
+    （r11 N8）。多块/部分块失败时保持默认 False，仍按整篇补扫。
     """
     merged = BackfillReport()
     missing_index: dict[str, dict] = {}
@@ -680,6 +758,7 @@ def merge_backfill_reports(
         merged.entities_grounded += report.entities_grounded
         merged.relations_total += report.relations_total
         merged.relations_with_evidence += report.relations_with_evidence
+        merged.reconciled_unattributed += report.reconciled_unattributed
         for key, n in report.matched_literals.items():
             merged.matched_literals[key] = merged.matched_literals.get(key, 0) + n
         seen_literals.update(report.seen_literals)
@@ -691,26 +770,13 @@ def merge_backfill_reports(
             start, end = am.start + offset, am.end + offset
             # 候选集合与实体输出顺序无关：重叠块里模型把候选换个顺序，
             # 同一处歧义仍必须合并成一条（r9 N4）。
-            key = (am.surface, start, end, tuple(sorted(am.candidates)))
-            existing = ambiguous_index.get(key)
             source_chunks = am.chunk_ids or (
                 [am.chunk_id] if am.chunk_id else [report.chunk_id])
-            if existing is None:
-                merged_am = AmbiguousMention(
-                    surface=am.surface,
-                    start=start,
-                    end=end,
-                    candidates=list(am.candidates),
-                    reason=am.reason,
-                    chunk_id=source_chunks[0] if source_chunks else "",
-                    chunk_ids=list(source_chunks),
-                )
-                ambiguous_index[key] = merged_am
-                merged.ambiguous_mentions.append(merged_am)
-            else:
-                for cid in source_chunks:
-                    if cid and cid not in existing.chunk_ids:
-                        existing.chunk_ids.append(cid)
+            _upsert_ambiguous_mention(
+                ambiguous_index, merged,
+                surface=am.surface, start=start, end=end,
+                candidates=am.candidates, reason=am.reason,
+                source_chunks=source_chunks)
         for entry in report.relations_without_evidence:
             item = dict(entry)
             item["chunk_id"] = report.chunk_id
@@ -751,7 +817,8 @@ def merge_backfill_reports(
     # 于是 seen_literals 里没有它，即使正文里明明存在。对「仍可能被判幻觉」
     # 的候选别名在整篇正文上补一次 AC 扫描（候选数远小于实体别名数，仍是
     # 线性），把整篇可见的字面并入 seen_literals（r4 S1）。
-    if document_text is not None and unmatched_index:
+    if (document_text is not None and unmatched_index
+            and not single_chunk_covers_document):
         candidates = sorted({
             key[2] for key in unmatched_index
             if key[2] and key[2] not in seen_literals
@@ -774,6 +841,8 @@ def merge_backfill_reports(
 def reconcile_span_ambiguity(
     result: ExtractionResult,
     report: BackfillReport,
+    *,
+    span_chunk_ids: dict[tuple[str, int, int], list[str]] | None = None,
 ) -> tuple[ExtractionResult, BackfillReport]:
     """跨块归并后按「同一处全局 span」对账歧义（r10 S2）。
 
@@ -786,21 +855,46 @@ def reconcile_span_ambiguity(
     ``AmbiguousMention``（candidates = owner 集合）。不同位置上的同名出现不在
     此列——按块内上下文归属是合理的，不能一律判歧义。
 
+    同一 owner 在重叠块里重复写下的**同一 ``(start,end)``** 只保留一条 mention
+    （r11 N10）：span 切片相同，重复只是 overlap 的计数噪声。
+
+    歧义条目与 ``merge_backfill_reports`` 共用 ``_upsert_ambiguous_mention``
+    索引：块内已判歧义、另外两块各归属一方的场景只留一条，``chunk_ids``
+    聚合全部参与块（``span_chunk_ids`` 由 pipeline 从各块结果反查）。
+
     计数口径不变：``entities_grounded`` 等仍是 chunk-weighted 计数（r4 N4），
-    这里只修「写进哪个实体」的归属冲突，不重算块加权比率。
+    这里只修「写进哪个实体」的归属冲突，不重算块加权比率；被撤销的 mention
+    数量单独记进 ``reconciled_unattributed``（r11 N2）。
     """
     owners: dict[tuple[str, int, int], list[int]] = {}
+    deduped: list[Entity] = []
     for ei, ent in enumerate(result.entities):
+        seen_spans: set[tuple[int, int]] = set()
+        mentions: list[EntityMention] = []
         for m in ent.mentions:
             if m.span is None:
+                mentions.append(m)
                 continue
+            span_key = (m.span.start, m.span.end)
+            if span_key in seen_spans:
+                continue
+            seen_spans.add(span_key)
+            mentions.append(m)
             key = (m.surface, m.span.start, m.span.end)
             bucket = owners.setdefault(key, [])
             if ei not in bucket:
                 bucket.append(ei)
+        deduped.append(
+            ent if len(mentions) == len(ent.mentions)
+            else ent.model_copy(update={"mentions": mentions}))
+
     conflicts = {key: eis for key, eis in owners.items() if len(eis) > 1}
     if not conflicts:
-        return result, report
+        return (
+            ExtractionResult(
+                entities=deduped, relations=list(result.relations)),
+            report,
+        )
 
     drop: dict[int, set[tuple[int, int]]] = {}
     for (_surface, start, end), eis in conflicts.items():
@@ -808,26 +902,35 @@ def reconcile_span_ambiguity(
             drop.setdefault(ei, set()).add((start, end))
 
     entities: list[Entity] = []
-    for ei, ent in enumerate(result.entities):
+    revoked = 0
+    for ei, ent in enumerate(deduped):
         dropped = drop.get(ei)
         mentions = [
             m for m in ent.mentions
             if m.span is None or dropped is None
             or (m.span.start, m.span.end) not in dropped
         ]
+        revoked += len(ent.mentions) - len(mentions)
         entities.append(
             ent if len(mentions) == len(ent.mentions)
             else ent.model_copy(update={"mentions": mentions}))
+    report.reconciled_unattributed += revoked
 
+    # 复用 merge 的歧义去重索引：块内已产出的同一处歧义只补来源块，不再 append。
+    ambiguous_index = {
+        (am.surface, am.start, am.end, tuple(sorted(am.candidates))): am
+        for am in report.ambiguous_mentions
+    }
     for (surface, start, end), eis in sorted(
             conflicts.items(), key=lambda kv: (kv[0][1], kv[0][2], kv[0][0])):
-        report.ambiguous_mentions.append(AmbiguousMention(
-            surface=surface,
-            start=start,
-            end=end,
+        source_chunks = list(
+            (span_chunk_ids or {}).get((surface, start, end)) or [])
+        _upsert_ambiguous_mention(
+            ambiguous_index, report,
+            surface=surface, start=start, end=end,
             candidates=[entity_signal_key(result.entities[i]) for i in eis],
             reason="同一处原文归属多个逻辑实体（跨块归并）",
-        ))
+            source_chunks=source_chunks)
 
     return (
         ExtractionResult(entities=entities, relations=list(result.relations)),
@@ -835,25 +938,44 @@ def reconcile_span_ambiguity(
     )
 
 
+def _backfill_cache_key(result: ExtractionResult, text: str) -> tuple:
+    """回填缓存的轻量内容指纹（不序列化整份结果）。
+
+    只用回填真正依赖的字段：原文、每个实体的 ``(type, name, aliases)``、
+    每条关系的 ``(head, predicate, tail)``。confidence/description/attributes
+    不参与 mention/span 与证据定位，不必进键。
+
+    刻意不用 ``id(result)``：质量中间件把 ``event.structured_output`` 重新
+    ``model_validate`` 成一个**新对象**，与抽取器 ``to_core_result`` 的产物
+    对象不同；只认对象身份会让「同一 reply 只扫一次」失效。内容指纹还能在
+    返工后输出变化时自然未命中。
+    """
+    return (
+        text,
+        tuple((e.type, e.name, tuple(e.aliases)) for e in result.entities),
+        tuple((r.head, r.predicate, r.tail) for r in result.relations),
+    )
+
+
 def cached_backfill_provenance(
-    owner: object,
+    cache: dict,
     result: ExtractionResult,
     text: str,
 ) -> tuple[ExtractionResult, BackfillReport]:
-    """同一份抽取结果的回填只扫描一次，产物缓存在 ``owner`` 上（r10 N5）。
+    """同一份抽取结果的回填只扫描一次，产物缓存在调用方的 ``cache`` 里（r10 N5）。
 
     质量中间件（审校前）与抽取器（审校后）都需要同一份回填信号。两侧都各跑
     一遍 ``backfill_provenance`` 会把块正文扫两次。这里按
-    ``(原文, 抽取结果)`` 做确定性缓存：中间件先算，抽取器随后命中同一份产物；
-    结果不同（例如返工后的新输出）则自然未命中、重新计算。
+    ``(原文, 结果内容指纹)`` 做确定性缓存：中间件先算，抽取器随后命中同一份
+    产物；结果不同（例如返工后的新输出）则自然未命中、重新计算。
 
-    ``owner`` 通常是本次 reply 的 agent 对象（一次抽取一个实例），缓存不会跨
-    文档泄漏。
+    ``cache`` 必须是**调用方自己的**字典（r11 N4）：本函数不再 ``setattr`` 到
+    任意 owner 上，也不再每次全量 ``model_dump_json()`` 生成键。
     """
-    key = (text, result.model_dump_json())
-    cached = getattr(owner, "_audit_backfill_cache", None)
-    if cached is not None and cached[0] == key:
-        return cached[1]
+    key = _backfill_cache_key(result, text)
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
     filled, report = backfill_provenance(result, text)
-    setattr(owner, "_audit_backfill_cache", (key, (filled, report)))
+    cache[key] = (filled, report)
     return filled, report
