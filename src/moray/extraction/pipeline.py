@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 
 from ..schema import (
     DomainSpec,
@@ -116,6 +117,36 @@ def naive_merge(partials: list[ExtractionResult]) -> ExtractionResult:
     return ExtractionResult(entities=list(bucket.values()), relations=relations)
 
 
+def _freeze_domain_field(value):
+    """把领域字段转成可稳定序列化的结构（pydantic / list / dict / 标量）。"""
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return {str(k): _freeze_domain_field(v) for k, v in sorted(value.items())}
+    if isinstance(value, (list, tuple)):
+        return [_freeze_domain_field(v) for v in value]
+    return value
+
+
+def _duck_domain_descriptor(domain) -> str:
+    """非 DomainSpec 的鸭子类型 domain 的稳定指纹（nit-4）。
+
+    只取文档化字段，绝不把对象地址/类名带进键：同一个配置在不同进程算出的
+    指纹必须一致。未知类型的字段值退化为 repr（由字段内容决定，不含对象地址
+    以外的随机性；真要放未知对象请改成 DomainSpec）。
+    """
+    fields = {
+        "code": getattr(domain, "code", None),
+        "types": getattr(domain, "types", ()),
+        "relation_predicates": getattr(domain, "relation_predicates", ()),
+        "extra_instruction": getattr(domain, "extra_instruction", None),
+    }
+    payload = json.dumps(
+        _freeze_domain_field(fields), ensure_ascii=False, sort_keys=True,
+        default=repr)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 class ChunkedExtractionPipeline:
     """分块 map 抽取 + 偏移换算 + 朴素归并 的流水线。"""
 
@@ -137,8 +168,8 @@ class ChunkedExtractionPipeline:
         # 命中率，再决定是否常开。
         self.warm_prefix = warm_prefix
         # 分块结果内容级缓存（纯加速层，默认 None=行为与无缓存逐字节一致）。
-        # 键=领域配置指纹+模型名+块正文；命中不调模型，用量记 cache_hits 而非
-        # 真实 token；同键并发在缓存内部单飞去重。
+        # 键=领域配置指纹+模型身份（provider+base_url+模型名）+块正文；命中不调
+        # 模型，用量记 cache_hits 而非真实 token；同键并发在缓存内部单飞去重。
         self.result_cache = result_cache
         # 领域指纹只依赖抽取器配置，一次 pipeline.run 内不会变：构造时算一次，
         # 避免每个分块都重建 pydantic 模型 + JSON schema（N2）。
@@ -149,8 +180,11 @@ class ChunkedExtractionPipeline:
         """当前抽取器所用领域配置 + 提示模板的版本指纹。
 
         真 Extractor 持有完整 DomainSpec，走内容级指纹（system prompt + schema）。
-        对不是 DomainSpec 的假对象，回退值必须包含该对象的完整 repr：只退化成
-        code 会让“同 code、不同枚举”的配置共用缓存键（N3）。
+        对不是 DomainSpec 的鸭子类型对象，回退值取文档化字段的稳定序列化（code/
+        types/relation_predicates/extra_instruction）：只退化成 code 会让“同 code、
+        不同枚举”的配置共用缓存键（N3）；直接用 ``repr(obj)`` 又会把默认
+        ``object.__repr__`` 的内存地址带进键，每个进程算出不同指纹、永远不命中
+        （nit-4）。
 
         user 消息模板（``Extractor._LEAD_IN`` / ``_retry_prompt``）同样影响输出，
         且改动不会体现在 DomainSpec 里：把它们的 hash 并进指纹，改模板自动失效，
@@ -160,7 +194,7 @@ class ChunkedExtractionPipeline:
         if isinstance(domain, DomainSpec):
             base = domain_fingerprint(domain)
         else:
-            base = f"code:{getattr(domain, 'code', 'unknown')}|repr:{domain!r}"
+            base = "duck:" + _duck_domain_descriptor(domain)
         lead_in = getattr(self.extractor, "_LEAD_IN", "")
         retry_prompt = getattr(self.extractor, "_retry_prompt", None)
         retry_sample = retry_prompt("{error}") if callable(retry_prompt) else ""
@@ -177,7 +211,7 @@ class ChunkedExtractionPipeline:
     async def _extract_one_chunk(self, chunk: Chunk) -> tuple[ExtractionResult, Usage, str, int]:
         """抽单个块（带限流）。返回换算后的结果、用量、块 id、真实模型尝试次数。
 
-        有缓存时以 (领域指纹, 模型名, 块正文) 为键取【块内】产物：命中则不发起
+        有缓存时以 (领域指纹, 模型身份, 块正文) 为键取【块内】产物：命中则不发起
         模型调用，用量只记一次 cache_hits；偏移换算仍在缓存之外做，语义不变。
         """
         async with self.sem:

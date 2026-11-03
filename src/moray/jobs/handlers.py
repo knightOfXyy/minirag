@@ -46,9 +46,10 @@ async def build_document_handler(
         domain_code 从 DB 配置中心取最新领域包（支持热更属性），优先于
         extractor_fn。
     dashboard: 可选 observability.Dashboard；每处理一篇写一行 pipeline_runs。
-    result_cache: 可选分块结果内容级缓存。应在 worker 进程内复用同一个实例，
-        断点续跑/失败重试/重复提交时相同分块命中缓存、不再调 LLM；命中用量只
-        记 cache_hits，不产生真实 token。None（默认）= 完全不缓存。
+    result_cache: 可选分块结果内容级缓存（键=领域指纹+模型身份+块正文）。
+        应在 worker 进程内复用同一个实例，断点续跑/失败重试/重复提交时相同分块
+        命中缓存、不再调 LLM；命中用量只记 cache_hits，不产生真实 token。
+        None（默认）= 完全不缓存。
     """
     import time
 
