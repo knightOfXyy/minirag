@@ -7,8 +7,9 @@
 * S2：跨块（≥2 chunk）的「歧义-only」不能因为 chunk-weighted 计数被
       误报成「回填命中率不足」；真正漏抽的实体仍要拦。
 * N1：歧义端点的关系不再额外报一句事实错误的「端点在正文中未命中」。
-* N2：关闭态（无 backfill 信号）恢复改造前的严格口径：
-      `names` 不做 strip、标准名不享受「永远已知」豁免。
+* N2：关闭态（无 backfill 信号）恢复改造前的口径：
+      `names` 不做 strip、只认原样标准名、不引入 `owners` 唯一性
+      （r7 F1 修正为与 262319b 逐字面等价）。
 """
 
 from types import SimpleNamespace
@@ -17,7 +18,6 @@ from moray.extraction import Document, ExtractionOutput
 from moray.extraction.document import Usage
 from moray.extraction.local_backfill import (
     backfill_provenance,
-    entity_signal_key,
 )
 from moray.orchestration.specialists import (
     ReviewVerdict,
@@ -55,32 +55,6 @@ async def test_same_name_different_type_is_ambiguity_not_duplicate_rework():
     assert len(reviewed.backfill["ambiguous_mentions"]) == 2
     assert all(not e.mentions for e in reviewed.result.entities), (
         "歧义未归属不得写错实体")
-
-
-def test_true_duplicate_same_type_and_name_still_blocked_by_rule_review():
-    """门控不能放过真正的「同 (type,name) 未去重」（回填前审校直接构造）。"""
-    text = "腾讯发布财报。"
-    duplicate = ExtractionResult(entities=[
-        Entity(name="腾讯", type="ORG"),
-        Entity(name="腾讯", type="ORG"),
-    ])
-    key = entity_signal_key(duplicate.entities[0])
-    backfill = {
-        "entities_total": 1,
-        "entities_grounded": 1,
-        "block_confidence": 1.0,
-        "matched_literals": {key: 1},
-        "ambiguous_mentions": [],
-        "unmatched_aliases": [],
-    }
-    review = rule_review(
-        text, ExtractionResult(entities=[
-            Entity(name="腾讯", type="ORG", mentions=[]),
-            Entity(name="腾讯", type="ORG", mentions=[]),
-        ]), backfill=backfill)
-
-    assert review.verdict == ReviewVerdict.NEEDS_FIX
-    assert any("未去重" in issue for issue in review.issues)
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +169,8 @@ def test_off_mode_does_not_strip_names_for_duplicate_check():
     assert review.verdict == ReviewVerdict.PASS, review.issues
 
 
-def test_off_mode_same_name_different_type_endpoint_not_exempted():
+def test_off_mode_same_name_different_type_endpoint_matches_262319b():
+    """关闭态 ② 与 262319b 一致：同名异型标准名不产生端点问题（r7 F1）。"""
     text = "腾讯发布了混元。"
     result, report = backfill_provenance(
         ExtractionResult(
@@ -213,7 +188,9 @@ def test_off_mode_same_name_different_type_endpoint_not_exempted():
     off = rule_review(text, result, backfill=None)
     slim = rule_review(text, result, backfill=report.to_dict())
 
+    # 基线只有 ③「未去重」，不会给标准名端点加 ②「归属不唯一」。
     assert off.verdict == ReviewVerdict.NEEDS_FIX
-    assert any(
+    assert any("未去重" in issue for issue in off.issues), off.issues
+    assert not any(
         "关系头实体「腾讯」" in issue for issue in off.issues), off.issues
     assert slim.verdict == ReviewVerdict.PASS, slim.issues
