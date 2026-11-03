@@ -85,7 +85,7 @@ def build_system_prompt(domain: DomainSpec, *, slim: bool = False) -> str:
     )
 
 
-def domain_fingerprint(domain: DomainSpec) -> str:
+def domain_fingerprint(domain: DomainSpec, *, slim: bool = False) -> str:
     """影响抽取输出的【领域配置版本】指纹（16 位十六进制）。
 
     覆盖系统提示词（类型枚举/说明/关系谓词/额外规则）与结构化输出模型的
@@ -93,12 +93,16 @@ def domain_fingerprint(domain: DomainSpec) -> str:
     用作分块结果缓存键的一部分——领域一改（如增删实体类型枚举），缓存即失效。
     刻意不依赖 DB updated_at：内置常量与 DB 配置可复用同一口径，且只反映
     真正影响输出的内容（改个备注名但 spec 不变不会无谓失效）。
+
+    ``slim`` 必须参与指纹：瘦身开关会同时换 system prompt 与 schema
+    （去掉 mentions/confidence/evidence），两种模式的产物形状与语义不同，
+    绝不能共用同一个缓存键（r4 B1：先 slim 后 full 会互相投毒）。
     """
     import hashlib
     import json
 
-    prompt = build_system_prompt(domain)
-    model_schema = build_extraction_model(domain).model_json_schema()
+    prompt = build_system_prompt(domain, slim=slim)
+    model_schema = build_extraction_model(domain, slim=slim).model_json_schema()
     canonical = json.dumps(
         {"prompt": prompt, "schema": model_schema},
         ensure_ascii=False, sort_keys=True, separators=(",", ":"),

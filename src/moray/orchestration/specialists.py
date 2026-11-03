@@ -90,16 +90,26 @@ def rule_review(
         for mm in span_report.mismatches:
             issues.append(f"出处错误·{mm['where']}：{mm['reason']}")
 
-    # ② 关系端点必须在实体列表里（否则是指向空气的臆测关系）
+    # ② 关系端点必须在实体列表里（否则是指向空气的臆测关系）。
+    #    与 local_backfill 的关系回填同口径：标准名或「唯一归属」的别名都算
+    #    已知端点；同一字面归属多个逻辑实体时不猜（r4 N1，原先只认标准名，
+    #    导致唯一别名端点能回填出证据却被审校打回）。
     names = {e.name for e in result.entities}
-    name_aliases = set()
+    literal_owners: dict[str, set[tuple[str, str]]] = {}
     for e in result.entities:
-        name_aliases.update(e.aliases)
-    known = names | name_aliases
+        for literal in [e.name, *e.aliases]:
+            literal = literal.strip()
+            if literal:
+                literal_owners.setdefault(literal, set()).add(
+                    (e.type, e.name))
+
+    def _known_endpoint(literal: str) -> bool:
+        return len(literal_owners.get(literal.strip(), ())) == 1
+
     for r in result.relations:
-        if r.head not in names:
+        if not _known_endpoint(r.head):
             issues.append(f"关系头实体「{r.head}」不在实体列表中（疑似臆测或漏抽实体）")
-        if r.tail not in names:
+        if not _known_endpoint(r.tail):
             issues.append(f"关系尾实体「{r.tail}」不在实体列表中（疑似臆测或漏抽实体）")
 
     # ③ 重复实体（同名出现两次，抽取员没去重）

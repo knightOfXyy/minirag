@@ -162,6 +162,7 @@ def get_settings() -> dict:
         "api_key": api_key,
         "base_url": base_url,
         "chat_model": chat_model,
+        "temperature": _optional_temperature_env(),
         **switches,
     }
 
@@ -258,6 +259,25 @@ def _positive_float_env(name: str, default: float) -> float:
         raise ConfigError(f"{name}={raw!r} 不是数字") from None
     if not math.isfinite(value) or value <= 0:
         raise ConfigError(f"{name}={raw!r} 必须是有限正数")
+    return value
+
+
+def _optional_temperature_env(name: str = "LLM_TEMPERATURE") -> float | None:
+    """可选采样温度：未设置返回 None（请求体不带该字段，保持历史行为）。
+
+    A/B 评测需要固定采样参数、可复现地记录 temperature；默认路径不改变。
+    """
+    import math
+
+    raw = _first_env(name)
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ConfigError(f"{name}={raw!r} 不是数字") from None
+    if not math.isfinite(value) or not 0.0 <= value <= 2.0:
+        raise ConfigError(f"{name}={raw!r} 必须在 [0, 2] 内")
     return value
 
 
@@ -366,6 +386,8 @@ def build_chat_model(*, stream: bool = False):
     # 只在显式配置时才构造 Parameters：各模型层的每个参数都是 None 才不写进
     # 请求体，保证默认路径与"没这些开关时"逐字节一致。
     param_kwargs: dict = {}
+    if s.get("temperature") is not None:
+        param_kwargs["temperature"] = s["temperature"]
     if s["reasoning_effort"]:
         param_kwargs["reasoning_effort"] = s["reasoning_effort"]
     if s["thinking"] is not None:

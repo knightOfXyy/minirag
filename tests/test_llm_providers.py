@@ -22,6 +22,7 @@ from moray.config import (
 def env(monkeypatch):
     """干净的环境变量 + 每次前后清缓存，避免用例互相污染。"""
     for var in ("LLM_PROVIDER", "LLM_REASONING_EFFORT", "LLM_THINKING",
+                "LLM_TEMPERATURE",
                 "ARK_REASONING_EFFORT", "ARK_THINKING",
                 "ARK_API_KEY", "ARK_BASE_URL", "ARK_CHAT_MODEL",
                 "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_CHAT_MODEL",
@@ -82,6 +83,22 @@ def test_openai_provider_requires_base_url_and_model(env):
     model = build_chat_model()
     assert isinstance(model, OpenAIChatModel)
     assert type(model).__name__ == "InstrumentedOpenAIChatModel"
+
+
+def test_temperature_is_opt_in_and_recordable(env):
+    """A/B 需要固定 temperature；未配置时不往请求体塞字段（默认行为不变）。"""
+    assert get_settings()["temperature"] is None
+    assert build_chat_model().parameters.model_dump(exclude_none=True) == {}
+
+    env.setenv("LLM_TEMPERATURE", "0")
+    get_settings.cache_clear()
+    assert get_settings()["temperature"] == 0.0
+    assert build_chat_model().parameters.temperature == 0.0
+
+    env.setenv("LLM_TEMPERATURE", "3")
+    get_settings.cache_clear()
+    with pytest.raises(ConfigError, match="LLM_TEMPERATURE"):
+        get_settings()
 
 
 def test_missing_key_names_the_variable_to_set(env):

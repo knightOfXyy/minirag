@@ -1087,9 +1087,9 @@ async def test_domain_fingerprint_computed_once_per_pipeline(monkeypatch):
     calls = {"n": 0}
     original = pipeline_mod.domain_fingerprint
 
-    def counting(domain):
+    def counting(domain, *, slim=False):
         calls["n"] += 1
-        return original(domain)
+        return original(domain, slim=slim)
 
     monkeypatch.setattr(pipeline_mod, "domain_fingerprint", counting)
 
