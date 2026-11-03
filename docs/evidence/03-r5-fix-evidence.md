@@ -2,7 +2,8 @@
 
 - 基线：`928daa8`（r4 修复后的 HEAD）。
 - 先红提交：`8419748`（只加/改回归用例，10 failed / 22 passed）。
-- 修复提交：见本轮 git log（先红之后）。
+- 修复提交：`d7dad32`（F1-F9 主体）+ `2205848`（歧义-only 输入加固）。
+- 证据提交：`c61e018` + `2205848`。
 - 全量离线：`ARK_API_KEY=dummy PYTHONPATH=src pytest -q -p no:cacheprovider`
   → **329 passed, 65 skipped**（r5 前 319 passed / 65 skipped，新增 10 条用例）。
 - 只改本分支，未动 `dev/yzd-feat-relation-202610` / `main`。
@@ -110,7 +111,7 @@
   `_literal_index` 转公开），② 与 `_resolve`/④ 统一 `strip` 口径。
 - `config.py`：新增 `_optional_float_env(name, minimum, maximum)`，
   `_positive_float_env` 与 `_optional_temperature_env` 共用解析/`isfinite`/报错。
-- 证据：全量回归 328 passed（既有端点/回填/配置用例未改语义）；代码见
+- 证据：全量回归 329 passed（既有端点/回填/配置用例未改语义）；代码见
   本轮 diff。
 
 ### F9（nit）指纹用例钉死期望值
