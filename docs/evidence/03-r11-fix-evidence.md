@@ -55,7 +55,8 @@
 
 - 事实：本机没有任何真实 LLM 凭证（仓库无 `.env`，环境变量无 `ARK_API_KEY`
   等）；`tools/backfill_stress_ab.py` 在无密钥时按设计直接失败，不会用规则
-  模式冒充。
+  模式冒充。实测命令与原始报错见 `03-r11-f2-no-credentials.txt`：
+  `moray.config.ConfigError: 未找到 ARK_API_KEY（当前 LLM_PROVIDER=volcengine）`。
 - 因此本轮**没有**新的 A/B 数值。唯一快照仍是 `9f95ed4` 的
   `03-r3-stress-ab.json`：mean-of-3 = +0.0733pt，但 worst-of-N −1.30pt、
   seed20261104 逐篇均值 −2.88pt 超过 ≤0.5pt 门槛。
