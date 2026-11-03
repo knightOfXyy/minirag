@@ -1,0 +1,384 @@
+# 先红：在旧实现（HEAD 460235a）上运行 r2 新增/修改测试
+# 说明：旧实现没有 relation_covered_stats，为让测试可收集，仅在临时 worktree /tmp/opencode/04-red 追加了一个不改变被评行为的只在返回 uncovered=0 的 shim；仓库代码未改。
+
+......F......FF.......FFF..F......FF.........FFFFFFFFFFFF.               [100%]
+=================================== FAILURES ===================================
+_____________ test_budget_gate_passes_only_when_all_thresholds_met _____________
+
+    def test_budget_gate_passes_only_when_all_thresholds_met():
+        gate = evaluate_budget_gate(_metrics(), _passing_candidate())
+        assert gate["passed"] is True
+        assert all(gate["checks"].values())
+        assert gate["entity_macro_f1_mean_delta_pt"] == pytest.approx(-0.4)
+        assert gate["overlap_unchanged"] is True
+        # 全量口径与覆盖子集并列列报；全量 F1 也参与放行（F2）
+        assert gate["relation_full_mean_delta_pt"] == pytest.approx(0.0)
+>       assert gate["checks"]["relation_full_f1_mean_not_lower"] is True
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'relation_full_f1_mean_not_lower'
+
+tests/test_chunk_budget.py:225: KeyError
+_ test_budget_gate_fails_when_any_threshold_breaks[overrides6-relation_full_f1_mean_not_lower] _
+
+overrides = {'relation_f1_mean': 0.4999}
+failed_check = 'relation_full_f1_mean_not_lower'
+
+    @pytest.mark.parametrize(
+        ("overrides", "failed_check"),
+        [
+            ({"entity_macro_f1_mean": 0.8949}, "entity_mean_within_0_5pt"),
+            ({"entity_macro_f1_worst": 0.8749}, "entity_worst_within_0_5pt"),
+            ({"relation_covered_recall_mean": 0.7999},
+             "relation_covered_recall_mean_not_lower"),
+            ({"relation_covered_recall_worst": 0.7499},
+             "relation_covered_recall_worst_not_lower"),
+            ({"relation_covered_precision_mean": 0.8949},
+             "relation_covered_precision_mean_within_0_5pt"),
+            ({"relation_covered_precision_worst": 0.8449},
+             "relation_covered_precision_worst_within_0_5pt"),
+            ({"relation_f1_mean": 0.4999}, "relation_full_f1_mean_not_lower"),
+            ({"relation_f1_worst": 0.4499}, "relation_full_f1_worst_not_lower"),
+            ({"truncated_chunks": 1}, "truncated_chunks_zero"),
+            ({"overlap_units": 0}, "overlap_unchanged"),
+            ({"overlap_pairs_min": 0}, "overlap_observed"),
+            ({"chunk_calls": 14}, "chunk_calls_decreased"),
+        ],
+    )
+    def test_budget_gate_fails_when_any_threshold_breaks(overrides, failed_check):
+        gate = evaluate_budget_gate(_metrics(), _passing_candidate(**overrides))
+>       assert gate["passed"] is False
+E       assert True is False
+
+tests/test_chunk_budget.py:251: AssertionError
+_ test_budget_gate_fails_when_any_threshold_breaks[overrides7-relation_full_f1_worst_not_lower] _
+
+overrides = {'relation_f1_worst': 0.4499}
+failed_check = 'relation_full_f1_worst_not_lower'
+
+    @pytest.mark.parametrize(
+        ("overrides", "failed_check"),
+        [
+            ({"entity_macro_f1_mean": 0.8949}, "entity_mean_within_0_5pt"),
+            ({"entity_macro_f1_worst": 0.8749}, "entity_worst_within_0_5pt"),
+            ({"relation_covered_recall_mean": 0.7999},
+             "relation_covered_recall_mean_not_lower"),
+            ({"relation_covered_recall_worst": 0.7499},
+             "relation_covered_recall_worst_not_lower"),
+            ({"relation_covered_precision_mean": 0.8949},
+             "relation_covered_precision_mean_within_0_5pt"),
+            ({"relation_covered_precision_worst": 0.8449},
+             "relation_covered_precision_worst_within_0_5pt"),
+            ({"relation_f1_mean": 0.4999}, "relation_full_f1_mean_not_lower"),
+            ({"relation_f1_worst": 0.4499}, "relation_full_f1_worst_not_lower"),
+            ({"truncated_chunks": 1}, "truncated_chunks_zero"),
+            ({"overlap_units": 0}, "overlap_unchanged"),
+            ({"overlap_pairs_min": 0}, "overlap_observed"),
+            ({"chunk_calls": 14}, "chunk_calls_decreased"),
+        ],
+    )
+    def test_budget_gate_fails_when_any_threshold_breaks(overrides, failed_check):
+        gate = evaluate_budget_gate(_metrics(), _passing_candidate(**overrides))
+>       assert gate["passed"] is False
+E       assert True is False
+
+tests/test_chunk_budget.py:251: AssertionError
+________ test_type_label_prefix_is_normalized_for_relaxed_entity_match _________
+
+    def test_type_label_prefix_is_normalized_for_relaxed_entity_match():
+        pred, gold = _event_results()
+>       ev = evaluate_case("event", 1, pred, gold, text=_TEXT_EVENT,
+                           normalize_type_labels=True)
+E       TypeError: evaluate_case() got an unexpected keyword argument 'normalize_type_labels'
+
+tests/test_chunk_budget_r1_fixes.py:60: TypeError
+_________ test_type_label_prefix_does_not_change_strict_surface_match __________
+
+    def test_type_label_prefix_does_not_change_strict_surface_match():
+        pred, gold = _event_results()
+>       ev = evaluate_case("event", 1, pred, gold, text=_TEXT_EVENT,
+                           normalize_type_labels=True)
+E       TypeError: evaluate_case() got an unexpected keyword argument 'normalize_type_labels'
+
+tests/test_chunk_budget_r1_fixes.py:74: TypeError
+__________ test_type_label_prefix_only_strips_labels_of_matching_type __________
+
+    def test_type_label_prefix_only_strips_labels_of_matching_type():
+        pred = ExtractionResult(entities=[Entity(
+            name="案件编号中心", type="ORG",
+            mentions=[EntityMention(surface="案件编号中心")],
+        )])
+        gold = ExtractionResult(entities=[Entity(
+            name="中心", type="ORG",
+            mentions=[EntityMention(surface="中心")],
+        )])
+>       ev = evaluate_case(
+            "org", 1, pred, gold, text="案件编号中心。",
+            normalize_type_labels=True)
+E       TypeError: evaluate_case() got an unexpected keyword argument 'normalize_type_labels'
+
+tests/test_chunk_budget_r1_fixes.py:91: TypeError
+_____ test_gate_passes_with_normalized_entity_and_covered_relation_caliber _____
+
+    def test_gate_passes_with_normalized_entity_and_covered_relation_caliber():
+        gate = evaluate_budget_gate(_metrics(), _passing_candidate())
+        assert gate["passed"] is True
+        assert all(gate["checks"].values())
+        # 全量口径仍出现在结果里，且全量 F1 也参与放行（F2）
+        assert gate["relation_full_mean_delta_pt"] == pytest.approx(0.0)
+>       assert gate["checks"]["relation_full_f1_mean_not_lower"] is True
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'relation_full_f1_mean_not_lower'
+
+tests/test_chunk_budget_r1_fixes.py:199: KeyError
+_ test_gate_fails_when_any_new_threshold_breaks[overrides6-relation_full_f1_mean_not_lower] _
+
+overrides = {'relation_f1_mean': 0.4999}
+failed_check = 'relation_full_f1_mean_not_lower'
+
+    @pytest.mark.parametrize(
+        ("overrides", "failed_check"),
+        [
+            ({"entity_macro_f1_mean": 0.8949}, "entity_mean_within_0_5pt"),
+            ({"entity_macro_f1_worst": 0.8749}, "entity_worst_within_0_5pt"),
+            ({"relation_covered_recall_mean": 0.7999},
+             "relation_covered_recall_mean_not_lower"),
+            ({"relation_covered_recall_worst": 0.7499},
+             "relation_covered_recall_worst_not_lower"),
+            ({"relation_covered_precision_mean": 0.8949},
+             "relation_covered_precision_mean_within_0_5pt"),
+            ({"relation_covered_precision_worst": 0.8449},
+             "relation_covered_precision_worst_within_0_5pt"),
+            ({"relation_f1_mean": 0.4999}, "relation_full_f1_mean_not_lower"),
+            ({"relation_f1_worst": 0.4499}, "relation_full_f1_worst_not_lower"),
+            ({"truncated_chunks": 1}, "truncated_chunks_zero"),
+            ({"overlap_units": 0}, "overlap_unchanged"),
+            ({"overlap_pairs_min": 0}, "overlap_observed"),
+            ({"chunk_calls": 14}, "chunk_calls_decreased"),
+        ],
+    )
+    def test_gate_fails_when_any_new_threshold_breaks(overrides, failed_check):
+        gate = evaluate_budget_gate(_metrics(), _passing_candidate(**overrides))
+>       assert gate["passed"] is False
+E       assert True is False
+
+tests/test_chunk_budget_r1_fixes.py:226: AssertionError
+_ test_gate_fails_when_any_new_threshold_breaks[overrides7-relation_full_f1_worst_not_lower] _
+
+overrides = {'relation_f1_worst': 0.4499}
+failed_check = 'relation_full_f1_worst_not_lower'
+
+    @pytest.mark.parametrize(
+        ("overrides", "failed_check"),
+        [
+            ({"entity_macro_f1_mean": 0.8949}, "entity_mean_within_0_5pt"),
+            ({"entity_macro_f1_worst": 0.8749}, "entity_worst_within_0_5pt"),
+            ({"relation_covered_recall_mean": 0.7999},
+             "relation_covered_recall_mean_not_lower"),
+            ({"relation_covered_recall_worst": 0.7499},
+             "relation_covered_recall_worst_not_lower"),
+            ({"relation_covered_precision_mean": 0.8949},
+             "relation_covered_precision_mean_within_0_5pt"),
+            ({"relation_covered_precision_worst": 0.8449},
+             "relation_covered_precision_worst_within_0_5pt"),
+            ({"relation_f1_mean": 0.4999}, "relation_full_f1_mean_not_lower"),
+            ({"relation_f1_worst": 0.4499}, "relation_full_f1_worst_not_lower"),
+            ({"truncated_chunks": 1}, "truncated_chunks_zero"),
+            ({"overlap_units": 0}, "overlap_unchanged"),
+            ({"overlap_pairs_min": 0}, "overlap_observed"),
+            ({"chunk_calls": 14}, "chunk_calls_decreased"),
+        ],
+    )
+    def test_gate_fails_when_any_new_threshold_breaks(overrides, failed_check):
+        gate = evaluate_budget_gate(_metrics(), _passing_candidate(**overrides))
+>       assert gate["passed"] is False
+E       assert True is False
+
+tests/test_chunk_budget_r1_fixes.py:226: AssertionError
+________ test_relation_endpoints_are_normalized_with_entity_type_prefix ________
+
+    def test_relation_endpoints_are_normalized_with_entity_type_prefix():
+        pred, gold = _event_relation_results()
+>       ev = evaluate_case(
+            "event-rel", 1, pred, gold, text=_TEXT_EVENT_REL,
+            normalize_type_labels=True)
+E       TypeError: evaluate_case() got an unexpected keyword argument 'normalize_type_labels'
+
+tests/test_chunk_budget_r2_fixes.py:65: TypeError
+_______ test_relation_endpoint_normalization_falls_back_to_prefix_table ________
+
+    def test_relation_endpoint_normalization_falls_back_to_prefix_table():
+        text = "案件编号 B2025-1 涉及王五。"
+        pred = ExtractionResult(relations=[
+            Relation(head="王五", predicate="涉案关联",
+                     tail="案件编号 B2025-1")])
+        gold = ExtractionResult(relations=[
+            Relation(head="王五", predicate="涉案关联", tail="B2025-1")])
+>       ev = evaluate_case(
+            "fallback", 1, pred, gold, text=text,
+            normalize_type_labels=True)
+E       TypeError: evaluate_case() got an unexpected keyword argument 'normalize_type_labels'
+
+tests/test_chunk_budget_r2_fixes.py:84: TypeError
+_____________ test_evaluate_case_default_keeps_legacy_raw_caliber ______________
+
+    def test_evaluate_case_default_keeps_legacy_raw_caliber():
+        pred, gold = _event_relation_results()
+        ev = evaluate_case("legacy", 1, pred, gold, text=_TEXT_EVENT_REL)
+        # 默认不归一化：实体和关系都按原始名字比较。
+>       assert ev.report.entity_relaxed.tp == 0
+E       AssertionError: assert 1 == 0
+E        +  where 1 = PRF(tp=1, fp=0, fn=0).tp
+E        +    where PRF(tp=1, fp=0, fn=0) = EvalReport(entity_strict=PRF(tp=0, fp=1, fn=1), entity_relaxed=PRF(tp=1, fp=0, fn=0), relation=PRF(tp=0, fp=1, fn=1)).entity_relaxed
+E        +      where EvalReport(entity_strict=PRF(tp=0, fp=1, fn=1), entity_relaxed=PRF(tp=1, fp=0, fn=0), relation=PRF(tp=0, fp=1, fn=1)) = CaseEvaluation(name='legacy', seed=1, pred=ExtractionResult(entities=[Entity(name='A2024-942', type='EVENT', aliases=[...F(tp=1, fp=0, fn=0), relation=PRF(tp=0, fp=1, fn=1)), relation_covered=PRF(tp=0, fp=1, fn=1), gold_covered_sentences=1).report
+
+tests/test_chunk_budget_r2_fixes.py:100: AssertionError
+____________ test_gate_passes_only_when_full_relation_f1_also_holds ____________
+
+    def test_gate_passes_only_when_full_relation_f1_also_holds():
+        gate = evaluate_budget_gate(_metrics(), _passing_candidate())
+        assert gate["passed"] is True
+>       assert gate["checks"]["relation_full_f1_mean_not_lower"] is True
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'relation_full_f1_mean_not_lower'
+
+tests/test_chunk_budget_r2_fixes.py:157: KeyError
+__ test_gate_fails_when_full_relation_f1_drops_even_if_covered_subset_passes ___
+
+    def test_gate_fails_when_full_relation_f1_drops_even_if_covered_subset_passes():
+        gate = evaluate_budget_gate(
+            _metrics(), _passing_candidate(
+                relation_f1_mean=0.4300, relation_f1_worst=0.4000))
+        # 覆盖子集全过，但全量关系 F1 掉 7pt：工单要求“关系 F1 不下降”，必须拦下。
+        assert gate["checks"]["relation_covered_recall_mean_not_lower"] is True
+>       assert gate["checks"]["relation_full_f1_mean_not_lower"] is False
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'relation_full_f1_mean_not_lower'
+
+tests/test_chunk_budget_r2_fixes.py:167: KeyError
+__________________ test_gate_requires_full_relation_f1_fields __________________
+
+    def test_gate_requires_full_relation_f1_fields():
+        baseline = _metrics()
+        candidate = _passing_candidate()
+        baseline.pop("relation_f1_mean")
+>       with pytest.raises(ValueError, match="relation_f1_mean"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_chunk_budget_r2_fixes.py:176: Failed
+_______________ test_load_real_docs_accepts_extra_long_document ________________
+
+tmp_path = PosixPath('/tmp/pytest-of-dell/pytest-760/test_load_real_docs_accepts_ex0')
+
+    def test_load_real_docs_accepts_extra_long_document(tmp_path: Path):
+        from tools.chunk_budget_ab import _load_real_docs
+    
+        long_path = tmp_path / "long_case.txt"
+        text = "临江宏远实业集团有限公司注册地位于临江区。" * 900
+        long_path.write_text(text, encoding="utf-8")
+    
+>       docs = _load_real_docs(
+            str(tmp_path / "missing-gold"),
+            str(tmp_path / "missing-samples"),
+            extra_docs=[str(long_path)],
+        )
+E       TypeError: _load_real_docs() got an unexpected keyword argument 'extra_docs'
+
+tests/test_chunk_budget_r2_fixes.py:190: TypeError
+_______ test_real_doc_coverage_marks_long_document_as_exercising_budget ________
+
+    def test_real_doc_coverage_marks_long_document_as_exercising_budget():
+        from tools.chunk_budget_ab import _real_doc_coverage
+    
+        out = _real_doc_coverage(
+            {"rows": [
+                {"document_units": 341, "max_chunk_units": 341},
+                {"document_units": 5360, "max_chunk_units": 3483},
+            ]},
+            candidate_budget=3500)
+>       assert out["exercises_candidate_budget"] is True
+E       assert False is True
+
+tests/test_chunk_budget_r2_fixes.py:210: AssertionError
+_____________ test_chunk_cases_does_not_collide_on_duplicate_names _____________
+
+    def test_chunk_cases_does_not_collide_on_duplicate_names():
+>       from tools.chunk_budget_ab import _chunk_cases
+E       ImportError: cannot import name '_chunk_cases' from 'tools.chunk_budget_ab' (/tmp/opencode/04-red/tools/chunk_budget_ab.py)
+
+tests/test_chunk_budget_r2_fixes.py:219: ImportError
+__________________ test_gate_reports_macro_and_micro_calibers __________________
+
+    def test_gate_reports_macro_and_micro_calibers():
+        gate = evaluate_budget_gate(_metrics(), _passing_candidate())
+>       assert "macro" in gate["caliber"]["entity_macro_f1"]
+                          ^^^^^^^^^^^^^^^
+E       KeyError: 'caliber'
+
+tests/test_chunk_budget_r2_fixes.py:240: KeyError
+__________ test_relation_chunk_profile_reports_far_example_truncation __________
+
+    def test_relation_chunk_profile_reports_far_example_truncation():
+        heads = [f"H{i}" for i in range(21)]
+        tails = [f"T{i}" for i in range(21)]
+        text = (
+            "".join(f"{h}出现在卷首。" for h in heads)
+            + "无关叙述。" * 2000
+            + "".join(f"{t}出现在卷尾。" for t in tails)
+        )
+        case = _Case(
+            name="far",
+            text=text,
+            relations=[_Rel(h, "关联", t) for h, t in zip(heads, tails)],
+        )
+        profile = relation_chunk_profile([case], max_units=500, overlap_units=50)
+        assert profile["far_first_occurrence_relations"] == 21
+        assert len(profile["far_first_occurrence_examples"]) == 20
+>       assert profile["far_first_occurrence_examples_total"] == 21
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'far_first_occurrence_examples_total'
+
+tests/test_chunk_budget_r2_fixes.py:278: KeyError
+_________ test_cross_sentence_gold_relations_are_reported_as_uncovered _________
+
+    def test_cross_sentence_gold_relations_are_reported_as_uncovered():
+        text = "张三与李四签约。\n中间一句。\n王五出现在卷首。\n赵六出现在卷尾。"
+        pred = ExtractionResult(relations=[
+            Relation(head="张三", predicate="签约", tail="李四"),
+        ])
+        gold = ExtractionResult(relations=[
+            Relation(head="张三", predicate="签约", tail="李四"),
+            Relation(head="王五", predicate="关联", tail="赵六"),
+        ])
+        stats = relation_covered_stats(text, pred, gold)
+        assert stats.covered_sentences >= 1
+        assert stats.gold_relations_total == 2
+        # 跨句关系既不在 covered spans，也不进 recall 分母；必须显式计数。
+>       assert stats.uncovered_gold_relations == 1
+E       assert 0 == 1
+E        +  where 0 = _RelationCoverageRedShim(prf=PRF(tp=1, fp=0, fn=0), covered_sentences=1, gold_relations_total=2, uncovered_gold_relations=0).uncovered_gold_relations
+
+tests/test_chunk_budget_r2_fixes.py:298: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_chunk_budget.py::test_budget_gate_passes_only_when_all_thresholds_met
+FAILED tests/test_chunk_budget.py::test_budget_gate_fails_when_any_threshold_breaks[overrides6-relation_full_f1_mean_not_lower]
+FAILED tests/test_chunk_budget.py::test_budget_gate_fails_when_any_threshold_breaks[overrides7-relation_full_f1_worst_not_lower]
+FAILED tests/test_chunk_budget_r1_fixes.py::test_type_label_prefix_is_normalized_for_relaxed_entity_match
+FAILED tests/test_chunk_budget_r1_fixes.py::test_type_label_prefix_does_not_change_strict_surface_match
+FAILED tests/test_chunk_budget_r1_fixes.py::test_type_label_prefix_only_strips_labels_of_matching_type
+FAILED tests/test_chunk_budget_r1_fixes.py::test_gate_passes_with_normalized_entity_and_covered_relation_caliber
+FAILED tests/test_chunk_budget_r1_fixes.py::test_gate_fails_when_any_new_threshold_breaks[overrides6-relation_full_f1_mean_not_lower]
+FAILED tests/test_chunk_budget_r1_fixes.py::test_gate_fails_when_any_new_threshold_breaks[overrides7-relation_full_f1_worst_not_lower]
+FAILED tests/test_chunk_budget_r2_fixes.py::test_relation_endpoints_are_normalized_with_entity_type_prefix
+FAILED tests/test_chunk_budget_r2_fixes.py::test_relation_endpoint_normalization_falls_back_to_prefix_table
+FAILED tests/test_chunk_budget_r2_fixes.py::test_evaluate_case_default_keeps_legacy_raw_caliber
+FAILED tests/test_chunk_budget_r2_fixes.py::test_gate_passes_only_when_full_relation_f1_also_holds
+FAILED tests/test_chunk_budget_r2_fixes.py::test_gate_fails_when_full_relation_f1_drops_even_if_covered_subset_passes
+FAILED tests/test_chunk_budget_r2_fixes.py::test_gate_requires_full_relation_f1_fields
+FAILED tests/test_chunk_budget_r2_fixes.py::test_load_real_docs_accepts_extra_long_document
+FAILED tests/test_chunk_budget_r2_fixes.py::test_real_doc_coverage_marks_long_document_as_exercising_budget
+FAILED tests/test_chunk_budget_r2_fixes.py::test_chunk_cases_does_not_collide_on_duplicate_names
+FAILED tests/test_chunk_budget_r2_fixes.py::test_gate_reports_macro_and_micro_calibers
+FAILED tests/test_chunk_budget_r2_fixes.py::test_relation_chunk_profile_reports_far_example_truncation
+FAILED tests/test_chunk_budget_r2_fixes.py::test_cross_sentence_gold_relations_are_reported_as_uncovered
+21 failed, 37 passed in 0.95s
