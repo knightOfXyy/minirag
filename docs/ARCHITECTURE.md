@@ -92,20 +92,22 @@
   `evidence_start/evidence_end`（裁剪后，与 `Relation.evidence_span` 逐值
   对齐）与原始 `sent_start/sent_end`；重叠块的同一处共现按
   `(head_start, tail_start, evidence_start, evidence_end)` 去重，来源块聚合到
-  `chunk_ids`；跨块合并后全局只有一条 `selected=True`。**块间传递保留全量
-  候选**，但进程内有一个明显高于对外窗口的软上限
-  `MAX_INTERNAL_RELATION_EVIDENCE_CANDIDATES=2000`（每条关系），兜住无标点
-  长文/单块大文本的笛卡尔积，避免 05 结果缓存与内存被撑大；只有 API 响应/
-  作业结果落盘边界用 `serialize_backfill_for_output` 按
+  `chunk_ids`；跨块合并后全局只有一条 `selected=True`。**配对阶段就按进程内
+  软上限 `MAX_INTERNAL_RELATION_EVIDENCE_CANDIDATES=2000`（每条关系）限流**
+  （r14 F1）：句内尾起点排序后逐头从最近位置向两侧扩张，用大顶堆只保留
+  最近的 N 对，一旦候选比堆顶更远就停止该头——无标点单句块不再先把 `H×T`
+  全物化再裁，避免 05 结果缓存与内存被笛卡尔积撑大。块间传递的是这份**有界**
+  候选；只有 API 响应/作业结果落盘边界用 `serialize_backfill_for_output` 按
   `MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES=20` 裁剪（selected 在首条）。
   `to_dict()` 默认上限仍可用，但传 `None` 表示全量、`0` 表示空；负数在
   序列化边界 clamp 到默认 20 并记 WARNING（r13 N6，坏配置不能把整次响应打成
-  500；配置层应在启动时另行校验）。
+  500；同一非法值只告警一次，后续降为 DEBUG，r14 F5；配置层应在启动时另行
+  校验）。
   `serialize_backfill_for_output` 返回完全独立的深层副本（含
   `chunk_ids`），消费方改嵌套容器不会反向污染内部报告（r12 N8、r13 N1）。
-  **验收 5 的口径收窄**：块间/内存默认保留全量，但单条关系进程内软上限
-  2000 条、出网 20 条；极端单句（如 50×50 共现）下「保留全部候选」只到
-  2000 条为止，不再声称无条件成立（r13 N2）。
+  **验收 5 的口径收窄**：单条关系进程内最多保留**最近的 2000 条**候选、
+  出网 20 条；极端单句（如 50×50 共现）下「保留全部候选」只到 2000 条为止，
+  不再声称无条件成立（r13 N2、r14 F1）。
 - 实体身份键（r10 N9、r11 N11、r12 S1、r13 N3/N4）：回填与 slim 归并共用
   `entity_identity_key`（默认去首尾空白）；关闭态 `naive_merge` 保持 262319b
   的精确键。回填的输出存值也规范化（实体标准名、关系 head/tail），
@@ -113,7 +115,9 @@
   `entity_signal_key` 同样对 name 去空白，跨块不会把同一实体拆成两个信号键。
   SLIM 归并不仅用去空白后的键，**存值/落库值也同步规范化**
   （实体标准名与关系 head/tail），否则入库 `_resolve` 按精确名匹配不到真实
-  实体、会建 MISC 占位。`naive_merge` 合并关系时存 `model_copy`，不改写调用方
+  实体、会建 MISC 占位。别名同样按此口径规范化：strip、去空、去重，并跳过
+  与标准名相同的项（r14 F2）；LEGACY 归并保持原样以维持关闭态逐字段一致。
+  `naive_merge` 合并关系时存 `model_copy`，不改写调用方
   传入的 partial（r10 N10）。四个归并口径由 `MergeMode.LEGACY|SLIM` 单一开关
   表达；四个关键字参数是 **deprecated 兼容 shim**，显式传值即覆盖模式默认，
   新代码不要与 `mode` 混用（r12 N9、r13 N5）。

@@ -180,7 +180,9 @@ def naive_merge(
             # 与 local_backfill 共用同一套元数据合并规则（别名并集/属性首见/
             # 置信度取大），避免两处逻辑漂移；mention 在归并层必须全量保留。
             # description 补全由独立开关控制：开关关闭时必须保持 262319b 旧输出。
-            merge_entity_metadata(ent, e, fill_description=fill_description)
+            merge_entity_metadata(
+                ent, e, fill_description=fill_description,
+                strip_aliases=strip_entity_name)
             ent.mentions.extend(e.mentions)
 
     rel_index: dict[tuple[str, str, str], Relation] = {}

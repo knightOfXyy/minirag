@@ -181,6 +181,9 @@ def test_negative_candidate_limit_clamps_to_default_and_warns(caplog):
     assert len(report.relation_evidence_candidates[key]) > (
         lb.MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES)
 
+    # r14 F5：同一个非法值只告警一次（进程级去重），这里先清状态再断言
+    # 「首次出现仍是 WARNING」，用例仍钉住 clamp 行为本身。
+    lb._NEGATIVE_CANDIDATE_LIMIT_WARNED.clear()
     with caplog.at_level(logging.WARNING, logger=lb.__name__):
         data = report.to_dict(max_relation_evidence_candidates=-5)
 
@@ -189,6 +192,7 @@ def test_negative_candidate_limit_clamps_to_default_and_warns(caplog):
     assert any("clamp" in rec.message for rec in caplog.records)
 
     caplog.clear()
+    lb._NEGATIVE_CANDIDATE_LIMIT_WARNED.clear()
     with caplog.at_level(logging.WARNING, logger=lb.__name__):
         out = lb.serialize_backfill_for_output(
             report.to_dict(max_relation_evidence_candidates=None),
