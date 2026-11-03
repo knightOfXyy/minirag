@@ -1476,7 +1476,8 @@ class _ConcurrentProbeCache:
         self.active = 0
         self.max_active = 0
 
-    async def has_cached(self, domain_fingerprint, model_identity, chunk_text):
+    async def has_cached(self, domain_fingerprint, model_identity, chunk_text,
+                         *, sampling_fingerprint=""):
         import asyncio
 
         self.active += 1
@@ -1488,7 +1489,7 @@ class _ConcurrentProbeCache:
             self.active -= 1
 
     async def get_or_extract(self, domain_fingerprint, model_identity, chunk_text,
-                             extract):
+                             extract, *, sampling_fingerprint=""):
         return await extract(), True
 
 

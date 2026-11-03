@@ -30,6 +30,7 @@ from typing import Awaitable, Callable
 
 from ..extraction.chunk_metrics import DocumentMetrics, merge_call_metrics
 from ..extraction.extractor import ExtractionError
+from ..extraction.local_backfill import literal_index
 from ..extraction.quality import verify_spans
 from ..schema import ExtractionResult
 
@@ -92,26 +93,39 @@ def rule_review(
             issues.append(f"出处错误·{mm['where']}：{mm['reason']}")
 
     # ② 关系端点必须在实体列表里（否则是指向空气的臆测关系）。
-    #    与 local_backfill 的关系回填同口径：标准名或「唯一归属」的别名都算
-    #    已知端点；同一字面归属多个逻辑实体时不猜（r4 N1，原先只认标准名，
-    #    导致唯一别名端点能回填出证据却被审校打回）。
-    names = {e.name for e in result.entities}
-    literal_owners: dict[str, set[tuple[str, str]]] = {}
-    for e in result.entities:
-        for literal in [e.name, *e.aliases]:
-            literal = literal.strip()
-            if literal:
-                literal_owners.setdefault(literal, set()).add(
-                    (e.type, e.name))
+    #    与 local_backfill 的关系回填共用同一个 literal 索引（r5 F8）：
+    #    标准名永远算已知；「唯一归属」的别名仅在瘦身模式（有 backfill 信号）
+    #    下放宽（r4 N1）。关闭态/full 模式保持改造前的严格口径（r5 F1）。
+    names = {e.name.strip() for e in result.entities}
+    index = literal_index(result.entities)
+    # 瘦身/回填模式才放宽「唯一归属别名即端点合法」（03 r5 F1）：backfill 信号
+    # 只在 MORAY_LOCAL_BACKFILL 打开（slim）时由调用方透传，关闭态保持严格口径。
+    slim = backfill is not None
+    literal_owners: dict[str, set[tuple[str, str]]] = {
+        literal: {(result.entities[i].type, result.entities[i].name)
+                  for i in idxs}
+        for literal, idxs in index.items()
+    }
 
-    def _known_endpoint(literal: str) -> bool:
-        return len(literal_owners.get(literal.strip(), ())) == 1
+    def _endpoint_issue(role: str, literal: str) -> str | None:
+        stripped = literal.strip()
+        if stripped in names:
+            return None
+        owners = literal_owners.get(stripped, set())
+        if slim and len(owners) == 1:
+            return None
+        if len(owners) > 1:
+            # 字面确实在实体列表里，只是归属不唯一；不要误导模型去“补实体”
+            # （r5 F4）。
+            return (f"关系{role}实体「{literal}」字面归属不唯一或未知"
+                    f"（疑似臆测）")
+        return f"关系{role}实体「{literal}」不在实体列表中（疑似臆测或漏抽实体）"
 
     for r in result.relations:
-        if not _known_endpoint(r.head):
-            issues.append(f"关系头实体「{r.head}」不在实体列表中（疑似臆测或漏抽实体）")
-        if not _known_endpoint(r.tail):
-            issues.append(f"关系尾实体「{r.tail}」不在实体列表中（疑似臆测或漏抽实体）")
+        for role, literal in (("头", r.head), ("尾", r.tail)):
+            issue = _endpoint_issue(role, literal)
+            if issue:
+                issues.append(issue)
 
     # ③ 重复实体（同名出现两次，抽取员没去重）
     if len(names) != len(result.entities):
@@ -123,8 +137,10 @@ def rule_review(
     #      两端都在正文中被命中（同句/跨句/跨块均可）→ 合法，证据留空；
     #      端点根本没在正文出现 → 才是臆测，要拦。
     def _endpoint_grounded(name: str) -> bool:
+        name = name.strip()
         for ent in result.entities:
-            if ent.name == name or name in ent.aliases:
+            aliases = {a.strip() for a in ent.aliases}
+            if ent.name.strip() == name or name in aliases:
                 return bool(ent.mentions)
         return False
 
@@ -142,19 +158,27 @@ def rule_review(
                 f"关系 {r.head}-[{r.predicate}]->{r.tail} 无原文证据"
                 f"（置信度{'未知' if r.confidence is None else r.confidence}）")
 
-    # ⑤ 确定性回填信号：块级命中率 + 歧义未归属 + 正文不存在的别名。
-    #    slim 模式模型不输出 confidence/span，这里是真正可用的质量信号。
+    # ⑤ 确定性回填信号：块级命中率 + 正文不存在的别名。
+    #    歧义未归属（ambiguous_mentions）只作为质量信号保留在 backfill 里，
+    #    **不**进 issues/feedback：这版不做模型补问（r5 F2），歧义不是模型
+    #    靠返工能解决的问题，写进 feedback 只会多调模型且仍然 accepted=False。
     if backfill:
         total = int(backfill.get("entities_total") or 0)
         grounded = int(backfill.get("entities_grounded") or 0)
         confidence = backfill.get("block_confidence")
-        if confidence is not None and confidence < 1.0:
+        # 歧义命中的候选实体没有被归属（entities_grounded 少算），但它们
+        # 确实在正文里出现过，不能因此触发“未找到出处”的模型返工。
+        matched = backfill.get("matched_literals") or {}
+        grounded_keys = {key for key, n in matched.items() if n}
+        ambiguous = backfill.get("ambiguous_mentions") or []
+        ambiguous_only = {
+            key for am in ambiguous for key in (am.get("candidates") or [])
+        } - grounded_keys
+        covered = grounded + len(ambiguous_only)
+        if confidence is not None and covered < total:
             issues.append(
                 f"回填命中率 {grounded}/{total}"
                 f"（块级置信度 {confidence}）：有实体未在正文中找到出处")
-        ambiguous = backfill.get("ambiguous_mentions") or []
-        if ambiguous:
-            issues.append(f"{len(ambiguous)} 处提及歧义未归属，需人工确认")
         phantom = backfill.get("unmatched_aliases") or []
         if phantom:
             issues.append(f"{len(phantom)} 个模型给出的别名在正文中不存在（疑似幻觉）")

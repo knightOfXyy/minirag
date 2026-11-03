@@ -309,7 +309,13 @@ def _aggregate_mode(repeats: list[dict], mode: str) -> dict:
 
 
 def _aggregate_delta(deltas: list[dict]) -> dict:
-    """多轮 delta 的均值；截断类指标取最坏值（max）而不是平均。"""
+    """多轮 delta 聚合：普通指标取均值，最坏值指标取 min/max。
+
+    · ``truncat*``（截断块/截断信号）取 max：验收要求“不增加”，看最坏轮；
+    · ``*_min_*``（每轮先取 min 的比值）继续取 min：跨轮最坏值不能被均值
+      抬高（r5 F5；此前 JSON 的 0.0116 是“各轮 min 的均值”，文档写 0.0099
+      才对不上）。
+    """
     keys = sorted({key for d in deltas for key in d})
     out: dict = {}
     for key in keys:
@@ -320,6 +326,8 @@ def _aggregate_delta(deltas: list[dict]) -> dict:
             out[key] = None
         elif key.startswith("truncat"):
             out[key] = max(values)
+        elif key.endswith("_min") or "_min_" in key:
+            out[key] = min(values)
         else:
             out[key] = _mean(values)
     return out

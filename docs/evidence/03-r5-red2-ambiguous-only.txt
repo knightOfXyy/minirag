@@ -1,0 +1,33 @@
+..F.......                                                               [100%]
+=================================== FAILURES ===================================
+_____________ test_ambiguous_mention_does_not_trigger_model_rework _____________
+
+    async def test_ambiguous_mention_does_not_trigger_model_rework():
+        # 最苛刻的输入：正文只有歧义字面，没有任何可归属的标准名。
+        # 此时 block_confidence 天然为 0，但歧义不是模型返工能解决的问题。
+        text = "同名发布了混元。"
+        logical = ExtractionResult(entities=[
+            Entity(name="腾讯", type="ORG", aliases=["同名"]),
+            Entity(name="网易", type="ORG", aliases=["同名"]),
+        ])
+        sink: dict = {}
+        calls: list[str | None] = []
+
+        async def extractor(body: str, feedback: str | None):
+            calls.append(feedback)
+            result, report = backfill_provenance(logical, body)
+            sink["backfill"] = report.to_dict()
+            return result
+
+        reviewed = await run_extraction_team(
+            text, extractor=extractor, backfill_sink=sink)
+
+>       assert len(calls) == 1, "歧义不得触发模型补问/返工"
+E       AssertionError: 歧义不得触发模型补问/返工
+E       assert 3 == 1
+E        +  where 3 = len([None, '请修正以下问题后重新输出完整结果：\n- 回填命中率 0/2（块级置信度 0.0）：有实体未在正文中找到出处', '请修正以下问题后重新输出完整结果：\n- 回填命中率 0/2（块级置信度 0.0）：有实体未在正文中找到出处'])
+
+tests/test_r5_review_fixes.py:93: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_r5_review_fixes.py::test_ambiguous_mention_does_not_trigger_model_rework
+1 failed, 9 passed in 0.73s

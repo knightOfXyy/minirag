@@ -76,8 +76,11 @@ class _ModeStub(Extractor):
 
 
 def test_domain_fingerprint_changes_with_slim_mode():
-    assert domain_fingerprint(GENERAL_DOMAIN) != domain_fingerprint(
-        GENERAL_DOMAIN, slim=True)
+    # 钉死期望指纹（r5 F9）：只断言“不相等”时，任何无关 prompt/schema 变化
+    # 都能让等式成立，抓不到“slim 未参与指纹”的回归。若有意改领域定义，
+    # 必须同步更新这两个常量并在评审里说明。
+    assert domain_fingerprint(GENERAL_DOMAIN) == "e084408b3bbb25dd"
+    assert domain_fingerprint(GENERAL_DOMAIN, slim=True) == "8b9e2ebfd4afb900"
 
 
 async def _run_one(stub: Extractor, cache, text: str):
@@ -224,7 +227,9 @@ def test_rule_review_still_rejects_ambiguous_alias_relation_endpoint():
     )
     review = rule_review(text, result, backfill=report.to_dict())
     assert review.verdict == ReviewVerdict.NEEDS_FIX
-    assert any("不在实体列表" in issue for issue in review.issues)
+    # r5 F4：字面在实体列表里、只是归属不唯一，不能误报“不在实体列表中”。
+    assert any("归属不唯一" in issue for issue in review.issues)
+    assert not any("不在实体列表" in issue for issue in review.issues)
 
 
 # ---------------------------------------------------------------------------

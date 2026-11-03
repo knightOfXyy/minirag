@@ -1,0 +1,189 @@
+F.FFFFFFF.......F.............F.                                         [100%]
+=================================== FAILURES ===================================
+____ test_rule_review_rejects_unique_alias_endpoint_when_backfill_disabled _____
+
+    def test_rule_review_rejects_unique_alias_endpoint_when_backfill_disabled():
+        """关闭态/full 模式保持改造前的严格口径：别名端点仍报 ②。"""
+        text, result, _report = _alias_endpoint_result()
+        review = rule_review(text, result, backfill=None)
+>       assert review.verdict == ReviewVerdict.NEEDS_FIX
+E       AssertionError: assert 'pass' == 'needs_fix'
+E
+E         - needs_fix
+E         + pass
+
+tests/test_r5_review_fixes.py:59: AssertionError
+_____________ test_ambiguous_mention_does_not_trigger_model_rework _____________
+
+    async def test_ambiguous_mention_does_not_trigger_model_rework():
+        text = "腾讯和网易都叫同名。"
+        logical = ExtractionResult(entities=[
+            Entity(name="腾讯", type="ORG", aliases=["同名"]),
+            Entity(name="网易", type="ORG", aliases=["同名"]),
+        ])
+        sink: dict = {}
+        calls: list[str | None] = []
+
+        async def extractor(body: str, feedback: str | None):
+            calls.append(feedback)
+            result, report = backfill_provenance(logical, body)
+            sink["backfill"] = report.to_dict()
+            return result
+
+        reviewed = await run_extraction_team(
+            text, extractor=extractor, backfill_sink=sink)
+
+>       assert len(calls) == 1, "歧义不得触发模型补问/返工"
+E       AssertionError: 歧义不得触发模型补问/返工
+E       assert 3 == 1
+E        +  where 3 = len([None, '请修正以下问题后重新输出完整结果：\n- 1 处提及歧义未归属，需人工确认', '请修正以下问题后重新输出完整结果：\n- 1 处提及歧义未归属，需人工确认'])
+
+tests/test_r5_review_fixes.py:91: AssertionError
+_________ test_whole_document_alias_scan_uses_source_text_not_feedback _________
+
+    async def test_whole_document_alias_scan_uses_source_text_not_feedback():
+        original = "腾讯发布财报。"
+        body = original + "\n【上次问题】鹅厂 未出现"
+        chunks = [Chunk(id="d#c0", text=original, start=0,
+                        end=len(original), index=0)]
+        out = await ChunkedExtractionPipeline(
+            _AliasOnlyInFeedbackFake(), concurrency=1).run(
+                Document(id="d", text=body, source_text=original), chunks)
+
+        # 「鹅厂」只在反馈里出现，原始正文没有 -> 必须仍算幻觉
+>       assert out.backfill["unmatched_aliases"] == [
+            {"entity": "腾讯", "literal": "鹅厂"}]
+E       AssertionError: assert [] == [{'entity': '...teral': '鹅厂'}]
+E
+E         Right contains one more item: {'entity': '腾讯', 'literal': '鹅厂'}
+E         Use -v to get more diff
+
+tests/test_r5_review_fixes.py:125: AssertionError
+_______________ test_aggregate_delta_min_fields_take_worst_value _______________
+
+    def test_aggregate_delta_min_fields_take_worst_value():
+        deltas = [
+            {"span_ratio_min_before": 0.0110, "truncated_chunks_before": 2,
+             "entity_macro_f1_delta_pt": 1.0},
+            {"span_ratio_min_before": 0.0099, "truncated_chunks_before": 6,
+             "entity_macro_f1_delta_pt": -1.3},
+            {"span_ratio_min_before": 0.0120, "truncated_chunks_before": 4,
+             "entity_macro_f1_delta_pt": 0.52},
+        ]
+        agg = _aggregate_delta(deltas)
+>       assert agg["span_ratio_min_before"] == 0.0099
+E       assert 0.011 == 0.0099
+
+tests/test_r5_review_fixes.py:143: AssertionError
+____________________ test_env_example_documents_temperature ____________________
+
+    def test_env_example_documents_temperature():
+        content = (_REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+>       assert "LLM_TEMPERATURE" in content
+E       AssertionError: assert 'LLM_TEMPERATURE' in '# 复制为 .env 并填入你自己的值（.env 不会进 git）\n\n# ===== LLM 供应商（三选一，留空 = volcengine，与历史行为一致）=====\n# volcengine = 火山方舟 ARK；deeps...约；需大于单任务最坏耗时（慢推理给足）\n\n# 本地嵌入模型\nEMBEDDING_PROVIDER=local\nEMBEDDING_MODEL=BAAI/bge-small-zh-v1.5\nEMBEDDING_DIM=512\n'
+
+tests/test_r5_review_fixes.py:154: AssertionError
+______________________ test_describe_includes_temperature ______________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7268b2bf0230>
+
+    def test_describe_includes_temperature(monkeypatch):
+        monkeypatch.setenv("ARK_API_KEY", "ark-fake-key-for-tests-0000")
+        from moray.config import get_settings
+
+        get_settings.cache_clear()
+        d = describe()
+>       assert "temperature" in d
+E       AssertionError: assert 'temperature' in {'provider': 'volcengine', 'base_url': 'https://ark.cn-beijing.volces.com/api/coding/v3', 'chat_model': 'deepseek-v4-flash-ga', 'api_key_masked': 'ark…0000（27 位）', ...}
+
+tests/test_r5_review_fixes.py:163: AssertionError
+_______________ test_cache_key_changes_with_sampling_fingerprint _______________
+
+    def test_cache_key_changes_with_sampling_fingerprint():
+        import inspect
+
+        from moray.extraction.cache import build_cache_key
+
+>       assert "sampling_fingerprint" in inspect.signature(build_cache_key).parameters
+E       assert 'sampling_fingerprint' in mappingproxy(OrderedDict({'domain_fingerprint': <Parameter "domain_fingerprint: 'str'">, 'model_name': <Parameter "model_name: 'str'">, 'chunk_text': <Parameter "chunk_text: 'str'">}))
+E        +  where mappingproxy(OrderedDict({'domain_fingerprint': <Parameter "domain_fingerprint: 'str'">, 'model_name': <Parameter "model_name: 'str'">, 'chunk_text': <Parameter "chunk_text: 'str'">})) = <Signature (domain_fingerprint: 'str', model_name: 'str', chunk_text: 'str') -> 'str'>.parameters
+E        +    where <Signature (domain_fingerprint: 'str', model_name: 'str', chunk_text: 'str') -> 'str'> = <function signature at 0x7268b9dd4360>(<function build_cache_key at 0x7268b8a4d080>)
+E        +      where <function signature at 0x7268b9dd4360> = <module 'inspect' from '/usr/lib/python3.12/inspect.py'>.signature
+
+tests/test_r5_review_fixes.py:175: AssertionError
+________ test_shared_cache_does_not_reuse_result_across_sampling_params ________
+
+    async def test_shared_cache_does_not_reuse_result_across_sampling_params():
+        text = "腾讯发布财报。"
+        cache = ContentResultCache(InMemoryCacheBackend())
+        low = _SamplingFake("temp=0.0")
+        high = _SamplingFake("temp=1.0")
+        chunks = [Chunk(id="d#c0", text=text, start=0, end=len(text), index=0)]
+
+        await ChunkedExtractionPipeline(
+            low, concurrency=1, result_cache=cache).run(
+                Document(id="d", text=text), chunks)
+        await ChunkedExtractionPipeline(
+            high, concurrency=1, result_cache=cache).run(
+                Document(id="d", text=text), chunks)
+
+        assert low.calls == 1
+>       assert high.calls == 1, "采样参数不同不得命中同一缓存键"
+E       AssertionError: 采样参数不同不得命中同一缓存键
+E       assert 0 == 1
+E        +  where 0 = <test_r5_review_fixes._SamplingFake object at 0x7268b2bf11f0>.calls
+
+tests/test_r5_review_fixes.py:214: AssertionError
+_______ test_rule_review_still_rejects_ambiguous_alias_relation_endpoint _______
+
+    def test_rule_review_still_rejects_ambiguous_alias_relation_endpoint():
+        text = "同名发布了混元。"
+        result, report = backfill_provenance(
+            ExtractionResult(
+                entities=[
+                    Entity(name="腾讯", type="ORG", aliases=["同名"]),
+                    Entity(name="网易", type="ORG", aliases=["同名"]),
+                    Entity(name="混元", type="MISC"),
+                ],
+                relations=[Relation(head="同名", predicate="发布", tail="混元")],
+            ),
+            text,
+        )
+        review = rule_review(text, result, backfill=report.to_dict())
+        assert review.verdict == ReviewVerdict.NEEDS_FIX
+        # r5 F4：字面在实体列表里、只是归属不唯一，不能误报“不在实体列表中”。
+>       assert any("归属不唯一" in issue for issue in review.issues)
+E       assert False
+E        +  where False = any(<generator object test_rule_review_still_rejects_ambiguous_alias_relation_endpoint.<locals>.<genexpr> at 0x7268b2be72a0>)
+
+tests/test_r4_review_fixes.py:231: AssertionError
+______________________ test_describe_never_leaks_the_key _______________________
+
+env = <_pytest.monkeypatch.MonkeyPatch object at 0x726876cecec0>
+
+    def test_describe_never_leaks_the_key(env):
+        d = describe()
+        assert "ark-fake-key-for-tests-0000" not in str(d)
+        assert d["api_key_masked"].startswith("ark")
+        assert "…" in d["api_key_masked"]
+>       assert set(d) == {"provider", "base_url", "chat_model", "api_key_masked",
+                          "reasoning_effort", "thinking", "temperature"}
+E       AssertionError: assert {'api_key_mas...', 'thinking'} == {'api_key_mas...erature', ...}
+E
+E         Extra items in the right set:
+E         'temperature'
+E         Use -v to get more diff
+
+tests/test_llm_providers.py:184: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_r5_review_fixes.py::test_rule_review_rejects_unique_alias_endpoint_when_backfill_disabled
+FAILED tests/test_r5_review_fixes.py::test_ambiguous_mention_does_not_trigger_model_rework
+FAILED tests/test_r5_review_fixes.py::test_whole_document_alias_scan_uses_source_text_not_feedback
+FAILED tests/test_r5_review_fixes.py::test_aggregate_delta_min_fields_take_worst_value
+FAILED tests/test_r5_review_fixes.py::test_env_example_documents_temperature
+FAILED tests/test_r5_review_fixes.py::test_describe_includes_temperature - As...
+FAILED tests/test_r5_review_fixes.py::test_cache_key_changes_with_sampling_fingerprint
+FAILED tests/test_r5_review_fixes.py::test_shared_cache_does_not_reuse_result_across_sampling_params
+FAILED tests/test_r4_review_fixes.py::test_rule_review_still_rejects_ambiguous_alias_relation_endpoint
+FAILED tests/test_llm_providers.py::test_describe_never_leaks_the_key - Asser...
+10 failed, 22 passed in 0.88s

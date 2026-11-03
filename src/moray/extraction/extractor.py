@@ -204,8 +204,8 @@ class Extractor:
         )
         settings = get_settings()
         self.model_name: str = settings["chat_model"]
-        # 缓存键用的完整模型身份：同一个 chat_model 挂在不同 provider/base_url
-        # 网关下可能是不同权重/版本，不能共用缓存（nit-1）；LLM_THINKING /
+        # 缓存键用的完整模型身份（05 r5）：同一个 chat_model 挂在不同 provider/
+        # base_url 网关下可能是不同权重/版本，不能共用缓存（nit-1）；LLM_THINKING /
         # LLM_REASONING_EFFORT 直接改请求体、影响输出，也必须进键（should-2：
         # 它们是运行期 env，改 .env 重启即生效，漏了会静默返回旧档位结果）。
         # model_name 仍保持裸模型名，API/结果序列化口径不变。
@@ -215,6 +215,15 @@ class Extractor:
             f"{settings.get('provider', '')}|{settings.get('base_url', '')}|"
             f"{self.model_name}|effort={effort or '-'}|"
             f"think={'-' if thinking is None else str(thinking).lower()}")
+        # 影响输出的采样参数摘要（03 r5 F7）：由分块 pipeline 作为
+        # ``sampling_fingerprint`` 并入内容缓存键。temperature 直接改请求体，
+        # 换档位后不得复用旧产物；未配置项显式记 '-'，保证 "None" 与 "0.0"
+        # 不会拼成同一个键。思考档位与 model_identity 里的口径保持一致。
+        temperature = settings.get("temperature")
+        self.sampling_fingerprint: str = (
+            f"temp={temperature if temperature is not None else '-'}"
+            f"|effort={effort or '-'}"
+            f"|think={'-' if thinking is None else str(thinking).lower()}")
         # 前缀预热去重：一个实例（= 一个领域版本）只探一次，别每次都烧钱
         self._prefix_warmed = False
 

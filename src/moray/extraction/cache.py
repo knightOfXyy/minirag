@@ -48,11 +48,14 @@ logger = logging.getLogger(__name__)
 # 载荷格式版本：一旦序列化形态不兼容可整体换命名空间，避免读到旧格式脏数据。
 _PAYLOAD_VERSION = 1
 
-# 提示模板/生成参数版本：domain_fingerprint 覆盖 system prompt + schema（user 消息
-# 模板由 pipeline 的 tpl 指纹覆盖），模型身份覆盖 provider/base_url/model 与
-# LLM_THINKING/LLM_REASONING_EFFORT。**仍不在键里**的是采样参数（temperature 等）
-# 与请求体里的其它手写参数：改这些影响输出的要素时必须人工递增此版本，让旧缓存
-# 整体失效（N11）。
+# 提示模板/生成参数版本：键里已经包含全部【自动感知】的要素——
+#   · 领域指纹 domain_fingerprint（system prompt + schema + 瘦身/全量模式 +
+#     模板 hash，见 pipeline.ChunkPipeline._domain_fingerprint）；
+#   · 模型身份 model_identity（provider + base_url + 模型名 + 思考/推理档位）；
+#   · 采样指纹 sampling_fingerprint（temperature 等影响输出的采样参数，r5 F7）；
+#   · 分块正文的 SHA-256。
+# 手写的 user 消息模板等**无法自动感知**的改动没有进键，改这些影响输出的要素时
+# 必须人工递增此版本，让旧缓存整体失效（N11）。
 _PROMPT_TEMPLATE_VERSION = 1
 
 # 内存后端默认上限：长跑 worker 的进程内存不能只增不减（简单 LRU）。
@@ -129,13 +132,20 @@ class CorruptibleBackend(Protocol):
 
 
 def build_cache_key(
-        domain_fingerprint: str, model_identity: str, chunk_text: str) -> str:
-    """以全部影响输出的输入要素拼键：领域指纹 + 模型身份 + 正文 + 模板版本。
+    domain_fingerprint: str,
+    model_identity: str,
+    chunk_text: str,
+    *,
+    sampling_fingerprint: str = "",
+) -> str:
+    """以全部影响输出的输入要素拼键：领域指纹 + 模型身份 + 采样参数 + 正文 + 模板版本。
 
     形参叫 ``model_identity`` 而不是 ``model_name``：它承载的是
     provider+base_url+model（+思考/推理档位），只传裸模型名会静默退化键口径。
     用真正的长度前缀（``len:value|``）拼装，避免字段边界被内容含分隔符时
     拼成同一字符串；正文取 SHA-256，键长固定且与正文长度无关。
+    ``sampling_fingerprint`` 承载 temperature/思考开关等运行期配置（r5 F7）：
+    它们直接改请求体，换档位后不得复用旧产物。
     """
     body = hashlib.sha256(chunk_text.encode("utf-8")).hexdigest()
     parts = (
@@ -143,6 +153,7 @@ def build_cache_key(
         f"t{_PROMPT_TEMPLATE_VERSION}",
         f"fp={domain_fingerprint}",
         f"m={model_identity}",
+        f"s={sampling_fingerprint}",
         f"sha={body}",
     )
     raw = "|".join(f"{len(p)}:{p}" for p in parts)
@@ -210,6 +221,8 @@ class ContentResultCache:
         model_identity: str,
         chunk_text: str,
         extract: Callable[[], Awaitable[ExtractionOutput]],
+        *,
+        sampling_fingerprint: str = "",
     ) -> tuple[ExtractionOutput, bool]:
         """命中返回 (缓存结果, True)；未命中跑一次 extract 并回写，返回 (结果, False)。
 
@@ -217,7 +230,8 @@ class ContentResultCache:
         绝不能因为它影响真实抽取。
         """
         return await self._get_or_extract(
-            domain_fingerprint, model_identity, chunk_text, extract, retries=0)
+            domain_fingerprint, model_identity, chunk_text, extract,
+            sampling_fingerprint=sampling_fingerprint, retries=0)
 
     async def _get_or_extract(
         self,
@@ -226,9 +240,12 @@ class ContentResultCache:
         chunk_text: str,
         extract: Callable[[], Awaitable[ExtractionOutput]],
         *,
+        sampling_fingerprint: str = "",
         retries: int,
     ) -> tuple[ExtractionOutput, bool]:
-        key = build_cache_key(domain_fingerprint, model_identity, chunk_text)
+        key = build_cache_key(
+            domain_fingerprint, model_identity, chunk_text,
+            sampling_fingerprint=sampling_fingerprint)
 
         # ① 锁外先读后端：postgres 的 SELECT 会真正让出事件循环，绝不能塞进
         # 全局锁，否则 chunk_concurrency 会被串行化（S5）。
@@ -275,6 +292,7 @@ class ContentResultCache:
                         f"key={key[:16]}") from None
                 return await self._get_or_extract(
                     domain_fingerprint, model_identity, chunk_text, extract,
+                    sampling_fingerprint=sampling_fingerprint,
                     retries=retries + 1)
 
         # ③ 从这里开始本协程“拥有”该键的 _inflight。二次读、跨进程占位、等待、
@@ -339,10 +357,14 @@ class ContentResultCache:
         domain_fingerprint: str,
         model_identity: str,
         chunk_text: str,
+        *,
+        sampling_fingerprint: str = "",
     ) -> bool:
         """该分块是否已有可用的缓存结果（只读探测，供预热前判断全命中）。"""
         return await self._safe_get(
-            build_cache_key(domain_fingerprint, model_identity, chunk_text)) is not None
+            build_cache_key(
+                domain_fingerprint, model_identity, chunk_text,
+                sampling_fingerprint=sampling_fingerprint)) is not None
 
     # -------------------------------------------------- 后端容错读写
     async def _safe_get(self, key: str) -> ExtractionOutput | None:

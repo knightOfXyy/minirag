@@ -321,7 +321,7 @@ def _coalesce_entities(entities: list[Entity]) -> list[Entity]:
     return merged
 
 
-def _literal_index(entities: list[Entity]) -> dict[str, list[int]]:
+def literal_index(entities: list[Entity]) -> dict[str, list[int]]:
     """建立 字面（标准名/别名，去空白）-> 候选逻辑实体下标 的唯一索引。
 
     歧义、关系端点解析、AC 模式集必须共用同一套口径（去空、strip、别名去重），
@@ -347,7 +347,7 @@ def _entity_patterns(
     只有当同一字面映射到【不同】逻辑实体（不同 (type,name)，或别名归属冲突）
     时才算歧义；同一逻辑实体自身重复出现已在 :func:`_coalesce_entities` 合并。
     """
-    literal_to_entities = _literal_index(logical)
+    literal_to_entities = literal_index(logical)
     return list(literal_to_entities), literal_to_entities
 
 
@@ -483,11 +483,11 @@ def _backfill_relations(
     """按「头、尾同句共现」回填关系证据 span；不共现则留空。"""
     # 关系端点按标准名或别名解析：模型有时会把别名写进 head/tail。
     # 只有「唯一归属」才认（同一字面映射到多个逻辑实体时不猜），与
-    # backfill_provenance 的歧义口径共用 _literal_index。
-    literal_to_indices = _literal_index(entities)
+    # backfill_provenance 的歧义口径共用 literal_index。
+    literal_to_indices = literal_index(entities)
 
     def _resolve(literal: str) -> int | None:
-        indices = literal_to_indices.get(literal) or []
+        indices = literal_to_indices.get(literal.strip()) or []
         return indices[0] if len(indices) == 1 else None
 
     # 关系证据必须认英文句号（"Alice met Bob. Carol met Bob." 是两句），
