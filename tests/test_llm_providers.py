@@ -182,7 +182,8 @@ def test_describe_never_leaks_the_key(env):
     assert d["api_key_masked"].startswith("ark")
     assert "…" in d["api_key_masked"]
     assert set(d) == {"provider", "base_url", "chat_model", "api_key_masked",
-                      "reasoning_effort", "thinking"}
+                      "reasoning_effort", "thinking", "temperature"}
+    assert d["temperature"] is None
 
 
 def test_llm_check_error_translator_is_actionable(env):
