@@ -98,7 +98,7 @@ class _ScriptedProvider:
     async def get_extractor(self, domain_code):
         return self._new(), SimpleNamespace(code="general")
 
-    async def extract(self, domain_code, usage_sink=None):
+    async def extract(self, domain_code, usage_sink=None, metrics_sink=None):
         extractor = self._new()
 
         async def _fn(text, feedback=None):
@@ -107,6 +107,8 @@ class _ScriptedProvider:
                          source="test", domain_code=domain_code))
             if usage_sink is not None:
                 usage_sink.add(out.usage)
+            if metrics_sink is not None and out.call_metrics is not None:
+                metrics_sink.append(out.call_metrics)
             return out.result
 
         return _fn
@@ -116,13 +118,13 @@ class _ScriptedProvider:
 SUMMARY_KEYS = {
     "document_id", "n_chunks", "chunk_calls", "total_attempts",
     "truncated_chunks", "truncation_signals", "rework_rate",
-    "reworked_chunks", "wait_s", "prefill_s", "decode_s",
+    "reworked_chunks", "wait_s", "latency_s", "prefill_s", "decode_s",
     "input_tokens", "output_tokens", "cached_input_tokens",
 }
 CHUNK_KEYS = {
     "chunk_id", "attempts", "finish_reason", "truncated",
     "input_tokens", "output_tokens", "cached_input_tokens",
-    "wait_s", "prefill_s", "decode_s", "reworked",
+    "wait_s", "latency_s", "prefill_s", "decode_s", "reworked",
     "truncated_attempts", "attempt_finish_reasons", "error",
 }
 

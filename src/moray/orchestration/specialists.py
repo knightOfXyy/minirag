@@ -25,10 +25,11 @@ AgentScope 2.0 提供两种编排原语（见 lessons/l10 的讲解）：
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Awaitable, Callable
 
 from ..extraction.chunk_metrics import DocumentMetrics, merge_call_metrics
+from ..extraction.extractor import ExtractionError
 from ..extraction.quality import verify_spans
 from ..schema import ExtractionResult
 
@@ -206,13 +207,32 @@ async def run_chunked_team(
                     short_extractor = await provider_extract(
                         domain_code, usage_sink=usage,
                         metrics_sink=metrics_sink)
-        reviewed = await run_extraction_team(
-            text, extractor=short_extractor, max_iters=max_iters)
-        if metrics_sink:
+
+        def _short_document_metrics() -> DocumentMetrics | None:
+            if not metrics_sink:
+                return None
+            merged = merge_call_metrics(metrics_sink)
+            # nit5：provider 闭包里的 Document 只有占位 id（<domain>-dyn），
+            # 短文档明细的 chunk_id 要用调用方传进来的真实 document_id。
+            if document_id and merged.chunk_id != document_id:
+                merged = replace(merged, chunk_id=document_id)
             dm = DocumentMetrics(
                 document_id=document_id or "chunked", n_chunks=1)
-            dm.add(merge_call_metrics(metrics_sink))
-            reviewed.document_metrics = dm
+            dm.add(merged)
+            return dm
+
+        try:
+            reviewed = await run_extraction_team(
+                text, extractor=short_extractor, max_iters=max_iters)
+        except ExtractionError as exc:
+            # S1：短文档也会永久失败（三次尝试后抛错），provider 闭包已把
+            # 失败块真实的 token/截断信号放进 metrics_sink；把这块度量挂回
+            # 异常，API/作业的失败看板行才不会 token=0、truncation_signals=0。
+            dm = _short_document_metrics()
+            if dm is not None:
+                exc.document_metrics = dm
+            raise
+        reviewed.document_metrics = _short_document_metrics()
         return reviewed
 
     real, _domain = await provider.get_extractor(domain_code)

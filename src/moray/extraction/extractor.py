@@ -341,6 +341,25 @@ class Extractor:
         attempt_latency: list[float | None] = []
         truncated_attempts = 0
 
+        def _record(attempts: int, error: str = "") -> ChunkCallMetrics:
+            """成功/失败共用的一份块级度量（字段一致，只差 error）。"""
+            return ChunkCallMetrics(
+                chunk_id=document.id,
+                attempts=attempts,
+                finish_reason=(
+                    attempt_reasons[-1] if attempt_reasons else FINISH_UNKNOWN),
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cached_input_tokens=usage.cached_input_tokens,
+                wait_s=0.0,  # 排队耗时由分块流水线在更上层测量填入
+                prefill_s=_sum_known(attempt_prefill),
+                decode_s=_sum_known(attempt_decode),
+                latency_s=_sum_known(attempt_latency),
+                attempt_finish_reasons=attempt_reasons,
+                truncated_attempts=truncated_attempts,
+                error=error,
+            )
+
         for attempt in range(1, total_attempts + 1):
             reply = await self._call_structured(agent, content)
             attempt_usage = _usage_from_msg(reply)
@@ -348,7 +367,6 @@ class Extractor:
             # B1：一次 reply 内可能调了多次模型；逐次记录结束原因，
             # 最后一次作为本次 attempt 的最终 finish_reason。
             reasons = _finish_reasons_from_msg(reply)
-            reason = reasons[-1]
             prefill_s, decode_s = _phase_timing_from_msg(reply)
             attempt_reasons.extend(reasons)
             attempt_prefill.append(prefill_s)
@@ -407,41 +425,12 @@ class Extractor:
                 model_name=self.model_name,
                 usage=usage,
                 attempts=attempt,
-                call_metrics=ChunkCallMetrics(
-                    chunk_id=document.id,
-                    attempts=attempt,
-                    finish_reason=reason,
-                    input_tokens=usage.input_tokens,
-                    output_tokens=usage.output_tokens,
-                    cached_input_tokens=usage.cached_input_tokens,
-                    wait_s=0.0,  # 排队耗时由分块流水线在更上层测量填入
-                    prefill_s=_sum_known(attempt_prefill),
-                    decode_s=_sum_known(attempt_decode),
-                    latency_s=_sum_known(attempt_latency),
-                    attempt_finish_reasons=attempt_reasons,
-                    truncated_attempts=truncated_attempts,
-                ),
+                call_metrics=_record(attempt),
             )
 
-        final_reason = attempt_reasons[-1] if attempt_reasons else FINISH_UNKNOWN
-        metrics = ChunkCallMetrics(
-            chunk_id=document.id,
-            attempts=total_attempts,
-            finish_reason=final_reason,
-            input_tokens=usage.input_tokens,
-            output_tokens=usage.output_tokens,
-            cached_input_tokens=usage.cached_input_tokens,
-            wait_s=0.0,
-            prefill_s=_sum_known(attempt_prefill),
-            decode_s=_sum_known(attempt_decode),
-            latency_s=_sum_known(attempt_latency),
-            attempt_finish_reasons=attempt_reasons,
-            truncated_attempts=truncated_attempts,
-            error=last_error,
-        )
         raise ExtractionError(
             f"文档 {document.id} 经过 {total_attempts} 次尝试仍校验失败：{last_error}",
-            metrics=metrics,
+            metrics=_record(total_attempts, last_error),
         )
 
     # ---- 提示词 ------------------------------------------------------------

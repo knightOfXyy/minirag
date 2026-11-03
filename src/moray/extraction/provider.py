@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from ..config_center.resolver import DbDomainResolver
 from .document import Document, Usage
-from .extractor import Extractor
+from .extractor import ExtractionError, Extractor
 
 
 class DynamicExtractorProvider:
@@ -56,6 +56,11 @@ class DynamicExtractorProvider:
         出口，/extract 与 worker 才能把成本和缓存命中率写进看板。
         metrics_sink: 可选的 ChunkCallMetrics 列表。短文档（不分块）路径需要
         把每次调用的 finish_reason/截断信号带出去，否则 length 只留一条日志。
+
+        失败也要记账（S1）：Extractor 三次尝试后抛 ExtractionError 时，异常上
+        已经带着本次调用真实的 token 与截断信号。只在成功分支累加，会让短文档
+        永久失败的看板行 token=0、truncation_signals=0——最容易暴露截断的路径
+        反而成了成本黑洞。
         """
         extractor, _domain = await self.get_extractor(domain_code)
 
@@ -65,9 +70,21 @@ class DynamicExtractorProvider:
                 # 反馈追加在正文之后：前缀（system + 引导语 + 正文）保持不变，
                 # 返工轮因此能继续命中上一轮的提示缓存。
                 body = text + "\n\n【上次问题，请务必修正】\n" + feedback
-            out = await extractor.extract(
-                Document(id=f"{domain_code}-dyn", text=body,
-                         source="dynamic", domain_code=domain_code))
+            try:
+                out = await extractor.extract(
+                    Document(id=f"{domain_code}-dyn", text=body,
+                             source="dynamic", domain_code=domain_code))
+            except ExtractionError as exc:
+                metrics = getattr(exc, "metrics", None)
+                if metrics is not None:
+                    if usage_sink is not None:
+                        usage_sink.add(Usage(
+                            input_tokens=metrics.input_tokens,
+                            output_tokens=metrics.output_tokens,
+                            cached_input_tokens=metrics.cached_input_tokens))
+                    if metrics_sink is not None:
+                        metrics_sink.append(metrics)
+                raise
             if usage_sink is not None:
                 usage_sink.add(out.usage)
             if metrics_sink is not None and out.call_metrics is not None:
