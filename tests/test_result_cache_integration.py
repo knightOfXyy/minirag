@@ -256,10 +256,6 @@ async def test_postgres_backend_roundtrip_and_corruption_degrades(env):
     assert calls["n"] == 1
     assert o1.result.model_dump() == o2.result.model_dump()
 
-    # 直接把载荷改坏：内容缓存按未命中降级，不抛异常、结果仍可得
-    await pool.execute(
-        "UPDATE extraction_result_cache SET payload=$2 WHERE cache_key=$1",
-        build_cache_key("fp", "m", "坏数据"), "{bad")
     # 先写一条合法记录，再改成损坏
     o3, _ = await cache.get_or_extract(
         "fp", "m", "坏数据", lambda: asyncio.sleep(0, result=o1))
@@ -272,5 +268,133 @@ async def test_postgres_backend_roundtrip_and_corruption_degrades(env):
     assert hit is False
     assert calls["n"] == calls_before + 1
     assert o4.result.model_dump() == o1.result.model_dump()
+
+
+@pytest.mark.asyncio
+async def test_postgres_two_cache_instances_singleflight_one_real_call(env):
+    """两个缓存实例（模拟两个 worker 进程）并发同键：只发生一次真实抽取（S1）。
+
+    跨进程共享同一个 postgres 后端时，先 INSERT 占位的那一方是 leader，另一方
+    轮询等它的 payload，而不是各自再调一次模型。
+    """
+    import asyncio
+
+    from moray.extraction.cache import PostgresCacheBackend
+
+    pool, *_ = env
+    backend_a = PostgresCacheBackend(pool)
+    backend_b = PostgresCacheBackend(pool)
+    await pool.execute("DROP TABLE IF EXISTS extraction_result_cache")
+    await backend_a.init_schema()
+    # 两个实例各有自己的进程内 _inflight；只共享后端。
+    cache_a = ContentResultCache(backend_a)
+    cache_b = ContentResultCache(backend_b)
+    calls = {"n": 0}
+
+    async def extract():
+        calls["n"] += 1
+        await asyncio.sleep(0.05)      # 模拟真实模型耗时，让另一个实例先进入等待
+        return await _sample_output()
+
+    results = await asyncio.gather(
+        cache_a.get_or_extract("fp", "m", "跨进程同块", extract),
+        cache_b.get_or_extract("fp", "m", "跨进程同块", extract),
+    )
+    assert calls["n"] == 1
+    assert sorted(hit for _, hit in results) == [False, True]
+    assert results[0][0].result.model_dump() == results[1][0].result.model_dump()
+
+
+class _FailAfter:
+    """前 k 次真实抽取成功并写缓存，之后每次都失败（模拟作业跑到一半挂掉）。"""
+
+    def __init__(self, domain, fail_after: int):
+        self.domain = domain
+        self.model_name = "fake-model"
+        self.fail_after = fail_after
+        self.calls = 0
+
+    async def extract(self, document):
+        from moray.extraction.document import ExtractionOutput, Usage
+        from moray.schema import Entity, EntityMention, ExtractionResult, Span
+
+        self.calls += 1
+        if self.calls > self.fail_after:
+            raise RuntimeError("模拟第 k 块之后模型不可用")
+        name = document.text[:6]
+        n = len(name)
+        res = ExtractionResult(entities=[Entity(
+            name=name, type="ORG",
+            mentions=[EntityMention(surface=name,
+                                    span=Span(start=0, end=n, text=name))])])
+        return ExtractionOutput(
+            document_id=document.id, domain_code=self.domain.code,
+            result=res, model_name=self.model_name,
+            usage=Usage(input_tokens=3, output_tokens=2), attempts=1)
+
+
+@pytest.mark.asyncio
+async def test_job_fails_midway_then_restarts_with_new_pg_cache_hits_done_chunks(
+        env, monkeypatch):
+    """作业真跑到一半失败 → 用同一 pool 新建缓存实例（模拟 worker 重启）重跑：
+    已完成块命中、未完成块真抽，不用手工预热（S2）。"""
+    pool, store, jobs, ingestor, doc_path = env
+    monkeypatch.setenv("MORAY_CHUNK_CONCURRENCY", "1")   # 顺序执行，失败点确定
+
+    from moray.config import chunk_settings
+    from moray.extraction.cache import PostgresCacheBackend
+    from moray.extraction.chunking import Chunker
+    from moray.schema import get_domain
+
+    domain = get_domain("general")
+    cs = chunk_settings()
+    chunks = Chunker(
+        max_units=cs["max_units"], overlap_units=cs["overlap_units"]
+    ).chunk_text(Path(doc_path).read_text(encoding="utf-8"))
+    assert len(chunks) >= 4
+
+    pg = PostgresCacheBackend(pool)
+    await pool.execute("DROP TABLE IF EXISTS extraction_result_cache")
+    await pg.init_schema()
+    cache1 = ContentResultCache(pg)
+    done_chunks = 2
+
+    failing = _FailAfter(domain, fail_after=done_chunks)
+    handler1 = await _make_handler(ingestor, _StaticProvider(failing), cache1)
+    await jobs.create_job(job_id="j-fail", document_id="d-fail",
+                          document_ref=doc_path, domain_code="general")
+    s1 = await BatchRunner(jobs, handler1, max_attempts=1).run_once(recover=False)
+    assert s1.failed == 1
+
+    # 模拟 worker 重启：同一个 postgres pool，全新 cache 实例（进程内 _inflight 为空）
+    cache2 = ContentResultCache(PostgresCacheBackend(pool))
+    retry = _CountingExtractor(domain)
+    handler2 = await _make_handler(ingestor, _StaticProvider(retry), cache2)
+    await jobs.reset_failed()
+    s2 = await BatchRunner(jobs, handler2, max_attempts=1).run_once(recover=False)
+    assert s2.succeeded == 1
+
+    assert retry.calls == len(chunks) - done_chunks
+    summary = (await jobs.list_jobs(JobStatus.SUCCEEDED))[0]["result_summary"]
+    assert summary["usage"]["cache_hits"] == done_chunks
+    assert summary["usage"]["input_tokens"] == 3 * retry.calls
+
+
+@pytest.mark.asyncio
+async def test_postgres_ttl_purges_expired_rows(env):
+    """PG 后端按 TTL 清理旧行，长跑不会无限增长（N6）。"""
+    from moray.extraction.cache import PostgresCacheBackend
+
+    pool, *_ = env
+    backend = PostgresCacheBackend(pool, ttl_hours=1)
+    await pool.execute("DROP TABLE IF EXISTS extraction_result_cache")
+    await backend.init_schema()
+    await backend.set("k-old", '{"v":1}')
+    await pool.execute(
+        "UPDATE extraction_result_cache SET created_at = now() - interval '2 hours' "
+        "WHERE cache_key='k-old'")
+    await backend.set("k-new", '{"v":1}')       # 写入时顺带清理过期行
+    assert await backend.get("k-old") is None
+    assert await backend.get("k-new") == '{"v":1}'
 
 

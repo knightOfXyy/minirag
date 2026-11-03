@@ -31,6 +31,7 @@ __all__ = [
     "ChunkedExtractionPipeline",
     "naive_merge",
     "remap_spans",
+    "CacheBackend",
     "ContentResultCache",
     "InMemoryCacheBackend",
     "PostgresCacheBackend",

@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 
 from ..schema import (
+    DomainSpec,
     Entity,
     EntityMention,
     ExtractionResult,
@@ -138,18 +139,22 @@ class ChunkedExtractionPipeline:
         # 键=领域配置指纹+模型名+块正文；命中不调模型，用量记 cache_hits 而非
         # 真实 token；同键并发在缓存内部单飞去重。
         self.result_cache = result_cache
+        # 领域指纹只依赖抽取器配置，一次 pipeline.run 内不会变：构造时算一次，
+        # 避免每个分块都重建 pydantic 模型 + JSON schema（N2）。
+        self._cached_domain_fingerprint = (
+            self._domain_fingerprint() if result_cache is not None else None)
 
     def _domain_fingerprint(self) -> str:
         """当前抽取器所用领域配置的版本指纹。
 
-        Extractor 持有完整 DomainSpec；测试注入的假抽取器可能只有 .domain.code，
-        此时回退到 code 本身（换 code 仍会失效；改 spec 的场景用真 Extractor）。
+        真 Extractor 持有完整 DomainSpec，走内容级指纹（system prompt + schema）。
+        对不是 DomainSpec 的假对象，回退值必须包含该对象的完整 repr：只退化成
+        code 会让“同 code、不同枚举”的配置共用缓存键（N3）。
         """
         domain = getattr(self.extractor, "domain", None)
-        try:
+        if isinstance(domain, DomainSpec):
             return domain_fingerprint(domain)
-        except Exception:  # noqa: BLE001 假对象/非 DomainSpec：退回可用标识
-            return f"code:{getattr(domain, 'code', 'unknown')}"
+        return f"code:{getattr(domain, 'code', 'unknown')}|repr:{domain!r}"
 
     async def _extract_one_chunk(self, chunk: Chunk) -> tuple[ExtractionResult, Usage, str]:
         """抽单个块（带限流）。返回换算后的结果、用量、块 id。
@@ -169,17 +174,23 @@ class ChunkedExtractionPipeline:
             if self.result_cache is None:
                 output = await self.extractor.extract(mini_doc)
             else:
-                fingerprint = self._domain_fingerprint()
                 model_name = getattr(self.extractor, "model_name", "") or ""
 
                 async def _do_extract() -> ExtractionOutput:
                     return await self.extractor.extract(mini_doc)
 
                 output, hit = await self.result_cache.get_or_extract(
-                    fingerprint, model_name, chunk.text, _do_extract)
+                    self._cached_domain_fingerprint, model_name,
+                    chunk.text, _do_extract)
                 if hit:
-                    # 命中：还原结果，但不计真实 token，只标记一次缓存来源。
-                    usage = Usage(cache_hits=1)
+                    # 命中：还原结构化结果与【用量记录】；但不计真实 token，
+                    # 把缓存里的 input/output 记到独立的 reused_* 字段（S4），
+                    # 成本/看板只汇总真实计量字段。
+                    usage = Usage(
+                        cache_hits=1,
+                        reused_input_tokens=output.usage.input_tokens,
+                        reused_output_tokens=output.usage.output_tokens,
+                    )
                     return remap_spans(output.result, chunk), usage, chunk.id
 
             return remap_spans(output.result, chunk), output.usage, chunk.id

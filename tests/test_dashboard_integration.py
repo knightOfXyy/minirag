@@ -28,7 +28,7 @@ async def _rec(dash, **kw):
         document_id="d", n_entities=5, n_relations=2, span_ratio=1.0,
         review_passed=True, review_iters=1,
         n_auto_merged=1, n_queued=0, n_created=4,
-        input_tokens=100, output_tokens=50, latency_ms=1000)
+        input_tokens=100, output_tokens=50, cache_hits=0, latency_ms=1000)
     defaults.update(kw)
     return await dash.record(RunRecorder(**defaults))
 
@@ -47,11 +47,11 @@ async def test_summary_aggregates(dash):
     d, _ = dash
     await _rec(d, document_id="a", review_passed=True, span_ratio=1.0,
                n_auto_merged=2, n_queued=0, input_tokens=100, output_tokens=100,
-               cached_input_tokens=80)
+               cached_input_tokens=80, cache_hits=7)
     await _rec(d, document_id="b", review_passed=False, span_ratio=0.5,
                review_iters=3, open_issues=4,
                n_auto_merged=1, n_queued=3, input_tokens=300, output_tokens=200,
-               cached_input_tokens=60)
+               cached_input_tokens=60, cache_hits=2)
 
     s = await d.summary()
     assert s["runs"] == 2
@@ -66,6 +66,10 @@ async def test_summary_aggregates(dash):
     # 提示缓存：(80+60)/400 = 0.35
     assert s["cached_input_tokens"] == 140
     assert s["cache_hit_rate"] == 0.35
+    # 分块结果缓存命中是独立计数，不混进真实 token（S3）
+    assert s["cache_hits"] == 9
+    rows = await d.recent()
+    assert sum(r["cache_hits"] for r in rows) == 9
 
 
 @pytest.mark.asyncio

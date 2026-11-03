@@ -42,6 +42,7 @@ class RunRecorder:
     input_tokens: int = 0
     output_tokens: int = 0
     cached_input_tokens: int = 0   # 命中提示缓存的前缀（成本折扣 + 优化依据）
+    cache_hits: int = 0            # 命中分块结果内容缓存的块数（独立计数，非 token）
     latency_ms: int = 0
     model_name: str = ""
     trace_id: str | None = None
@@ -58,6 +59,7 @@ class RunRecorder:
         input_tokens: int = 0,
         output_tokens: int = 0,
         cached_input_tokens: int = 0,
+        cache_hits: int = 0,
         latency_ms: int = 0,
         model_name: str = "",
         trace_id: str | None = None,
@@ -79,6 +81,7 @@ class RunRecorder:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cached_input_tokens=cached_input_tokens,
+            cache_hits=cache_hits,
             latency_ms=latency_ms,
             model_name=model_name,
             trace_id=trace_id,
@@ -99,15 +102,15 @@ class Dashboard:
               (document_id, domain_code, n_entities, n_relations, span_ratio,
                review_passed, review_iters, open_issues,
                n_auto_merged, n_queued, n_created,
-               input_tokens, output_tokens, cached_input_tokens,
+               input_tokens, output_tokens, cached_input_tokens, cache_hits,
                latency_ms, model_name, trace_id)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
             RETURNING id
             """,
             r.document_id, r.domain_code, r.n_entities, r.n_relations, r.span_ratio,
             r.review_passed, r.review_iters, r.open_issues,
             r.n_auto_merged, r.n_queued, r.n_created,
-            r.input_tokens, r.output_tokens, r.cached_input_tokens,
+            r.input_tokens, r.output_tokens, r.cached_input_tokens, r.cache_hits,
             r.latency_ms, r.model_name, r.trace_id,
         )
         return row["id"]
@@ -132,6 +135,7 @@ class Dashboard:
               coalesce(sum(input_tokens),0)                          AS input_tokens,
               coalesce(sum(output_tokens),0)                         AS output_tokens,
               coalesce(sum(cached_input_tokens),0)                   AS cached_input_tokens,
+              coalesce(sum(cache_hits),0)                            AS cache_hits,
               coalesce(avg(latency_ms),0)                            AS avg_latency_ms
             FROM pipeline_runs {where}
             """,
@@ -158,7 +162,7 @@ class Dashboard:
         rows = await self.pool.fetch(
             "SELECT document_id, n_entities, n_relations, span_ratio, "
             "review_passed, review_iters, n_auto_merged, n_queued, "
-            "input_tokens, output_tokens, cached_input_tokens, "
+            "input_tokens, output_tokens, cached_input_tokens, cache_hits, "
             "latency_ms, created_at "
             "FROM pipeline_runs ORDER BY id DESC LIMIT $1", limit)
         return [dict(r) for r in rows]

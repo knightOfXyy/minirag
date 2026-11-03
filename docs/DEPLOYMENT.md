@@ -157,7 +157,22 @@ python -m moray.jobs.worker --offline --once
 > 租约时长要大于单任务最坏耗时：推理模型 + 长文档建议 `--lease-seconds 600`
 > 以上；心跳自动按租约 1/3 续租，正常情况下活多久都不会被判死。
 
-## 4b. 动态领域配置（domain_configs 配置中心，热更）
+## 4b. 分块结果内容级缓存（工单 05，纯加速层、默认关闭）
+
+`MORAY_RESULT_CACHE_ENABLED=1` 开启后，分块抽取前按「领域配置指纹 + 模型名 +
+分块正文 + 提示模板版本」查缓存，命中不再调 LLM，也不产生真实 token。
+
+- **后端选择**：`MORAY_RESULT_CACHE_BACKEND=memory`（默认）只在单进程内有效；
+  多 worker 副本之间共享、或 worker 重启后仍要续跑命中，必须用
+  `MORAY_RESULT_CACHE_BACKEND=postgres`（复用作业库，表
+  `extraction_result_cache`，由 worker/API 启动时自动建表）。
+- **跨进程单飞**：postgres 后端用空载荷占位行抢 leader，其余 worker 等它回写；
+  leader 崩溃/超时后等待方会重新抢占位，至多多一次真实调用，不会永久卡住。
+- **容量**：`MORAY_RESULT_CACHE_TTL_HOURS` 控制 PG 行保留时间（0=不清理）；
+  内存后端有 LRU 上限，长跑不会无限增长。
+- 后端名写错会在启动时直接 `ConfigError`，不会静默退回 memory。
+
+## 4c. 动态领域配置（domain_configs 配置中心，热更）
 
 要"不改代码、不重启"地定义抽取哪些实体类型、每类抽哪些属性（必填/类型/枚举），
 把领域包写进 `domain_configs` 表即可。API 与 worker 按 `domain_code` 经

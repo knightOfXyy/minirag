@@ -32,6 +32,7 @@
 |---|---|---|
 | `schema/` | 稳定核心 `Entity/Relation/Span` + 领域配置/动态枚举/`attributes` JSONB | L01/06 |
 | `extraction/` | Agent 事件/block、FunctionTool/ReAct/HITL、结构化输出、分块 map-reduce、规则抽取器、质量校验 `verify_spans`、评测基线 | L02-05/15 |
+| `extraction/cache.py` | 分块结果内容级缓存（键=领域指纹+模型+正文+模板版本）；内存/PostgreSQL 两后端（表 `extraction_result_cache`）、进程内+跨进程单飞、损坏降级、TTL/LRU | 05 |
 | `embedding/` | bge-small-zh ONNX 本地嵌入（单例/L2 归一/批处理） | L07 |
 | `kb/store.py` | 实体/别名/提及/关系/证据表、ivfflat 索引、余弦近邻、幂等 upsert、合并、审核队列 | L07-09 |
 | `kb/ingestor.py` | 抽取结果→向量+实体+关系+溯源；缺端点补 MISC；可选消歧 | L08/09 |
