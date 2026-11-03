@@ -25,56 +25,45 @@ from ...extraction.chunking import Chunker
 from ...extraction.document import Document
 from ...extraction.pipeline import naive_merge, remap_spans
 from ...schema import Entity, EntityMention, ExtractionResult, Relation, Span
+from .corpus import CLUE_ITEMS, GIVEN, LOC_POOL, SURNAMES
 
-# 组织后缀（含案卷里的「…有限公司 / …集团 / …公司」）
-_ORG_SUFFIX = re.compile(r"[一-龥]{2,18}?(?:股份有限公司|有限责任公司|有限公司|集团)")
+# 组织后缀。必须把「集团有限公司」排在「集团」之前，否则非贪婪前缀会在
+# 「…实业集团」处先命中「集团」，把规范名截断（「有限公司」同理要长后缀在前）。
+_ORG_SUFFIX = re.compile(
+    r"[一-龥]{2,18}?(?:股份有限公司|有限责任公司|集团有限公司|有限公司|集团)")
 # 案号：A2024-001
 _CASE_RE = re.compile(r"A\d{4}-\d{3}")
-# 物证线索：固定短语表（出现即收，类型 MISC）
-_CLUES = ["断线钳", "液压剪", "改装电动车", "伪造公章", "现金赃款", "作案手机",
-          "手套鞋印", "监控视频片段", "银行流水单", "出入门禁记录"]
-# 地名：生成器地名池（词典直配，LOC）
-_PLACES = ["临江区", "桥南区", "云岭市", "东港新区", "西江县城",
-           "北辰街道", "昌平市", "江景路", "海丰大道", "锦城巷",
-           "望江路", "青云镇", "白石桥", "铜官山区", "玉泉街道"]
+# 物证线索：与语料生成器共用同一张短语表（出现即收，类型 MISC）
+_CLUES = list(CLUE_ITEMS)
+# 地名：与语料生成器共用同一份地名池（词典直配，LOC）
+_PLACES = list(LOC_POOL)
 # 常见单字姓氏（用于 PER 启发）
-_SURNAMES = set("王李张刘陈杨赵黄周吴徐孙胡朱高林何郭马罗梁宋郑谢韩唐冯于董萧")
+_SURNAMES = set(SURNAMES)
 # PER 名字用字：抑制把动词/虚词当名字
-_GIVEN_OK = set("建国国庆秀兰志强海燕俊杰丽娟德海晓峰桂芳立军永刚春梅卫东"
-                "小雪浩然思远梓萱")
-# 组织名边界字：防止后缀扫描跨小句吞字（不含"在"：句中"…在XX公司任职"
-# 的"在"紧贴组织名，若停用会把公司名整个吞掉）
+_GIVEN_OK = set("".join(GIVEN))
+# 组织名边界字：只用于向前扩边界时停字（**不得**用来否决整名——
+# 「任」是「有限责任公司」的合法构成字，整名回绝会把这类单位全部丢掉）。
 _ORG_STOP = set("，。、；：的了是位户籍曾任职")
 # 句首残留的动词/虚词：允许出现在正则匹配的最前面，但必须正向裁掉
 _ORG_LEAD_TRIM = set("在曾前往与和到把被对")
+# 组织名里不允许出现的字符（标点/空白）；用于替代旧的"停字整名回绝"
+_ORG_PUNCT = set("，。、；：！？\n\r \t（）()「」《》")
 
-# 谓词在正文里的【字面触发】。注意 gold 的规范谓词不一定逐字出现：
-# 供职于在案卷里写作"曾在 X 任职"，注册地位于写作"注册地位于 X"。
-# 每项：gold谓词 -> 有序的 (左触发, 右触发)；两侧都命中才在句中配对。
-# 左右触发把句子切成 head … left/right … tail，分别就近回填实体规范名。
-_PREDICATE_SURFACE = {
-    "供职于": ("曾在", "任职"),
-    "户籍在": ("户籍地", None),
-    "注册地位于": ("注册地位于", None),
-    "涉案关联": ("案件编号", None),   # 句中"案件编号 A.. 涉及 张三 等人员"
-    "关联物证": ("关联到关键物证", None),
+# 每个 gold 谓词 -> (左触发, 右触发, 头类型, 尾类型)。
+# 一张表同时表达句面触发与类型约束，新增谓词只改这一处。
+# 注意 gold 的规范谓词不一定逐字出现：供职于在案卷里写作"曾在 X 任职"。
+_PREDICATE_SPECS: dict[str, tuple[str, str | None, str, str]] = {
+    "供职于": ("曾在", "任职", "PER", "ORG"),
+    "户籍在": ("户籍地", None, "PER", "LOC"),
+    "注册地位于": ("注册地位于", None, "ORG", "LOC"),
+    "涉案关联": ("案件编号", None, "PER", "EVENT"),
+    "关联物证": ("关联到关键物证", None, "PER", "MISC"),
+    "办案地位于": ("办案地位于", None, "ORG", "LOC"),
+    "追赃方向指向": ("追赃方向指向", None, "ORG", "LOC"),
 }
 
 # 案卷里"涉案关联"的句面是"案件编号 A-… 涉及 张三、李四 等人员"，头在案号
-# 之后、人员并列里，需要单独处理；通用 (left,right) 切分覆盖其余四类。
-
-
-# 句式关系（谓词固定，头/尾在同一句内按已知实体名就近回填）。
-_PREDICATES = list(_PREDICATE_SURFACE.keys())
-
-# 每个谓词期望的 (头类型, 尾类型)，用于轻类型约束避免乱配
-_TYPE_EXPECT: dict[str, tuple[str, str]] = {
-    "供职于": ("PER", "ORG"),
-    "户籍在": ("PER", "LOC"),
-    "注册地位于": ("ORG", "LOC"),
-    "涉案关联": ("PER", "EVENT"),
-    "关联物证": ("PER", "MISC"),
-}
+# 之后、人员并列里，需要单独处理；通用 (left,right) 切分覆盖其余谓词。
 
 
 def _mention(rel_start: int, surface: str) -> EntityMention:
@@ -97,7 +86,8 @@ def _find_orgs(text: str) -> list[tuple[int, str]]:
         while start < end and text[start] in trim:
             start += 1
         name = text[start:end]
-        if len(name) >= 4 and not any(c in _ORG_STOP for c in name):
+        # 只按"标点/空白"否决（合法单位名内部可以含"任/职/位"等停字）
+        if len(name) >= 4 and not any(c in _ORG_PUNCT for c in name):
             hits.append((start, name))
     return hits
 
@@ -203,7 +193,7 @@ def _relations_in_sentence(sent: str, names: list[str],
         out.append(Relation(head=head, predicate=predicate, tail=tail,
                             confidence=0.7))
 
-    for predicate, (left, right) in _PREDICATE_SURFACE.items():
+    for predicate, (left, right, head_type, tail_type) in _PREDICATE_SPECS.items():
         cursor = 0
         while True:
             li = sent.find(left, cursor)
@@ -217,8 +207,8 @@ def _relations_in_sentence(sent: str, names: list[str],
                 if ri >= 0:
                     tail_end = ri
             tail_win = sent[tail_start:tail_end]
-            head = _resolve_typed(head_win, names, type_of, _head_type(predicate))
-            tail = _resolve_typed(tail_win, names, type_of, _tail_type(predicate))
+            head = _resolve_typed(head_win, names, type_of, head_type)
+            tail = _resolve_typed(tail_win, names, type_of, tail_type)
             emit(head, tail, predicate)
             cursor = li + len(left)
 
@@ -236,20 +226,8 @@ def _relations_in_sentence(sent: str, names: list[str],
 
 def _type_ok(head_type: str | None, predicate: str,
              tail_type: str | None) -> bool:
-    eh, et = _type_expect(predicate)
-    return head_type == eh and tail_type == et
-
-
-def _head_type(predicate: str) -> str:
-    return _type_expect(predicate)[0]
-
-
-def _tail_type(predicate: str) -> str:
-    return _type_expect(predicate)[1]
-
-
-def _type_expect(predicate: str) -> tuple[str, str]:
-    return _TYPE_EXPECT[predicate]
+    _, _, expect_head, expect_tail = _PREDICATE_SPECS[predicate]
+    return head_type == expect_head and tail_type == expect_tail
 
 
 def _resolve_typed(window: str, names: list[str], type_of: dict[str, str],

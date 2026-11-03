@@ -18,9 +18,13 @@
 
 刻意埋入的三类边界压力（与 chunk_boundary_probe 的设计一致）
 ----------------------------------------------------------
-· 跨块【远端关系】：头只在前文、尾只在数千字之后（办案地位于 / 追赃方向指向）；
+· 远距关系：头在卷一、尾首次出现在数千字之后的卷五（办案地位于 / 追赃方向
+  指向），卷五句面重复头名，供句内规则抽取；
 · 超长无句号句：逼 Chunker 走 _hard_split，并在硬切点附近密集堆实体名；
-· 高密度列举：同一句并列多个公司/人名，压召回随块预算的变化。
+· 高密度列举：同一句并列多个公司/人名，压召回随块预算的变化；
+· **块预算敏感关系长句**：一条 >1500 units 的句子里同时含关系头/尾，
+  1500 档必被硬切拆开、3500 档可整句保留——给「调大块预算→关系召回提升」
+  一个真实可测的信号（而不是所有块预算下关系指标恒定）。
 
 本模块只造数据、不做抽取，纯函数式、零副作用（写盘交给 serialize/CLI）。
 """
@@ -51,6 +55,10 @@ ORG_KIND = ["建筑工程有限公司", "物流有限责任公司", "商贸有�
 LOC_POOL = ["临江区", "桥南区", "云岭市", "东港新区", "西江县城",
             "北辰街道", "昌平市", "江景路", "海丰大道", "锦城巷",
             "望江路", "青云镇", "白石桥", "铜官山区", "玉泉街道"]
+
+# decoy 实体统一带这个前缀：结构上不可能与正文真实名称撞名，
+# 避免"刻意不可定位"的候选被真实同名实体"救活"、混进黄金答案。
+DECOY_PREFIX = "未入卷"
 
 CASE_KINDS = ["系列盗窃案", "合同诈骗案", "寻衅滋事案", "故意损毁财物案",
               "非法经营案", "聚众斗殴案"]
@@ -126,8 +134,9 @@ def pid(rng: random.Random) -> str:
     return f"11010119{rng.randint(80, 99)}{rng.randint(1000, 1231)}{rng.randint(1000, 9999)}X"
 
 
-def case_no(_rng: random.Random, year: int, i: int) -> str:
-    return f"A{year}-{i:03d}"
+def case_no(rng: random.Random, year: int) -> str:
+    """案号也吃种子：三个种子各写各的编号，避免 EVENT 答案完全相同。"""
+    return f"A{year}-{rng.randint(100, 999):03d}"
 
 
 def sentence(rng: random.Random) -> str:
@@ -157,6 +166,24 @@ def long_runon(rng: random.Random, orgs: list[str], people: list[str],
     return "，".join(seq) + "。"
 
 
+def long_relation_sentence(rng: random.Random, head: str, tail: str,
+                           target_units: int) -> str:
+    """一条 >生产块预算、含关系头/尾且中间无句末标点的长句。
+
+    头与触发词在句首、尾在句尾，中间填满不含地名/句末标点的叙述：
+    1500 档 Chunker 会 hard_split 把它拆成两半（头尾分居两块，关系必丢），
+    3500 档整句留在同一块（关系可抽到）。
+    """
+    parts: list[str] = [f"{head}的办案地位于"]
+    total = len(parts[0])
+    while total < target_units:
+        token = rng.choice(FILLER_VERB)
+        parts.append(token)
+        total += len(token) + 1
+    parts.append(tail)
+    return "，".join(parts) + "，现予确认。"
+
+
 def build_text(rng: random.Random, *, target_chars: int,
                max_units: int
                ) -> tuple[str, list[StressEntity], list[StressRelation]]:
@@ -172,7 +199,11 @@ def build_text(rng: random.Random, *, target_chars: int,
     people = make_people(rng, n_people)
     orgs = make_orgs(rng, n_orgs)
     locs = list(dict.fromkeys(LOC_POOL))
-    cases = [case_no(rng, 2024, i + 1) for i in range(8)]
+    cases: list[str] = []
+    while len(cases) < 8:
+        no = case_no(rng, 2024)
+        if no not in cases:
+            cases.append(no)
 
     tail_locs = [l for l in locs[10:14]]
     early_locs = [l for l in locs if l not in tail_locs]
@@ -192,10 +223,15 @@ def build_text(rng: random.Random, *, target_chars: int,
     mid_people_set = set(mid_people)
     reuse_people = [p for p in people if p not in mid_people_set]
 
-    # 刻意保留一批"永不写进正文"的候选实体，验证实体过滤闸门有效
+    # 刻意保留一批"永不写进正文"的候选实体，验证实体过滤闸门有效。
+    # 名字统一加 DECOY_PREFIX：旧实现用 make_people/make_orgs 随机造名，
+    # 可能与真实 ORGS 撞名，使"刻意不可定位"的 decoy 关系通过可定位闸门、
+    # 变成正文不支撑的语义假答案。
     decoy_entities = (
-        [StressEntity(n, "PER") for n in make_people(rng, 3)]
-        + [StressEntity(n, "ORG") for n in make_orgs(rng, 2)]
+        [StressEntity(f"{DECOY_PREFIX}人员{n}", "PER")
+         for n in "甲乙丙"]
+        + [StressEntity(f"{DECOY_PREFIX}单位{n}", "ORG")
+           for n in "丁戊"]
     )
 
     # ---- 卷一：人员与单位 ----
@@ -234,10 +270,13 @@ def build_text(rng: random.Random, *, target_chars: int,
                       + "、".join(p for p, _ in mid_pairs) + "。")
             mid_head_done = True
         if not mid_tail_done and body >= body_budget * 0.38:
-            md.append("后续鉴定中，分别关联到关键物证 "
-                      + "、".join(t for _, t in mid_pairs)
-                      + "，鉴定意见已附卷。")
+            # 每个 (人, 物证) 各自成句：头尾必须落在同一句面才能被
+            # 句内规则抽取器命中。旧写法把 4 个人和 4 件物证分列两段，
+            # 任何块预算下都抽不到（36/331 gold 关系结构性不可达）。
             for p, t in mid_pairs:
+                # 人名后紧跟逗号：PER 启发式按"名字后一个字符是边界"识别，
+                # 直接接动词会认不出人名，使关系在任何块预算下都抽不到。
+                md.append(f"后续鉴定中，{p}，关联到关键物证 {t}，鉴定意见已附卷。")
                 relations.append(StressRelation(p, "关联物证", t))
             mid_tail_done = True
         chunk = para(rng, rng.randint(3, 6))
@@ -271,18 +310,19 @@ def build_text(rng: random.Random, *, target_chars: int,
         relations.append(StressRelation(involved_p[0], "涉案关联", c))
     md.append("")
 
-    # ---- 卷五：远端关系的"尾"只在文末首次出现 ----
+    # ---- 卷五：远距关系的"尾"首次出现在文末 ----
+    # 句面重复头名：头虽然在卷一出现过，但句内规则抽取器看不到块外文字，
+    # 若这里只写"前述第 N 家调账单位"，任何块预算下都抽不到这两类关系。
     md.append("## 五、异地协作与追赃\n")
     tail_budget = int(target_chars * 0.12)
     tailed = set()
     spent = 0
     di = 0
-    head_short = [f"前述第 {i + 1} 家调账单位" for i in range(len(distal_pairs))]
     while spent < tail_budget:
         idx = di % len(distal_pairs)
         h, t = distal_pairs[idx]
         md.append(
-            f"经异地协作，{head_short[idx]}的办案地位于{t}，"
+            f"经异地协作，{h}的办案地位于{t}，"
             f"追赃方向指向{t}；协作函已抄送当地派出所。")
         if t not in tailed:
             tailed.add(t)
@@ -292,6 +332,19 @@ def build_text(rng: random.Random, *, target_chars: int,
         di += 1
         md.append(para(rng, rng.randint(2, 4)))
     md.append("")
+
+    # ---- 卷六：块预算敏感的关系长句（>1500 units、<3500 units）----
+    long_head = orgs[4]
+    long_loc = tail_locs[0]
+    md.append("## 六、协作续查\n")
+    # 长句前放一条 >48 字、且不含任何实体名的过渡句：保证长句头名的
+    # 左侧 48 字窗口里没有别的 ORG，避免"就近回填"抓错头。
+    md.append("办案人员对异地协作与追赃事项逐项复核后，未发现新的涉案单位线索，"
+              "相关材料已按程序归档备查，手续齐全，不存在遗漏。")
+    md.append(long_relation_sentence(
+        rng, long_head, long_loc, target_units=max_units + 400))
+    md.append("")
+    relations.append(StressRelation(long_head, "办案地位于", long_loc))
 
     text = "\n".join(md)
 
@@ -381,8 +434,3 @@ def serialize_case(case: StressCase) -> dict:
         "entities": [asdict(e) for e in case.entities],
         "relations": [asdict(r) for r in case.relations],
     }
-
-
-def answer_payload(case: StressCase) -> dict:
-    """写入 *.answer.json 的内容（不含正文）。"""
-    return serialize_case(case)

@@ -1,22 +1,27 @@
 {
+  "extractor": {
+    "name": "StressRuleExtractor",
+    "revision": 2
+  },
+  "corpus_version": 2,
   "grids": {
     "1500:0": {
       "documents": 3,
       "entity_strict": {
-        "tp": 1963,
-        "fp": 173,
-        "fn": 378,
-        "precision": 0.919,
-        "recall": 0.8385,
-        "f1": 0.8769
+        "tp": 2367,
+        "fp": 4,
+        "fn": 30,
+        "precision": 0.9983,
+        "recall": 0.9875,
+        "f1": 0.9929
       },
       "entity_relaxed": {
-        "tp": 253,
-        "fp": 10,
-        "fn": 15,
-        "precision": 0.962,
-        "recall": 0.944,
-        "f1": 0.9529
+        "tp": 268,
+        "fp": 4,
+        "fn": 0,
+        "precision": 0.9853,
+        "recall": 1.0,
+        "f1": 0.9926
       },
       "entity_by_type": {
         "EVENT": {
@@ -44,12 +49,12 @@
           "f1": 1.0
         },
         "ORG": {
-          "tp": 39,
-          "fp": 10,
-          "fn": 15,
-          "precision": 0.7959,
-          "recall": 0.7222,
-          "f1": 0.7573
+          "tp": 54,
+          "fp": 4,
+          "fn": 0,
+          "precision": 0.931,
+          "recall": 1.0,
+          "f1": 0.9643
         },
         "PER": {
           "tp": 120,
@@ -61,12 +66,12 @@
         }
       },
       "relation": {
-        "tp": 249,
-        "fp": 21,
-        "fn": 82,
-        "precision": 0.9222,
-        "recall": 0.7523,
-        "f1": 0.8286
+        "tp": 330,
+        "fp": 0,
+        "fn": 3,
+        "precision": 1.0,
+        "recall": 0.991,
+        "f1": 0.9955
       },
       "max_units": 1500,
       "overlap_units": 0
@@ -74,20 +79,20 @@
     "1500:200": {
       "documents": 3,
       "entity_strict": {
-        "tp": 1963,
-        "fp": 173,
-        "fn": 378,
-        "precision": 0.919,
-        "recall": 0.8385,
-        "f1": 0.8769
+        "tp": 2367,
+        "fp": 4,
+        "fn": 30,
+        "precision": 0.9983,
+        "recall": 0.9875,
+        "f1": 0.9929
       },
       "entity_relaxed": {
-        "tp": 253,
-        "fp": 10,
-        "fn": 15,
-        "precision": 0.962,
-        "recall": 0.944,
-        "f1": 0.9529
+        "tp": 268,
+        "fp": 4,
+        "fn": 0,
+        "precision": 0.9853,
+        "recall": 1.0,
+        "f1": 0.9926
       },
       "entity_by_type": {
         "EVENT": {
@@ -115,12 +120,12 @@
           "f1": 1.0
         },
         "ORG": {
-          "tp": 39,
-          "fp": 10,
-          "fn": 15,
-          "precision": 0.7959,
-          "recall": 0.7222,
-          "f1": 0.7573
+          "tp": 54,
+          "fp": 4,
+          "fn": 0,
+          "precision": 0.931,
+          "recall": 1.0,
+          "f1": 0.9643
         },
         "PER": {
           "tp": 120,
@@ -132,12 +137,12 @@
         }
       },
       "relation": {
-        "tp": 249,
-        "fp": 21,
-        "fn": 82,
-        "precision": 0.9222,
-        "recall": 0.7523,
-        "f1": 0.8286
+        "tp": 330,
+        "fp": 0,
+        "fn": 3,
+        "precision": 1.0,
+        "recall": 0.991,
+        "f1": 0.9955
       },
       "max_units": 1500,
       "overlap_units": 200
@@ -145,20 +150,20 @@
     "2500:200": {
       "documents": 3,
       "entity_strict": {
-        "tp": 1966,
-        "fp": 171,
-        "fn": 375,
-        "precision": 0.92,
-        "recall": 0.8398,
-        "f1": 0.8781
+        "tp": 2371,
+        "fp": 2,
+        "fn": 26,
+        "precision": 0.9992,
+        "recall": 0.9892,
+        "f1": 0.9941
       },
       "entity_relaxed": {
-        "tp": 253,
-        "fp": 8,
-        "fn": 15,
-        "precision": 0.9693,
-        "recall": 0.944,
-        "f1": 0.9565
+        "tp": 268,
+        "fp": 2,
+        "fn": 0,
+        "precision": 0.9926,
+        "recall": 1.0,
+        "f1": 0.9963
       },
       "entity_by_type": {
         "EVENT": {
@@ -186,12 +191,12 @@
           "f1": 1.0
         },
         "ORG": {
-          "tp": 39,
-          "fp": 8,
-          "fn": 15,
-          "precision": 0.8298,
-          "recall": 0.7222,
-          "f1": 0.7723
+          "tp": 54,
+          "fp": 2,
+          "fn": 0,
+          "precision": 0.9643,
+          "recall": 1.0,
+          "f1": 0.9818
         },
         "PER": {
           "tp": 120,
@@ -203,12 +208,12 @@
         }
       },
       "relation": {
-        "tp": 249,
-        "fp": 21,
-        "fn": 82,
-        "precision": 0.9222,
-        "recall": 0.7523,
-        "f1": 0.8286
+        "tp": 333,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
       },
       "max_units": 2500,
       "overlap_units": 200
@@ -216,20 +221,20 @@
     "3500:200": {
       "documents": 3,
       "entity_strict": {
-        "tp": 1967,
-        "fp": 170,
-        "fn": 374,
-        "precision": 0.9204,
-        "recall": 0.8402,
-        "f1": 0.8785
+        "tp": 2373,
+        "fp": 0,
+        "fn": 24,
+        "precision": 1.0,
+        "recall": 0.99,
+        "f1": 0.995
       },
       "entity_relaxed": {
-        "tp": 253,
-        "fp": 7,
-        "fn": 15,
-        "precision": 0.9731,
-        "recall": 0.944,
-        "f1": 0.9583
+        "tp": 268,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
       },
       "entity_by_type": {
         "EVENT": {
@@ -257,12 +262,12 @@
           "f1": 1.0
         },
         "ORG": {
-          "tp": 39,
-          "fp": 7,
-          "fn": 15,
-          "precision": 0.8478,
-          "recall": 0.7222,
-          "f1": 0.78
+          "tp": 54,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0
         },
         "PER": {
           "tp": 120,
@@ -274,12 +279,12 @@
         }
       },
       "relation": {
-        "tp": 249,
-        "fp": 21,
-        "fn": 82,
-        "precision": 0.9222,
-        "recall": 0.7523,
-        "f1": 0.8286
+        "tp": 333,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
       },
       "max_units": 3500,
       "overlap_units": 200
