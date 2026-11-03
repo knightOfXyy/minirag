@@ -38,6 +38,8 @@ PYTHONPATH=src python tools/backfill_stress_ab.py \
 
 结果文件 `03-r13-stress-ab.json`：`git_sha=0df406c`、`git_dirty=false`、
 `model=deepseek-flash`、`temperature=0`、3 篇 stress seeds（79,362 字）。
+重放对应代码提交 `0df406c`；其后提交只追加文档与本轮测试断言，`src/` 无变化
+（`git diff 0df406c..HEAD -- src` 为空），因此证据仍对应当前代码。
 
 | 轮 | 实体 macro relaxed Δ | 关系 F1 | 单块 output token | 截断块 |
 |---|---|---|---|---|
