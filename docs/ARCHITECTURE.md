@@ -86,6 +86,11 @@
   被撤销的 mention 数记入 `reconciled_unattributed`（r11 N1/N2/N10），并作为
   `pipeline_runs.reconciled_unattributed` 进入看板（r12 N7）；块加权
   `block_confidence` 不反算，只额外暴露撤销条数。
+  **r15 F1**：`report.ambiguous_mentions` 里已判歧义的全局 span 也算「虚拟
+  owner」——块 0 同时抽到 ORG+MISC 判歧义、重叠块 1/2 只抽到 ORG 时，落在
+  该 span 上的 ORG mention 同样撤销；候选与已有歧义条目按 span 求并集，
+  不按候选集合拆成两条记录。歧义记录的去重键因此是 `(surface,start,end)`，
+  候选集合只并集、不参与键。
 - 回填线性（验收 10、r12 S2）：歧义去重用 `(surface, start)` 集合做 O(1)
   判重；旧实现对已产出歧义列表做 `any(...)`，全部命中都歧义时是 O(A²)
   （16000 次命中约 2s），已删除。
@@ -98,8 +103,14 @@
   （r14 F1）：句内尾起点排序后逐头从最近位置向两侧扩张，用大顶堆只保留
   最近的 N 对，一旦候选比堆顶更远就停止该头——无标点单句块不再先把 `H×T`
   全物化再裁，避免 05 结果缓存与内存被笛卡尔积撑大。块间传递的是这份**有界**
-  候选；只有 API 响应/作业结果落盘边界用 `serialize_backfill_for_output` 按
-  `MAX_SERIALIZED_RELATION_EVIDENCE_CANDIDATES=20` 裁剪（selected 在首条）。
+  候选；跨块拼接后每个 bucket 以 selected（首个提供证据的块）为固定首条，
+  其余按全局 `(distance, head_start, tail_start)` 排序（r15 F4），避免「块 0
+  的候选全部在前」把后续块更近的对挤出窗口。只有 API 响应/作业结果落盘边界
+  用 `serialize_backfill_for_output` 按 `MAX_SERIALIZED_RELATION_EVIDENCE_
+  CANDIDATES=20` 裁剪（selected 在首条）。
+  `relations_without_evidence` 与有证据候选在跨块合并后对账：同一三元组只要
+  任一重叠块拿到了证据，就从「文档级无证据」列表删除（r15 F3），下游不会
+  同时看到「有证据」和「无证据」两份矛盾信号。
   `to_dict()` 默认上限仍可用，但传 `None` 表示全量、`0` 表示空；负数在
   序列化边界 clamp 到默认 20 并记 WARNING（r13 N6，坏配置不能把整次响应打成
   500；同一非法值只告警一次，后续降为 DEBUG，r14 F5；配置层应在启动时另行
@@ -108,7 +119,7 @@
   `chunk_ids`），消费方改嵌套容器不会反向污染内部报告（r12 N8、r13 N1）。
   **验收 5 的口径收窄**：单条关系进程内最多保留**最近的 2000 条**候选、
   出网 20 条；极端单句（如 50×50 共现）下「保留全部候选」只到 2000 条为止，
-  不再声称无条件成立（r13 N2、r14 F1）。
+  **这是对工单原文的明确偏离，待工单 owner 确认**（r13 N2、r14 F1、r15 F7）。
 - 实体身份键（r10 N9、r11 N11、r12 S1、r13 N3/N4）：回填与 slim 归并共用
   `entity_identity_key`（默认去首尾空白）；关闭态 `naive_merge` 保持 262319b
   的精确键。回填的输出存值也规范化（实体标准名、关系 head/tail），
