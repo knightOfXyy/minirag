@@ -2,7 +2,8 @@
 
 - 分支/worktree：`yzc/tmp-yzd-feat-relation-202610-04`
   （`/home/dell/orca/workspaces/minirag/tmp-yzd-feat-relation-202610-04`）
-- 代码提交：`b86769a`（配置锁定 + 残余统计 + 判据 + A/B 工具）
+- 代码提交：`b86769a`（配置锁定 + 残余统计 + 判据 + A/B 工具）；
+  `8788d73`（worst-of-N 改为逐轮配对差，A/B 工具显式传最坏轮）
 - 证据提交：本分支 `devflow(04): A/B 证据…`（只追加文档，不改行为）
 - 证据采集：2026-11-03，`git_dirty=false`（只把已跟踪改动算脏）
 - 模型：`deepseek-flash`（provider `deepseek`，`api.deepseek.com`），temperature=0，
