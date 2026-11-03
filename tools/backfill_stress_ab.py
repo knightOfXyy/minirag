@@ -25,7 +25,6 @@ import argparse
 import asyncio
 import hashlib
 import json
-import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -79,7 +78,7 @@ def _model_identity() -> dict:
     }
 
 
-async def _run_mode(mode: str, cases, chunks_by_case, *, max_units, overlap,
+async def _run_mode(mode: str, cases, chunks_by_case, *,
                     concurrency: int) -> ModeResult:
     extractor = Extractor(
         "general", max_retries=2, local_backfill=(mode == "slim"))
@@ -216,12 +215,8 @@ async def main() -> int:
         for c in cases
     }
     full = await _run_mode("full", cases, chunks_by_case,
-                           max_units=args.max_units,
-                           overlap=args.overlap_units,
                            concurrency=args.concurrency)
     slim = await _run_mode("slim", cases, chunks_by_case,
-                           max_units=args.max_units,
-                           overlap=args.overlap_units,
                            concurrency=args.concurrency)
     payload = {
         "baseline_commit": "262319b",
