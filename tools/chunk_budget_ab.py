@@ -375,6 +375,17 @@ async def _run_real_docs(
     }
 
 
+def _paired_round_delta_pt(baseline: dict, candidate: dict,
+                           family: str) -> list[float]:
+    """逐轮配对差（百分点）：worst-of-N 用最坏的一轮，而不是两档各自最差值。"""
+    out = []
+    for base_round, cand_round in zip(baseline["rounds"], candidate["rounds"]):
+        base_f1 = base_round["macro"][family]["f1"]
+        cand_f1 = cand_round["macro"][family]["f1"]
+        out.append(round((cand_f1 - base_f1) * 100, 4))
+    return out
+
+
 def _safety_margin(budget_result: dict, real_docs: dict, capabilities: dict) -> dict:
     """真实 tokenizer 口径的上下文余量（input 含正文+系统提示+schema）。"""
     context = capabilities.get("context_window")
@@ -504,6 +515,14 @@ async def main() -> int:
         "relation_f1_mean": candidate["relation_f1_mean"],
         "relation_f1_worst": candidate["relation_f1_worst"],
     }
+    # worst-of-N 用逐轮配对差（更严格）：两档各自的最差值相减会漏掉
+    # “某一轮单独崩、另一轮恰好很好”的情况。
+    entity_paired = _paired_round_delta_pt(
+        baseline, candidate, "entity_relaxed")
+    relation_paired = _paired_round_delta_pt(
+        baseline, candidate, "relation")
+    gate_candidate["entity_macro_f1_worst_delta_pt"] = min(entity_paired)
+    gate_candidate["relation_f1_worst_delta_pt"] = min(relation_paired)
     gate = evaluate_budget_gate(gate_baseline, gate_candidate)
     gate["real_docs_truncated_chunks"] = cand_real["truncated_chunks_total"]
     gate["stress_truncated_chunks"] = candidate["truncated_chunks_max"]
@@ -563,6 +582,11 @@ async def main() -> int:
         "budgets": results,
         "real_docs": real_results,
         "calls_drop_pct": calls_drop_pct,
+        "paired_round_deltas_pt": {
+            "entity_macro_f1": entity_paired,
+            "relation_f1": relation_paired,
+            "note": "候选减基线，逐轮配对；worst-of-N = 本数组最小值",
+        },
         "residual_cross_chunk": residual,
         "safety_margin": safety,
         "gate": gate,

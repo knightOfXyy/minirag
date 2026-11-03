@@ -242,6 +242,25 @@ def test_budget_gate_boundary_exactly_half_point_passes():
     assert gate["entity_macro_f1_mean_delta_pt"] == pytest.approx(-0.5)
 
 
+def test_budget_gate_prefers_explicit_paired_worst_delta():
+    """worst-of-N 用逐轮配对差（严格），不能拿两档各自最差值相减糊弄过去。"""
+    candidate = _metrics(
+        budget=3500, chunk_calls=6, truncated_chunks=0,
+        entity_macro_f1_mean=0.8960,
+        entity_macro_f1_worst=0.8760,          # 与基线 worst 0.8800 相差 -0.4pt
+        relation_f1_mean=0.5200,
+        relation_f1_worst=0.4700,
+        # 逐轮配对后的最坏一轮实际跌了 0.8pt
+        entity_macro_f1_worst_delta_pt=-0.8,
+        relation_f1_worst_delta_pt=-0.2,
+    )
+    gate = evaluate_budget_gate(_metrics(), candidate)
+    assert gate["entity_macro_f1_worst_delta_pt"] == pytest.approx(-0.8)
+    assert gate["checks"]["entity_worst_within_0_5pt"] is False
+    assert gate["checks"]["relation_worst_not_lower"] is False
+    assert gate["passed"] is False
+
+
 def test_token_estimation_is_not_mistaken_for_real_tokenizer():
     """报告口径自检：估算器只用于切块，不能当作「真实 tokenizer」数字。"""
     text = "临江宏远实业集团有限公司注册地位于临江区。"

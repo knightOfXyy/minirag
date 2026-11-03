@@ -156,18 +156,29 @@ def evaluate_budget_gate(
     ``entity_macro_f1_mean``、``entity_macro_f1_worst``、
     ``relation_f1_mean``、``relation_f1_worst``。
     指标是 0–1 的比例，报告里的“百分点”由本函数换算。
+
+    ``candidate`` 如显式提供 ``entity_macro_f1_worst_delta_pt`` /
+    ``relation_f1_worst_delta_pt``（逐轮配对差的最坏值），优先使用它；
+    否则退回“两档各自最差值相减”。配对差更严格，A/B 工具始终显式传入。
     """
     def _pt(before: float, after: float) -> float:
         return round((after - before) * 100, 4)
 
     entity_mean_delta = _pt(
         baseline["entity_macro_f1_mean"], candidate["entity_macro_f1_mean"])
-    entity_worst_delta = _pt(
-        baseline["entity_macro_f1_worst"], candidate["entity_macro_f1_worst"])
+    entity_worst_delta = candidate.get("entity_macro_f1_worst_delta_pt")
+    if entity_worst_delta is None:
+        entity_worst_delta = _pt(
+            baseline["entity_macro_f1_worst"],
+            candidate["entity_macro_f1_worst"])
     relation_mean_delta = _pt(
         baseline["relation_f1_mean"], candidate["relation_f1_mean"])
-    relation_worst_delta = _pt(
-        baseline["relation_f1_worst"], candidate["relation_f1_worst"])
+    relation_worst_delta = candidate.get("relation_f1_worst_delta_pt")
+    if relation_worst_delta is None:
+        relation_worst_delta = _pt(
+            baseline["relation_f1_worst"], candidate["relation_f1_worst"])
+    entity_worst_delta = round(entity_worst_delta, 4)
+    relation_worst_delta = round(relation_worst_delta, 4)
 
     overlap_unchanged = (
         candidate.get("overlap_units") == baseline.get("overlap_units"))
