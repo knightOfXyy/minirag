@@ -32,6 +32,16 @@ class Document(BaseModel):
     source: str = Field(default="unknown", description="来源，如 news/contract/upload")
     domain_code: str = Field(default="general", description="抽取时使用的领域配置 code")
 
+    @property
+    def audit_text(self) -> str:
+        """回填/审计坐标系：有 ``source_text`` 用它，否则回退到 ``text``。
+
+        ``source_text`` 可能是空字符串（合法空正文），所以不能写成
+        ``source_text or text``——那会把空正文错误替换成带返工反馈的 text。
+        API/作业/抽取器/分块流水线共用这一处口径（r15 F8）。
+        """
+        return self.source_text if self.source_text is not None else self.text
+
 
 class CacheSavings(BaseModel):
     """命中【分块结果内容级缓存】时“本可花费”的用量估算。

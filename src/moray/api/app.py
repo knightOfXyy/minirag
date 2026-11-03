@@ -212,11 +212,9 @@ def create_app(
         # 分块路径的信号在 reviewed.backfill；整篇路径（provider 闭包）走 sink。
         # 内部（块间/内存报告）保留全部关系证据候选；这里是 API 落盘边界，
         # 按默认上限裁剪后再进响应/看板/入库产物（r11 F1）。
-        from ..extraction.local_backfill import serialize_backfill_for_output
+        from ..extraction.local_backfill import resolve_backfill
 
-        backfill = serialize_backfill_for_output(
-            reviewed.backfill if reviewed.backfill is not None
-            else backfill_sink.get("backfill"))
+        backfill = resolve_backfill(reviewed, backfill_sink)
 
         ingest_info = None
         ingest_report = None
