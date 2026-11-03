@@ -1,0 +1,30 @@
+--- HEAD (r7 fix) ---
+{
+ "padded_name_and_head": {
+  "calls": 1,
+  "accepted": true,
+  "issues": []
+ },
+ "clean_name_padded_head": {
+  "calls": 3,
+  "accepted": false,
+  "issues": [
+   "关系头实体「 腾讯」不在实体列表中（疑似臆测或漏抽实体）"
+  ]
+ }
+}
+--- 262319b baseline ---
+{
+ "padded_name_and_head": {
+  "calls": 1,
+  "accepted": true,
+  "issues": []
+ },
+ "clean_name_padded_head": {
+  "calls": 3,
+  "accepted": false,
+  "issues": [
+   "关系头实体「 腾讯」不在实体列表中（疑似臆测或漏抽实体）"
+  ]
+ }
+}

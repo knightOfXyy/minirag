@@ -1,0 +1,79 @@
+/tmp/opencode/review-venv/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+FFF.                                                                     [100%]
+=================================== FAILURES ===================================
+__________ test_off_mode_rule_review_matches_262319b_on_all_fixtures ___________
+
+    def test_off_mode_rule_review_matches_262319b_on_all_fixtures():
+        """关闭态 ②③ 与归档基线逐条一致（verdict + issues 原文）。"""
+        for name, text, result in _review_fixtures():
+            expected_verdict, expected_issues = _rule_review_262319b(text, result)
+            review = rule_review(text, result, backfill=None)
+>           assert review.verdict == expected_verdict, (name, review.issues)
+E           AssertionError: ('whitespace_name', ['关系头实体「 腾讯」不在实体列表中（疑似臆测或漏抽实体）'])
+E           assert 'needs_fix' == 'pass'
+E             
+E             - pass
+E             + needs_fix
+
+tests/test_r7_review_fixes.py:142: AssertionError
+_______ test_off_mode_whitespace_name_endpoint_passes_in_one_model_call ________
+
+    async def test_off_mode_whitespace_name_endpoint_passes_in_one_model_call():
+        """带空白标准名端点不得被 ② 误判：与 262319b 一样 1 次调用即 accepted。"""
+        text = " 腾讯发布了混元。"
+        logical = ExtractionResult(
+            entities=[Entity(name=" 腾讯", type="ORG"), Entity(name="混元", type="MISC")],
+            relations=[Relation(
+                head=" 腾讯", predicate="发布", tail="混元", confidence=0.9,
+                evidence_span=_span(text, " 腾讯发布了混元"))],
+        )
+        calls: list[str | None] = []
+    
+        async def extractor(body: str, feedback: str | None):
+            calls.append(feedback)
+            return logical
+    
+        reviewed = await run_extraction_team(text, extractor=extractor, backfill_sink={})
+    
+>       assert len(calls) == 1, f"关闭态不得因空白名端点返工：{reviewed.review.issues}"
+E       AssertionError: 关闭态不得因空白名端点返工：['关系头实体「 腾讯」不在实体列表中（疑似臆测或漏抽实体）']
+E       assert 3 == 1
+E        +  where 3 = len([None, '请修正以下问题后重新输出完整结果：\n- 关系头实体「 腾讯」不在实体列表中（疑似臆测或漏抽实体）', '请修正以下问题后重新输出完整结果：\n- 关系头实体「 腾讯」不在实体列表中（疑似臆测或漏抽实体）'])
+
+tests/test_r7_review_fixes.py:163: AssertionError
+_____ test_empty_matched_literals_falls_back_to_count_based_undercoverage ______
+
+    def test_empty_matched_literals_falls_back_to_count_based_undercoverage():
+        """旧式精简 backfill 带空 matched_literals 时，仍按计数判定漏抽。"""
+        text = "腾讯发布了混元。"
+        result = ExtractionResult(entities=[
+            Entity(name="腾讯", type="ORG"),
+            Entity(name="幽灵公司", type="ORG"),
+        ])
+        backfill = {
+            "entities_total": 2,
+            "entities_grounded": 1,
+            "block_confidence": 0.5,
+            "matched_literals": {},
+            "ambiguous_mentions": [],
+            "unmatched_aliases": [],
+        }
+    
+        review = rule_review(text, result, backfill=backfill)
+    
+>       assert review.verdict == ReviewVerdict.NEEDS_FIX, review.issues
+E       AssertionError: []
+E       assert 'pass' == 'needs_fix'
+E         
+E         - needs_fix
+E         + pass
+
+tests/test_r7_review_fixes.py:188: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_r7_review_fixes.py::test_off_mode_rule_review_matches_262319b_on_all_fixtures
+FAILED tests/test_r7_review_fixes.py::test_off_mode_whitespace_name_endpoint_passes_in_one_model_call
+FAILED tests/test_r7_review_fixes.py::test_empty_matched_literals_falls_back_to_count_based_undercoverage
+3 failed, 1 passed in 0.71s

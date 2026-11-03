@@ -78,12 +78,17 @@
     `腾讯/ORG + 腾讯/MISC` 的标准名端点 → 关闭态 `NEEDS_FIX` 且报
     「关系头实体「腾讯」…」；同一结果在瘦身模式 `PASS`（歧义不返工）。
 
-### N3（nit）验收 8 worst-of-N 未达标：不擅改门槛，继续如实披露
+### N3（nit）验收 8 worst-of-N 未达标：口径已由 owner 裁定（r7 F2）
 
 - 本轮不修改实现或证据数字，也不改变验收门槛。`docs/evidence/03-r4-fix-evidence.md`
-  第 75-79 行已明确：3 轮均值口径 +0.07pt（跌幅 ≤0.5pt），但 worst-of-N
-  实测单轮 −1.30pt、seed20261104 逐篇 −2.88pt，**未达标**。是否把放量门槛
-  改为 worst-of-N / 扩语料 / 增轮数，仍需工单 owner 决策。
+  已并列写明 3 轮均值 +0.07pt 与 worst-of-N（单轮 −1.30pt、
+  seed20261104 逐篇 −2.88pt）。
+- **r7 F2 裁定**：owner 于 2026-11-03 选定 **mean-of-3** 口径（3 轮均值
+  +0.0733pt ≤ 0.5pt 门槛 → 达成），但要求同一份证据并列披露 worst-of-N，
+  并给工单 04 留 gate 接口（worst-of-N 超过 −0.5pt 不得翻默认开关）。
+  完整口径、复算方式与 `git_sha=9f95ed4` 差异面见
+  `docs/evidence/03-r4-fix-evidence.md` 的「r7 F2 口径裁定」与
+  `docs/evidence/03-r7-fix-evidence.md`。
 
 ## 回归与未动范围
 

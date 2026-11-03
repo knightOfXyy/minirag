@@ -1,0 +1,70 @@
+--- HEAD (r7 fix) ---
+{
+ "clean": {
+  "verdict": "pass",
+  "issues": []
+ },
+ "alias_endpoint": {
+  "verdict": "needs_fix",
+  "issues": [
+   "关系头实体「鹅厂」不在实体列表中（疑似臆测或漏抽实体）"
+  ]
+ },
+ "whitespace_name": {
+  "verdict": "pass",
+  "issues": []
+ },
+ "same_name_diff_type": {
+  "verdict": "needs_fix",
+  "issues": [
+   "实体列表存在同名重复项，未去重"
+  ]
+ },
+ "true_duplicate": {
+  "verdict": "needs_fix",
+  "issues": [
+   "实体列表存在同名重复项，未去重"
+  ]
+ },
+ "missing_endpoint": {
+  "verdict": "needs_fix",
+  "issues": [
+   "关系头实体「幽灵」不在实体列表中（疑似臆测或漏抽实体）"
+  ]
+ }
+}
+--- 262319b baseline ---
+{
+ "clean": {
+  "verdict": "pass",
+  "issues": []
+ },
+ "alias_endpoint": {
+  "verdict": "needs_fix",
+  "issues": [
+   "关系头实体「鹅厂」不在实体列表中（疑似臆测或漏抽实体）"
+  ]
+ },
+ "whitespace_name": {
+  "verdict": "pass",
+  "issues": []
+ },
+ "same_name_diff_type": {
+  "verdict": "needs_fix",
+  "issues": [
+   "实体列表存在同名重复项，未去重"
+  ]
+ },
+ "true_duplicate": {
+  "verdict": "needs_fix",
+  "issues": [
+   "实体列表存在同名重复项，未去重"
+  ]
+ },
+ "missing_endpoint": {
+  "verdict": "needs_fix",
+  "issues": [
+   "关系头实体「幽灵」不在实体列表中（疑似臆测或漏抽实体）"
+  ]
+ }
+}
