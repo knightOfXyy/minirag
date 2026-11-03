@@ -9,17 +9,33 @@
 from __future__ import annotations
 
 import json
+import random
 from pathlib import Path
 
 import pytest
 
-from moray.evaluation.stress.corpus import (
+from moray.evaluation import load_gold_dir, run_evaluation
+from moray.evaluation.stress import (
+    DECOY_PREFIX,
+    DEFAULT_GRIDS,
     STRESS_SEEDS,
+    StressEntity,
+    StressRelation,
+    StressRuleExtractor,
+    aggregate_grid,
+    build_report,
+    build_text,
+    extract_chunk,
     generate_case,
+    load_stress_dir,
+    relation_recall_for_predicates,
+    run_grid_async,
     serialize_case,
     validate_case,
 )
-from moray.extraction.chunking import estimate_tokens
+from moray.extraction.baseline import ImprovedExtractor
+from moray.extraction.chunking import Chunker, estimate_tokens
+from moray.extraction.document import Document
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STRESS_DIR = REPO_ROOT / "data" / "gold" / "stress"
@@ -55,6 +71,58 @@ def test_generated_case_is_large_and_answers_are_text_backed(seed):
     assert not missing_e and not missing_r
 
 
+# 谓词 -> 「正文里必须能指到的那句话」的校验。只查"头尾可定位"查不出
+# 「马秀兰-供职于-锦江华诚机械制造有限公司」这类语义假答案。
+_PREDICATE_SUPPORT = {
+    "供职于": lambda line, r: (
+        line.startswith(r.head + "，") and f"曾在{r.tail}任职" in line),
+    "户籍在": lambda line, r: (
+        line.startswith(r.head + "，") and f"户籍地{r.tail}" in line),
+    "注册地位于": lambda line, r: (
+        line.startswith(r.head + "，") and f"注册地位于{r.tail}" in line),
+    "涉案关联": lambda line, r: (
+        f"案件编号 {r.tail}" in line and r.head in line),
+    "关联物证": lambda line, r: (
+        r.head in line and r.tail in line and "关联到关键物证" in line),
+    "办案地位于": lambda line, r: (
+        r.head in line and r.tail in line and "办案地位于" in line),
+    "追赃方向指向": lambda line, r: (
+        r.head in line and r.tail in line and "追赃方向指向" in line),
+}
+
+
+@pytest.mark.parametrize("seed", STRESS_SEEDS)
+def test_gold_relations_are_semantically_backed_by_text(seed):
+    """每条关系都必须有一句正文真正陈述它，而不只是"头尾都能在文中找到"。
+
+    decoy 单位名与真实单位撞名时，仅靠"可定位"闸门会把
+    「马秀兰 供职于 锦江华诚机械制造有限公司」写进黄金答案；
+    这里按谓词逐条核对句面，锁死这一类语义假答案。
+    """
+    case = generate_case(seed=seed)
+    lines = case.text.splitlines()
+    predicates = {r.predicate for r in case.relations}
+    assert predicates == set(_PREDICATE_SUPPORT)
+    for r in case.relations:
+        support = _PREDICATE_SUPPORT[r.predicate]
+        assert any(support(line, r) for line in lines), (
+            f"{r.head}-{r.predicate}->{r.tail} 正文没有任何一句支撑")
+
+
+@pytest.mark.parametrize("seed", STRESS_SEEDS)
+def test_decoy_entities_never_collide_with_real_names(seed):
+    """decoy 必须结构上不可能撞名（固定前缀），保证过滤闸门不是靠巧合。"""
+    case = generate_case(seed=seed)
+    rng = random.Random(seed)
+    _, candidates, _ = build_text(
+        rng, target_chars=12000, max_units=PROD_MAX_UNITS)
+    decoys = [c for c in candidates if c.name.startswith(DECOY_PREFIX)]
+    assert decoys
+    for d in decoys:
+        assert d.name not in case.text
+        assert d.name not in {e.name for e in case.entities}
+
+
 def test_generator_is_deterministic_byte_for_byte():
     a = generate_case(seed=STRESS_SEEDS[0])
     b = generate_case(seed=STRESS_SEEDS[0])
@@ -69,8 +137,6 @@ def test_generator_is_deterministic_byte_for_byte():
 def test_generator_filters_answers_not_backed_by_text():
     """生成器候选里刻意混入正文不出现的实体/头尾不可定位的关系，
     generate_case 必须把它们全部剔除（而不是靠巧合全命中）。"""
-    import random
-    from moray.evaluation.stress.corpus import build_text
     rng = random.Random(STRESS_SEEDS[0])
     _, candidates, rel_candidates = build_text(
         rng, target_chars=12000, max_units=1500)
@@ -87,7 +153,6 @@ def test_generator_filters_answers_not_backed_by_text():
 
 def test_validate_case_flags_bad_answers():
     good = generate_case(STRESS_SEEDS[0])
-    from moray.evaluation.stress.corpus import StressEntity, StressRelation
     tampered = type(good)(
         seed=good.seed, name=good.name, text=good.text,
         entities=good.entities + [StressEntity("不存在单位有限公司", "ORG")],
@@ -105,12 +170,36 @@ def test_different_seeds_produce_different_cases():
     assert len(texts) == len(STRESS_SEEDS) >= 3
 
 
+def test_case_numbers_are_seed_dependent():
+    """案号也要吃种子；否则三篇文档的 EVENT 编号完全相同，削弱种子独立性。"""
+    event_sets = []
+    for seed in STRESS_SEEDS:
+        case = generate_case(seed=seed)
+        event_sets.append(
+            {e.name for e in case.entities if e.type == "EVENT"})
+    assert len(event_sets) == len(STRESS_SEEDS)
+    for i in range(len(event_sets)):
+        for j in range(i + 1, len(event_sets)):
+            assert event_sets[i] != event_sets[j]
+
+
 # ---------------------------------------------------------------------------
 # 切片 2：确定性分块规则抽取器（不调 LLM；真实走 Chunker + 偏移换算 + 归并）
 # ---------------------------------------------------------------------------
-from moray.evaluation.stress.extractor import StressRuleExtractor  # noqa: E402
-from moray.extraction.document import Document  # noqa: E402
-from moray.extraction.chunking import Chunker  # noqa: E402
+def test_org_names_with_legal_suffixes_are_extracted():
+    """被评抽取器必须完整抽出「有限责任公司」与「…集团有限公司」。
+
+    历史 bug：`_ORG_STOP` 含「任」，整名回绝把「有限责任公司」全部丢掉；
+    后缀表把「集团」排在「有限公司」前面，把「…集团有限公司」截成「…集团」。
+    """
+    text = ("城南信达物流有限责任公司，曾在北辰恒泰物流有限责任公司任职。"
+            "临江宏远实业集团有限公司注册地位于临江区。")
+    names = {e.name for e in extract_chunk(text).entities if e.type == "ORG"}
+    assert names == {
+        "城南信达物流有限责任公司",
+        "北辰恒泰物流有限责任公司",
+        "临江宏远实业集团有限公司",
+    }
 
 
 async def _extract_chunked(text, max_units, overlap_units):
@@ -158,34 +247,35 @@ async def test_chunked_extractor_is_deterministic():
     assert key(r1) == key(r2)
 
 
-async def test_chunked_extractor_missing_cross_chunk_distal_relation():
-    """远端关系（办案地位于：头在卷一、尾只在卷五）在 1500 小预算下应丢，
-    模拟 naive_merge 从不跨块造关系——这正是大块预算要改善的召回。"""
+def _long_relation_pairs(case) -> set[tuple[str, str, str]]:
+    """找出正文里由一条 >1500 units 的长句承载的关系三元组。"""
+    pairs: set[tuple[str, str, str]] = set()
+    for r in case.relations:
+        for line in case.text.splitlines():
+            if (estimate_tokens(line) > PROD_MAX_UNITS
+                    and r.head in line and r.tail in line
+                    and r.predicate in line):
+                pairs.add((r.head, r.predicate, r.tail))
+    return pairs
+
+
+async def test_long_relation_sentence_is_lost_at_production_budget():
+    """>1500 units 的含头尾关系长句：1500 档被 hard_split 拆开必丢，
+    3500 档整句同块必中——这是关系轴对块预算的真实信号，而不是恒等式。"""
     case = generate_case(seed=STRESS_SEEDS[0])
-    distal = {(r.head, r.tail) for r in case.relations
-              if r.predicate == "办案地位于"}
-    assert distal  # 标准答案里确实有远端关系
-    result = await _extract_chunked(case.text, 1500, 200)
-    got = {(r.head, r.tail) for r in result.relations}
-    # 至少一条远端关系因跨块而抽不到（不要求全丢：头尾在卷五可能有别的名字）
-    assert not distal <= got
+    long_pairs = _long_relation_pairs(case)
+    assert long_pairs
+    r_small = await _extract_chunked(case.text, 1500, 200)
+    r_big = await _extract_chunked(case.text, 3500, 200)
+    got_small = {(x.head, x.predicate, x.tail) for x in r_small.relations}
+    got_big = {(x.head, x.predicate, x.tail) for x in r_big.relations}
+    assert not (long_pairs & got_small)
+    assert long_pairs <= got_big
 
 
 # ---------------------------------------------------------------------------
 # 切片 3：落盘语料装载 + 按实体类型评分 + 分块参数网格
 # ---------------------------------------------------------------------------
-from moray.evaluation.stress.loader import (  # noqa: E402
-    load_stress_dir,
-)
-from moray.evaluation.stress.runner import (  # noqa: E402
-    DEFAULT_GRIDS,
-    aggregate_grid,
-    run_grid_async,
-)
-from moray.evaluation import load_gold_dir, run_evaluation  # noqa: E402
-from moray.extraction.baseline import ImprovedExtractor  # noqa: E402
-
-
 def test_load_committed_stress_corpus_validates():
     cases = load_stress_dir(STRESS_DIR)
     assert {c.seed for c in cases} == set(STRESS_SEEDS)
@@ -223,18 +313,30 @@ async def test_grid_baseline_metrics_and_per_type_breakdown():
     assert agg["relation"]["recall"] > 0.0
 
 
-async def test_larger_chunk_budget_does_not_reduce_modeled_relation_recall():
-    """同一语料按块参数维度复跑：被建模的【近端】关系在大块下不应更差
-    （远端关系因本抽取器不跨块造关系而恒丢，不作为 A/B 判据）。"""
-    from moray.evaluation.stress.metrics import relation_recall_for_predicates
+async def test_larger_chunk_budget_strictly_improves_relation_recall():
+    """同一语料按块参数维度复跑：3500 档的关系召回必须**严格高于** 1500 档。
+
+    旧断言 `>=` 在 0.7523 == 0.7523 时也通过（关系轴对预算完全无响应），
+    等于给工单 04 的「关系 F1 不降」门槛放了一张空转通行证。
+    """
     cases = load_stress_dir(STRESS_DIR)
     grids = await run_grid_async(cases, grids=[(1500, 200), (3500, 200)])
-    modeled = {"供职于", "户籍在", "注册地位于", "涉案关联", "关联物证"}
+    modeled = {r.predicate for c in cases for r in c.relations}
 
-    r_small = relation_recall_for_predicates(grids[(1500, 200)], modeled)["recall"]
-    r_big = relation_recall_for_predicates(grids[(3500, 200)], modeled)["recall"]
-    assert r_big >= r_small
+    r_small = relation_recall_for_predicates(
+        grids[(1500, 200)], modeled)["recall"]
+    r_big = relation_recall_for_predicates(
+        grids[(3500, 200)], modeled)["recall"]
+    assert r_big > r_small
     assert r_big > 0.0
+
+
+def test_grid_report_records_extractor_identity():
+    """留存报告必须写明是哪个抽取器/哪版规则跑出来的，否则几个月后无法比对。"""
+    payload = build_report({(1500, 200): []})
+    assert payload["extractor"]["name"] == "StressRuleExtractor"
+    assert isinstance(payload["extractor"]["revision"], int)
+    assert payload["corpus_version"] >= 2
 
 
 def test_default_grids_cover_production_and_candidate_budgets():
@@ -244,17 +346,24 @@ def test_default_grids_cover_production_and_candidate_budgets():
 
 
 async def test_old_six_gold_cases_unchanged():
-    """新增语料不改变旧 6 案例的既有评测结果（共存、不覆盖）。"""
+    """新增语料不改变旧 6 案例的既有评测结果（共存、不覆盖）。
+
+    用精确常量锁定（而不是 "关系 F1 > 0.5" 这种魔法阈值：实测基线 F1=0.8，
+    掉到 0.51 也能过）。
+    """
     old_cases = load_gold_dir(GOLD_DIR)
     assert len(old_cases) == 6
     run = await run_evaluation(ImprovedExtractor(), old_cases, name="imp")
     micro = run.micro()
-    # 锁定 test_evaluation.py 已确立的既有口径：improved 在 6 案例实体满分
-    assert micro["entity_relaxed"]["precision"] == 1.0
-    assert micro["entity_relaxed"]["recall"] == 1.0
-    assert micro["relation"]["f1"] > 0.5
+    assert micro["entity_strict"] == {
+        "tp": 16, "fp": 0, "fn": 0,
+        "precision": 1.0, "recall": 1.0, "f1": 1.0}
+    assert micro["entity_relaxed"] == {
+        "tp": 16, "fp": 0, "fn": 0,
+        "precision": 1.0, "recall": 1.0, "f1": 1.0}
+    assert micro["relation"] == {
+        "tp": 6, "fp": 0, "fn": 3,
+        "precision": 1.0, "recall": 0.6667, "f1": 0.8}
     # 旧黄金目录里没有 stress 子目录被误扫
     assert {c.doc_id for c in old_cases} == {
         f"case0{i}.tagged" for i in range(1, 7)}
-
-

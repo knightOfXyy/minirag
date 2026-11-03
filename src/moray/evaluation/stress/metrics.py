@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ...schema import ExtractionResult
-from ..metrics import PRF, _prf, entity_keys, relation_keys
+from ..metrics import PRF
 
 
 @dataclass
@@ -138,6 +138,4 @@ __all__ = [
     "evaluate_case",
     "aggregate_cases",
     "relation_recall_for_predicates",
-    "entity_keys",
-    "relation_keys",
 ]

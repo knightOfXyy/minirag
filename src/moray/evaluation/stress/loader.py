@@ -106,9 +106,5 @@ def load_stress_case(md_path: str | Path) -> StressGoldCase:
 
 def load_stress_dir(directory: str | Path) -> list[StressGoldCase]:
     """按文件名稳定顺序装载目录下全部 ``*.md`` 压力案卷。"""
-    out = []
-    for p in sorted(Path(directory).glob("*.md")):
-        if p.name.endswith(".terms.txt"):
-            continue
-        out.append(load_stress_case(p))
-    return out
+    return [load_stress_case(p)
+            for p in sorted(Path(directory).glob("*.md"))]

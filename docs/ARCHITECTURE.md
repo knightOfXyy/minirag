@@ -1,7 +1,7 @@
 # Moray 架构总览
 
 企业级实体抽取（NER/RE）+ 实体知识库，基于 **AgentScope 2.0**，15 课增量建成。
-约 5k 行库代码 + 15 个可运行讲义 + 91 个测试。设计主线：**每一层都可离线、
+约 5k 行库代码 + 15 个可运行讲义 + 162 个测试。设计主线：**每一层都可离线、
 确定性地单独验证**，LLM 只出现在明确的接缝处。
 
 ## 数据流
@@ -43,6 +43,7 @@
 | `observability/` | OTEL 追踪中间件、`pipeline_runs` 质量/成本看板、成本/审计/质量中间件 | L06/13 |
 | `api/` | FastAPI：抽取/作业/查询/HITL/看板；依赖注入 + lifespan | L14 |
 | `evaluation/` | 黄金集加载、严格/宽松匹配、P/R/F1、宏/微平均、基线对比 | L15 |
+| `evaluation/stress/` | 多种子确定性压力案卷（`data/gold/stress/`，正文>5×块预算）+ 答案可信闸门 + 零 LLM 分块规则抽取器 + 按块预算/重叠的网格 A/B 报告 | 工单02 |
 
 ## 贯穿全项目的工程原则
 
@@ -60,8 +61,8 @@
 ## 测试
 
 ```bash
-python -m pytest tests/ -q                 # 58 个离线确定性单测（CI 同款）
-RUN_DB_TESTS=1 python -m pytest tests/ -q  # +33 个 pgvector/MCP/API/作业/合并集成
+python -m pytest tests/ -q                 # 102 个离线确定性单测（CI 同款）
+RUN_DB_TESTS=1 python -m pytest tests/ -q  # +47 个 pgvector/MCP/API/作业/合并集成
 ```
 
 ## 从哪开始读代码

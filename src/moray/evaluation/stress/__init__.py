@@ -1,10 +1,12 @@
 """压力案卷黄金语料子包：确定性合成语料 + 离线分块评测（工单 02）。"""
 
 from .corpus import (
+    DECOY_PREFIX,
     STRESS_SEEDS,
     StressCase,
     StressEntity,
     StressRelation,
+    build_text,
     generate_case,
     serialize_case,
     validate_case,
@@ -33,10 +35,12 @@ from .runner import (
 )
 
 __all__ = [
+    "DECOY_PREFIX",
     "STRESS_SEEDS",
     "StressCase",
     "StressEntity",
     "StressRelation",
+    "build_text",
     "generate_case",
     "serialize_case",
     "validate_case",

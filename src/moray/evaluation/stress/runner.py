@@ -21,6 +21,14 @@ from .extractor import StressRuleExtractor
 from .loader import StressGoldCase
 from .metrics import CaseEvaluation, aggregate_cases, evaluate_case
 
+# 报告自带身份信息：几个月后拿到一份 eval_grid_report.json 也能知道是哪个
+# 抽取器、哪版规则跑出来的。规则/口径有实质变化时递增 revision。
+_EXTRACTOR_IDENTITY: dict[str, object] = {
+    "name": "StressRuleExtractor",
+    "revision": 2,
+}
+_CORPUS_VERSION = 2
+
 # 默认参数网格：生产档 + overlap 档位 + 候选更大预算（含 04 单目标 3500）
 DEFAULT_GRIDS: tuple[tuple[int, int], ...] = (
     (1500, 0),
@@ -77,7 +85,11 @@ def build_report(
     grid_results: dict[tuple[int, int], list[CaseEvaluation]],
 ) -> dict:
     """组装可落盘 JSON：每档块参数的微平均指标，含按实体类型拆分。"""
-    out: dict = {"grids": {}}
+    out: dict = {
+        "extractor": dict(_EXTRACTOR_IDENTITY),
+        "corpus_version": _CORPUS_VERSION,
+        "grids": {},
+    }
     for (max_units, overlap_units), evals in sorted(grid_results.items()):
         label = f"{max_units}:{overlap_units}"
         agg = aggregate_grid(evals)
