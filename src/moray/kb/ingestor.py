@@ -177,7 +177,10 @@ class Ingestor:
         if name in report.entity_ids:
             return report.entity_ids[name]
 
-        eid = await self.store.get_entity_id(name, domain_code=domain)
+        # 存储层没有按名查 id 的能力时（精简 store / 测试桩）直接按「查不到」处理，
+        # 交给下面的占位实体兜底，避免 AttributeError 打断整篇入库。
+        get_id = getattr(self.store, "get_entity_id", None)
+        eid = await get_id(name, domain_code=domain) if get_id is not None else None
         if eid is not None:
             report.entity_ids[name] = eid
             return eid

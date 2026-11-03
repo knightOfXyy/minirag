@@ -102,13 +102,17 @@ class EntityStore:
         domain_code: str = "general",
         aliases: list[str] | None = None,
         attributes: dict[str, Any] | None = None,
-        confidence: float = 0.0,
+        confidence: float | None = 0.0,
         mentions: list[dict] | None = None,
     ) -> int:
         """幂等写入一个实体（含向量/别名/出处），返回实体 id。
 
         同一 (domain, type, name) 已存在则更新向量与属性，并合并别名/出处。
         mentions: [{'document_id','surface','start','end','chunk_id'}]
+
+        confidence=None 表示「模型没自报 = 未知」。DB 列沿用历史 NOT NULL
+        口径，落库时按 0 存（不为未知改表）；未知与低置信的区分留在内核
+        对象与 API 响应里，GREATEST 也不会让旧值被 0 覆盖。
         """
         async with self.pool.acquire() as conn:
             async with conn.transaction():
@@ -127,7 +131,8 @@ class EntityStore:
                     RETURNING id
                     """,
                     domain_code, name, type, (attributes or {}),
-                    confidence, _vec_literal(embedding),
+                    confidence if confidence is not None else 0.0,
+                    _vec_literal(embedding),
                 )
                 entity_id = row["id"]
 
@@ -271,7 +276,7 @@ class EntityStore:
         predicate: str,
         target_id: int,
         domain_code: str = "general",
-        confidence: float = 0.0,
+        confidence: float | None = 0.0,
     ) -> int:
         row = await self.pool.fetchrow(
             """
@@ -282,7 +287,8 @@ class EntityStore:
             DO UPDATE SET confidence = GREATEST(relations.confidence, EXCLUDED.confidence)
             RETURNING id
             """,
-            domain_code, source_id, predicate, target_id, confidence,
+            domain_code, source_id, predicate, target_id,
+            confidence if confidence is not None else 0.0,
         )
         return row["id"]
 

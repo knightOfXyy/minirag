@@ -46,12 +46,12 @@ def test_slim_schema_accepts_logical_only_output():
     assert e.name == "华为" and e.type == "ORG"
     assert e.aliases == ["华为公司"]
     assert e.attributes == {"industry": "通信"}
-    # 模型不再给出现位置/置信度 -> 内核字段取稳定默认，等待本地回填
+    # 模型不再给出现位置/置信度 -> 位置待回填，置信度是「未知」(None) 而非 0.0
     assert e.mentions == []
-    assert e.confidence == 0.0
+    assert e.confidence is None
     r = core.relations[0]
     assert (r.head, r.predicate, r.tail) == ("任正非", "创立", "华为")
-    assert r.evidence_span is None and r.confidence == 0.0
+    assert r.evidence_span is None and r.confidence is None
 
 
 def test_slim_system_prompt_does_not_request_offsets():

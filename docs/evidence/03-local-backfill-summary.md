@@ -23,7 +23,10 @@
 ## 稳定内核契约
 
 - 回填只补 `mentions[].span` 与 `relations[].evidence_span`。
-- **不改** `Entity.confidence` / `Relation.confidence`；瘦身模式模型不输出该字段时保持默认 `0.0`。
+- 回填不改写 `Entity.confidence` / `Relation.confidence`：模型自报值原样保留，
+  但**未知不再是 `0.0`**——r2 起内核字段可空，瘦身模式模型不输出该字段时为
+  `None`（未知），入库/API/审校都据此走「未知」分支，0.0 只代表模型明确给的
+  最低置信。
 - 确定性质量信号（块级置信度、命中、未命中别名、歧义、关系证据）在 `ExtractionOutput.backfill` / API `backfill` / 作业结果 `backfill` 中旁路暴露。
 
 实际请求/响应样例见 `03-local-backfill-contract.json`。
@@ -60,5 +63,8 @@
     `test_scan_is_single_linear_pass_independent_of_pattern_count`；
     另加 20k 字重叠裁决性能回归（旧 O(H²) 已消除）。
 
-测试：`129 passed, 47 skipped`（skip 为需 PostgreSQL/嵌入模型的集成测试），
-见 `03-pytest-output.txt`。
+测试：r1 时为 `129 passed, 47 skipped`（skip 为需 PostgreSQL/嵌入模型的集成
+测试），见 `03-pytest-output.txt`。r2 的 21 条失败用例见 `03-r2-red-tests.txt`
+（先红证据）；r2 实现修补并入稳定分支后实测：
+`ARK_API_KEY=dummy pytest -q` → **281 passed / 61 skipped**，
+`RUN_DB_TESTS=1 ARK_API_KEY=dummy pytest -q` → **342 passed**。

@@ -36,8 +36,11 @@ def estimate_tokens(text: str) -> int:
     return len(_UNIT_RE.findall(text))
 
 
-# 句子结束符（中英）+ 换行。保留结束符在句子里，便于直接还原原文。
-_SENT_RE = re.compile(r"[^。！？!?；;\n]+[。！？!?；;\n]*")
+# 句子结束符（中英）+ 换行 + 英文句号。保留结束符在句子里，便于直接还原原文。
+# 英文句号只在【后接空白或文末】时才算句界，避免把 "3.5"/"v1.2" 劈开。
+_SENT_RE = re.compile(
+    r"[^。！？!?；;\n]+?(?:[。！？!?；;\n]+|\.(?=\s)|\Z)"
+)
 
 
 @dataclass(frozen=True)
@@ -60,10 +63,17 @@ def split_sentences(text: str) -> list[tuple[int, int]]:
     """把文本切成句子，返回每句在原文中的 [start, end)。
 
     用游标 + 正则而不是 text.split，保证偏移永远精确。
+
+    正文开头的空白/换行（以及夹在句间的纯空白段）不单独成句也不丢字：
+    直接把游标推进到下一个非空白字符，句 span 从正文内容开始。
     """
     sentences: list[tuple[int, int]] = []
     pos = 0
     while pos < len(text):
+        if text[pos].isspace():
+            # 前导空白/换行不单独成句，也不进入 span（证据文本从正文内容开始）
+            pos += 1
+            continue
         m = _SENT_RE.match(text, pos)
         if not m:
             break

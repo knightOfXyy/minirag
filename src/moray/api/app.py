@@ -254,7 +254,9 @@ def create_app(
                         usage.cached_input_tokens if usage is not None else 0),
                     cache_hits=(
                         usage.cache_hits if usage is not None else 0),
-                    latency_ms=api_latency_ms))
+                    latency_ms=api_latency_ms,
+                    # 瘦身回填信号进看板行（开关关闭时为 None，不伪造 0）
+                    backfill=backfill))
             except Exception:  # noqa: BLE001 观测失败不能拖垮实时抽取
                 logger.warning(
                     "API 写看板失败 document_id=%s", doc_id, exc_info=True)

@@ -150,3 +150,25 @@ def test_run_recorder_maps_non_streaming_wall_clock_latency():
     failed = RunRecorder.from_failure(
         document_id="d", document_metrics=dm, error="x")
     assert failed.chunk_latency_ms == 400
+
+
+def test_from_pipeline_carries_backfill_grounding_signal():
+    """看板要能消费确定性回填信号（块级置信度/命中数/关系证据率）。"""
+    r = RunRecorder.from_pipeline(
+        document_id="d3", reviewed=_reviewed(), ingest_report=_ingest(),
+        backfill={
+            "block_confidence": 0.75,
+            "entities_total": 4,
+            "entities_grounded": 3,
+            "relation_evidence_ratio": 0.5,
+            "ambiguous_mentions": [{"surface": "苹果"}],
+        })
+    assert r.block_confidence == 0.75
+    assert (r.entities_grounded, r.entities_total) == (3, 4)
+    assert r.relation_evidence_ratio == 0.5
+    assert r.ambiguous_mentions == 1
+    # 未传 backfill（开关关闭）时保持 None，不伪造信号
+    plain = RunRecorder.from_pipeline(
+        document_id="d4", reviewed=_reviewed(), ingest_report=_ingest())
+    assert plain.block_confidence is None
+    assert plain.ambiguous_mentions == 0

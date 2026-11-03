@@ -78,8 +78,8 @@ async def test_switch_on_backfills_mentions_and_evidence():
 
     # 阿里巴巴出现 2 次
     assert [m.surface for m in by_name["阿里巴巴"].mentions] == ["阿里巴巴", "阿里巴巴"]
-    # 瘦身模型不输出 confidence：内核保持默认 0.0，回填不得用 grounding 覆盖
-    assert all(e.confidence == 0.0 for e in res.entities)
+    # 瘦身模型不输出 confidence：内核必须是「未知」(None)，不是 0.0 假值
+    assert all(e.confidence is None for e in res.entities)
 
     # 关系证据被回填为同句整句
     by_rel = {(r.head, r.predicate, r.tail): r for r in res.relations}
@@ -185,9 +185,10 @@ async def test_chunked_pipeline_backfills_then_maps_to_global(monkeypatch):
 async def test_switch_off_does_not_backfill_model_fields_preserved():
     """开关关：模型没给 mentions/confidence 时内核保持默认，不做任何回填。"""
     out = await _run(False)
-    # 关闭路径完全不触碰回填，backfill 信号为 None，mentions 为空、置信度为模型值(缺省0)
+    # 关闭路径完全不触碰回填，backfill 信号为 None，mentions 为空、置信度为模型值(全量 schema 缺省0)
     assert out.backfill is None
     assert all(e.mentions == [] for e in out.result.entities)
+    assert all(e.confidence == 0.0 for e in out.result.entities)
     assert all(r.evidence_span is None for r in out.result.relations)
 
 
@@ -215,6 +216,52 @@ class _ChunkBackfillFake(_FakeExtractor):
         return ExtractionOutput(
             document_id=document.id, domain_code="general",
             result=local, attempts=1, backfill=report.to_dict())
+
+
+async def test_chunked_pipeline_gates_relation_merge_by_switch():
+    """开关关闭时归并走 262319b 旧语义（先见赢家）；打开才合并后见证据。"""
+    from types import SimpleNamespace
+
+    from moray.extraction import Chunk, ChunkedExtractionPipeline
+    from moray.extraction.document import ExtractionOutput, Usage
+    from moray.schema import ExtractionResult as ER
+    from moray.schema import Span
+
+    full = "甲投乙。无关句。"
+    s1 = full.index("。") + 1
+    chunks = [
+        Chunk(id="d#c0", text=full[:s1], start=0, end=s1, index=0),
+        Chunk(id="d#c1", text=full[s1:], start=s1, end=len(full), index=1),
+    ]
+
+    class _PartialFake:
+        def __init__(self, flag):
+            self.local_backfill = flag
+            self.domain = SimpleNamespace(code="general")
+            self.model_name = "fake"
+
+        async def extract(self, document):
+            evidence = None
+            if document.text.startswith("无关"):
+                evidence = Span(start=0, end=2, text="无关")
+            res = ER(
+                entities=[Entity(name="甲", type="ORG"),
+                          Entity(name="乙", type="ORG")],
+                relations=[Relation(head="甲", predicate="投", tail="乙",
+                                    evidence_span=evidence)])
+            return ExtractionOutput(
+                document_id=document.id, domain_code="general",
+                result=res, model_name="fake", usage=Usage(), attempts=1)
+
+    off = await ChunkedExtractionPipeline(
+        _PartialFake(False), concurrency=1).run(Document(id="d", text=full), chunks)
+    assert len(off.result.relations) == 1
+    assert off.result.relations[0].evidence_span is None
+
+    on = await ChunkedExtractionPipeline(
+        _PartialFake(True), concurrency=1).run(Document(id="d", text=full), chunks)
+    assert len(on.result.relations) == 1
+    assert on.result.relations[0].evidence_span is not None
 
 
 async def test_pipeline_run_aggregates_backfill_signal_with_global_spans():

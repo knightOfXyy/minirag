@@ -164,7 +164,10 @@ class ExtractionMetricsMiddleware(_RecorderMiddleware):
                         result = ExtractionResult.model_validate(data)
                         report = verify_spans(result, source)
                         rec.span_ratio = report.ratio
-                        rec.quality_score = self._score(rec, report)
+                        # 瘦身输出没有 mention：用本地确定性回填算「实体在正文
+                        # 里有没有出处」，替代模型自报置信度做质量依据。
+                        grounding = self._grounding(rec, result, source)
+                        rec.quality_score = self._score(rec, report, grounding)
                     except Exception:  # noqa: BLE001 质量计算绝不能影响主流程
                         pass
                 else:
@@ -172,12 +175,33 @@ class ExtractionMetricsMiddleware(_RecorderMiddleware):
             yield event
 
     @staticmethod
-    def _score(rec: ExtractionMetrics, report) -> float:
+    def _grounding(rec: ExtractionMetrics, result, source: str) -> float | None:
+        """用确定性本地回填算块级接地率，并写入指标（失败时不影响主流程）。"""
+        from ..extraction.local_backfill import backfill_provenance
+
+        try:
+            _local, report = backfill_provenance(result, source)
+        except Exception:  # noqa: BLE001
+            return None
+        rec.entities_total = report.entities_total
+        rec.entities_grounded = report.entities_grounded
+        rec.block_confidence = report.block_confidence
+        rec.relation_evidence_ratio = report.relation_evidence_ratio
+        rec.ambiguous_mentions = len(report.ambiguous_mentions)
+        return rec.block_confidence
+
+    @staticmethod
+    def _score(rec: ExtractionMetrics, report, grounding: float | None = None) -> float:
         """一个透明、可解释的启发式质量分（0~1），L15 会换成评测体系。
 
-        构成：span 一致率 50% + 高置信实体占比 30% + 产出非空 20%。
+        构成：出处/接地率 50% + 高置信实体占比 30% + 产出非空 20%。
+        有确定性回填信号时用块级接地率（实体是否真在正文里），否则退回
+        span 一致率——slim 输出没有 mention，span 检查会空转给满分。
         """
-        span_part = report.ratio if report is not None else 1.0
+        if grounding is not None:
+            span_part = grounding
+        else:
+            span_part = report.ratio if report is not None else 1.0
         known = rec.known_confidence_entities
         if known:
             conf_part = 1.0 - rec.low_confidence_entities / known

@@ -43,6 +43,15 @@ from .chunking import split_sentences
 # ---------------------------------------------------------------------------
 # 回填质量信号
 # ---------------------------------------------------------------------------
+def entity_signal_key(entity: Entity) -> str:
+    """实体在回填信号里的唯一键：``类型|标准名``。
+
+    只用标准名会让「同名不同类型」（苹果/ORG 与 苹果/MISC）在
+    matched_literals、歧义候选等统计里互相覆盖，信号就失真了。
+    """
+    return f"{entity.type}|{entity.name}"
+
+
 @dataclass
 class AmbiguousMention:
     """一次可归属到多个逻辑实体的歧义出现。"""
@@ -50,15 +59,17 @@ class AmbiguousMention:
     surface: str
     start: int
     end: int
-    candidates: list[str]          # 候选实体标准名
+    candidates: list[str]          # 候选实体标准名（含 type 的信号键）
     reason: str = ""
+    # 跨块汇总时标注该歧义出现在哪个块；块内回填时为 None
+    chunk_id: str | None = None
 
 
 @dataclass
 class BackfillReport:
     """一次回填的确定性质量信号（供下游替代模型自报置信度）。"""
 
-    # 实体名 -> 该实体在块内被命中的不同字面（标准名/别名）数
+    # 实体信号键（类型|名）-> 该实体在块内被命中的不同字面（标准名/别名）数
     matched_literals: dict[str, int] = field(default_factory=dict)
     # 模型给了、但正文里一次都没出现的名字/别名（疑似幻觉）
     unmatched_aliases: list[dict] = field(default_factory=list)
@@ -87,16 +98,25 @@ class BackfillReport:
         )
 
     @classmethod
-    def from_dict(cls, data: dict) -> "BackfillReport":
-        """从落盘/跨进程传递的纯字典还原（pipeline 汇总分块信号用）。"""
+    def from_dict(
+        cls, data: dict, *, chunk_start: int = 0, chunk_id: str | None = None,
+    ) -> "BackfillReport":
+        """从落盘/跨进程传递的纯字典还原（pipeline 汇总分块信号用）。
+
+        ``chunk_start``/``chunk_id`` 用于跨块汇总：块内偏移在这里一次性平移到
+        文档全局坐标，并给歧义/证据候选打上来源块，看板才能定位到具体块。
+        """
         report = cls()
         report.matched_literals = dict(data.get("matched_literals") or {})
         report.unmatched_aliases = list(data.get("unmatched_aliases") or [])
         report.ambiguous_mentions = [
             AmbiguousMention(
-                surface=x["surface"], start=x["start"], end=x["end"],
+                surface=x["surface"],
+                start=x["start"] + chunk_start,
+                end=x["end"] + chunk_start,
                 candidates=list(x.get("candidates") or []),
                 reason=x.get("reason", ""),
+                chunk_id=chunk_id,
             )
             for x in (data.get("ambiguous_mentions") or [])
         ]
@@ -105,10 +125,30 @@ class BackfillReport:
         report.relations_total = int(data.get("relations_total", 0))
         report.relations_with_evidence = int(
             data.get("relations_with_evidence", 0))
-        report.relations_without_evidence = list(
-            data.get("relations_without_evidence") or [])
+
+        def _tag(entry: dict) -> dict:
+            tagged = dict(entry)
+            ids = list(tagged.get("chunk_ids") or [])
+            if chunk_id is not None and chunk_id not in ids:
+                ids.append(chunk_id)
+                tagged["chunk_ids"] = ids
+            return tagged
+
+        report.relations_without_evidence = [
+            _tag(x) for x in (data.get("relations_without_evidence") or [])
+        ]
+
+        def _shift_cand(cand: dict) -> dict:
+            shifted = dict(cand)
+            for key in ("head_start", "tail_start", "sent_start", "sent_end"):
+                if isinstance(shifted.get(key), int):
+                    shifted[key] += chunk_start
+            if chunk_id is not None:
+                shifted["chunk_id"] = chunk_id
+            return shifted
+
         report.relation_evidence_candidates = {
-            key: list(cands)
+            key: [_shift_cand(c) for c in cands]
             for key, cands in (data.get("relation_evidence_candidates") or {}).items()
         }
         return report
@@ -131,6 +171,7 @@ class BackfillReport:
                     "end": am.end,
                     "candidates": am.candidates,
                     "reason": am.reason,
+                    "chunk_id": am.chunk_id,
                 }
                 for am in self.ambiguous_mentions
             ],
@@ -228,7 +269,10 @@ def merge_entity_metadata(base: Entity, incoming: Entity) -> Entity:
             base.aliases.append(alias)
     for key, value in incoming.attributes.items():
         base.attributes.setdefault(key, value)
-    base.confidence = max(base.confidence, incoming.confidence)
+    # 置信度可空（None=未知）：只有一个已知时取它，两个都未知保持 None，
+    # 不能把 None 当 0 参与 max 从而"确认"成低置信。
+    known = [c for c in (base.confidence, incoming.confidence) if c is not None]
+    base.confidence = max(known) if known else None
     if not base.description:
         base.description = incoming.description
     return base
@@ -314,7 +358,10 @@ def backfill_provenance(
         occupied = bytearray(len(text))
 
         def _is_free(s: int, e: int) -> bool:
-            return occupied.find(b"\x00", s, e) != -1
+            # 整段都必须空闲：只要与已占区间有任何重叠（哪怕只重叠一部分，
+            # 如长名 0-4 与短名 3-5），该命中就不能归属——部分重叠也是
+            # 「同一个字面区间」，拆开归属会造出假 mention。
+            return occupied.find(b"\x01", s, e) == -1
 
         for start, end, literal in raw_hits:
             # 先做最长匹配的区间裁决：若该区间已被更长的命中占用，直接跳过
@@ -330,12 +377,20 @@ def backfill_provenance(
                     am.start == start and am.surface == literal
                     for am in report.ambiguous_mentions
                 ):
+                    names = [logical[i].name for i in candidates]
+                    # 名字本身能区分（别名归属冲突）时给可读名字；同名不同
+                    # 类型时只写名字会变成两个一模一样的候选，必须补类型键。
+                    if len(set(names)) == len(names):
+                        cand_labels = names
+                    else:
+                        cand_labels = [entity_signal_key(logical[i])
+                                       for i in candidates]
                     report.ambiguous_mentions.append(
                         AmbiguousMention(
                             surface=literal,
                             start=start,
                             end=end,
-                            candidates=[logical[i].name for i in candidates],
+                            candidates=cand_labels,
                             reason="同一字面归属多个逻辑实体",
                         )
                     )
@@ -354,15 +409,25 @@ def backfill_provenance(
         hit = matched_literals[i]
         if ms:
             report.entities_grounded += 1
-        report.matched_literals[e.name] = len(hit)
+        # 只有真正命中的实体才进统计（未命中由 entities_grounded 表达）。
+        # 键带类型：同名不同类型不能互相覆盖。
+        if hit:
+            report.matched_literals[entity_signal_key(e)] = len(hit)
         # 标准名没出现是「实体未命中正文」，不是「别名幻觉」；只有模型给的
         # 别名（!= 标准名）未出现才计入 unmatched_aliases。
+        mention_texts = [text[m.span.start:m.span.end] for m in ms
+                         if m.span is not None]
         for literal in e.aliases:
             literal = literal.strip()
-            if literal and literal != e.name and literal not in hit:
-                report.unmatched_aliases.append(
-                    {"entity": e.name, "literal": literal}
-                )
+            if not literal or literal == e.name or literal in hit:
+                continue
+            # 别名若作为长名命中的前缀/子串真实出现（「阿里」被「阿里巴巴」
+            # 吸收），是正文里确有的字面，不能记成幻觉别名。
+            if any(literal in surface for surface in mention_texts):
+                continue
+            report.unmatched_aliases.append(
+                {"entity": e.name, "literal": literal}
+            )
         new_entities.append(
             Entity(
                 name=e.name,
@@ -473,6 +538,7 @@ def merge_backfill_reports(reports: list[BackfillReport]) -> BackfillReport:
     grounded/total 的整数计数，块级置信度仍然是「命中实体 / 实体总数」。
     """
     merged = BackfillReport()
+    without_evidence: dict[tuple[str, str, str], dict] = {}
     for report in reports:
         merged.entities_total += report.entities_total
         merged.entities_grounded += report.entities_grounded
@@ -482,7 +548,22 @@ def merge_backfill_reports(reports: list[BackfillReport]) -> BackfillReport:
             merged.matched_literals[name] = merged.matched_literals.get(name, 0) + n
         merged.unmatched_aliases.extend(report.unmatched_aliases)
         merged.ambiguous_mentions.extend(report.ambiguous_mentions)
-        merged.relations_without_evidence.extend(report.relations_without_evidence)
+        # 同一条「无证据关系」在多块都出现时要合并成一条（累计 chunk_ids），
+        # 否则明细会按块数成倍堆叠，看板上的关系证据缺口被放大。
+        for entry in report.relations_without_evidence:
+            key = (entry.get("head", ""), entry.get("predicate", ""),
+                   entry.get("tail", ""))
+            slot = without_evidence.get(key)
+            if slot is None:
+                slot = dict(entry)
+                slot["chunk_ids"] = list(entry.get("chunk_ids") or [])
+                without_evidence[key] = slot
+            else:
+                ids = slot.setdefault("chunk_ids", [])
+                for cid in entry.get("chunk_ids") or []:
+                    if cid not in ids:
+                        ids.append(cid)
         for key, cands in report.relation_evidence_candidates.items():
             merged.relation_evidence_candidates.setdefault(key, []).extend(cands)
+    merged.relations_without_evidence = list(without_evidence.values())
     return merged

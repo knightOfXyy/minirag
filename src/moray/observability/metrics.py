@@ -54,6 +54,13 @@ class ExtractionMetrics:
     low_confidence_entities: int = 0
     # 本次结果中真正带 confidence 的实体数（瘦身输出该值为 0 = 未知，不是低置信）
     known_confidence_entities: int = 0
+    # 瘦身回填的确定性接地信号：模型不报 confidence 时用「实体在正文里有出处」
+    # 替代主观置信度；None = 没有回填信号（开关关闭/无原文）。
+    entities_total: int | None = None
+    entities_grounded: int | None = None
+    block_confidence: float | None = None
+    relation_evidence_ratio: float | None = None
+    ambiguous_mentions: int = 0
     quality_score: float | None = None
 
     @property

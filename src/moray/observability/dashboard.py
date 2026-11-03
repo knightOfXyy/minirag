@@ -67,6 +67,15 @@ class RunRecorder:
     # 分块明细 JSON（每块一条 ChunkCallMetrics），供下钻排查，不做 SQL 聚合
     chunk_metrics_json: list | None = None
 
+    # ---- 工单 03：瘦身回填的确定性接地信号 -----------------------------
+    # slim 输出不自报 confidence，用「实体是否在正文里有出处」替代：
+    # None = 开关关闭/无信号，不能当成 0（未知 ≠ 全错）。
+    block_confidence: float | None = None
+    entities_grounded: int | None = None
+    entities_total: int | None = None
+    relation_evidence_ratio: float | None = None
+    ambiguous_mentions: int = 0
+
     @staticmethod
     def _chunk_fields(dm) -> dict:
         """把 DocumentMetrics 映射成看板列；None/未测到如实保持 None。"""
@@ -109,6 +118,7 @@ class RunRecorder:
         latency_ms: int = 0,
         model_name: str = "",
         trace_id: str | None = None,
+        backfill: dict | None = None,
     ) -> RunRecorder:
         """从 L10 ReviewedExtraction + L08/09 IngestReport 便捷构造。"""
         dm = getattr(reviewed, "document_metrics", None)
@@ -134,8 +144,23 @@ class RunRecorder:
             latency_ms=latency_ms,
             model_name=model_name,
             trace_id=trace_id,
+            **(cls._backfill_fields(backfill) if backfill else {}),
             **chunk_fields,
         )
+
+    @staticmethod
+    def _backfill_fields(backfill: dict | None) -> dict:
+        """把确定性回填信号映射成看板列（未传/开关关闭时保持 None）。"""
+        if not backfill:
+            return {}
+        return {
+            "block_confidence": backfill.get("block_confidence"),
+            "entities_grounded": backfill.get("entities_grounded"),
+            "entities_total": backfill.get("entities_total"),
+            "relation_evidence_ratio": backfill.get("relation_evidence_ratio"),
+            "ambiguous_mentions": len(
+                backfill.get("ambiguous_mentions") or []),
+        }
 
     @staticmethod
     def _tokens_from_document_metrics(document_metrics) -> dict:
@@ -209,9 +234,12 @@ class Dashboard:
                latency_ms, model_name, trace_id,
                chunk_calls, total_attempts, truncated_chunks, truncation_signals,
                reworked_chunks, rework_rate,
-               wait_ms, chunk_latency_ms, prefill_ms, decode_ms, chunk_metrics)
+               wait_ms, chunk_latency_ms, prefill_ms, decode_ms, chunk_metrics,
+               block_confidence, entities_grounded, entities_total,
+               relation_evidence_ratio, ambiguous_mentions)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-                    $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
+                    $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
+                    $31,$32,$33,$34,$35)
             RETURNING id
             """,
             r.document_id, r.domain_code, r.source,
@@ -225,6 +253,8 @@ class Dashboard:
             r.wait_ms, r.chunk_latency_ms, r.prefill_ms, r.decode_ms,
             # jsonb 由连接 codec 自动编解码（见 kb.store._init_connection）
             r.chunk_metrics_json,
+            r.block_confidence, r.entities_grounded, r.entities_total,
+            r.relation_evidence_ratio, r.ambiguous_mentions,
         )
         return row["id"]
 
@@ -319,6 +349,8 @@ class Dashboard:
             "input_tokens, output_tokens, cached_input_tokens, cache_hits, "
             "latency_ms, created_at, "
             "chunk_calls, truncated_chunks, truncation_signals, rework_rate, "
-            "chunk_latency_ms, prefill_ms, decode_ms "
+            "chunk_latency_ms, prefill_ms, decode_ms, "
+            "block_confidence, entities_grounded, entities_total, "
+            "relation_evidence_ratio, ambiguous_mentions "
             "FROM pipeline_runs ORDER BY id DESC LIMIT $1", limit)
         return [dict(r) for r in rows]

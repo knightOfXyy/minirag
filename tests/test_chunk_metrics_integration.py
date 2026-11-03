@@ -118,13 +118,19 @@ class _ScriptedProvider:
 SUMMARY_KEYS = {
     "document_id", "n_chunks", "chunk_calls", "total_attempts",
     "truncated_chunks", "truncation_signals", "rework_rate",
-    "reworked_chunks", "cache_hit_chunks", "wait_s", "prefill_s", "decode_s",
+    "reworked_chunks", "cache_hit_chunks", "wait_s",
+    # 01 r2 新增：非流式也测得到的墙钟归因（prefill/decode 仍可为 None）
+    "latency_s",
+    "prefill_s", "decode_s",
     "input_tokens", "output_tokens", "cached_input_tokens",
 }
 CHUNK_KEYS = {
     "chunk_id", "attempts", "finish_reason", "truncated",
     "input_tokens", "output_tokens", "cached_input_tokens",
-    "wait_s", "prefill_s", "decode_s", "reworked", "cache_hit",
+    "wait_s", "prefill_s", "decode_s",
+    # 01 r2 新增：非流式墙钟（每块一次调用一个数）
+    "latency_s",
+    "reworked", "cache_hit",
     "truncated_attempts", "attempt_finish_reasons", "error",
 }
 

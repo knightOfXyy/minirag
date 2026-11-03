@@ -82,3 +82,43 @@ def test_naive_merge_does_not_drop_later_relation_evidence():
     # 反向顺序（先有证据）也不能丢
     merged2 = naive_merge([b, a])
     assert merged2.relations[0].evidence_span is not None
+
+
+def _merge_golden_inputs():
+    a = ExtractionResult(
+        entities=[
+            Entity(name="甲", type="ORG", aliases=["甲甲"], confidence=0.4,
+                   attributes={"k": "a"}),
+            Entity(name="乙", type="PER", confidence=0.6),
+        ],
+        relations=[Relation(head="甲", predicate="投", tail="乙", confidence=0.4)],
+    )
+    b = ExtractionResult(
+        entities=[
+            Entity(name="甲", type="ORG", aliases=["甲总"], confidence=0.9,
+                   attributes={"k": "b", "x": 1}),
+        ],
+        relations=[Relation(
+            head="甲", predicate="投", tail="乙",
+            evidence_span=Span(start=0, end=4, text="甲投乙。"), confidence=0.9)],
+    )
+    return a, b
+
+
+def test_switch_off_merge_matches_pre_change_full_field_golden():
+    """验收 7：开关关闭时归并结果要对 262319b 的逐字段快照（全字段，不只 schema）。"""
+    import json
+    from pathlib import Path
+
+    golden = json.loads(
+        (Path(__file__).parent / "golden" / "switch_off_naive_merge_262319b.json")
+        .read_text(encoding="utf-8"))
+    a, b = _merge_golden_inputs()
+    merged = naive_merge([a, b], merge_relation_duplicates=False)
+    assert merged.model_dump() == golden["legacy_merged"]
+
+    # 开关打开（默认改进版）才把后见证据/更高置信度并进重复三元组
+    improved = naive_merge([a, b])
+    relation = improved.relations[0]
+    assert relation.evidence_span is not None
+    assert relation.confidence == 0.9

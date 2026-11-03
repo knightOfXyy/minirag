@@ -74,7 +74,16 @@ ReviewerFn = Callable[[str, ExtractionResult], Awaitable[ExtractionReview]]
 # 一个零成本的"规则审校员"：不调模型，只做能 100% 确定的客观检查。
 # 真实系统里它是 LLM 审校 Agent 的第一道廉价闸门；这关不过就不必浪费模型。
 # ---------------------------------------------------------------------------
-def rule_review(text: str, result: ExtractionResult) -> ExtractionReview:
+def rule_review(
+    text: str,
+    result: ExtractionResult,
+    backfill: dict | None = None,
+) -> ExtractionReview:
+    """规则审校：只做客观可判的事（span/端点/重复/证据/回填命中）。
+
+    backfill 是瘦身回填的确定性信号（``BackfillReport.to_dict()``）：模型
+    不再自报 confidence 时，"有没有正文出处"就是比 0.0/1.0 更可信的质量依据。
+    """
     issues: list[str] = []
 
     # ① span 客观核对（复用 L04 的质量探针）
@@ -99,11 +108,33 @@ def rule_review(text: str, result: ExtractionResult) -> ExtractionReview:
     if len(names) != len(result.entities):
         issues.append("实体列表存在同名重复项，未去重")
 
-    # ④ 没有任何证据 span 的高置信关系（臆测风险）
+    # ④ 没有任何证据 span 的关系（臆测风险）
+    # 置信度未知（None，slim 模式常态）必须与"高置信"同等拦截——旧写法
+    # `confidence >= 0.8` 在 None 上恒为 False，等于对瘦身输出永不触发。
+    # 只有模型明确给了低置信（<0.8）的关系才交给人工按低置信处理，不列为硬伤。
     for r in result.relations:
-        if r.evidence_span is None and r.confidence >= 0.8:
+        if r.evidence_span is not None:
+            continue
+        if r.confidence is None:
+            issues.append(
+                f"关系 {r.head}-[{r.predicate}]->{r.tail} 置信度未知且无原文证据")
+        elif r.confidence >= 0.8:
             issues.append(
                 f"关系 {r.head}-[{r.predicate}]->{r.tail} 置信度高却无原文证据")
+
+    # ⑤ 确定性回填命中率（仅瘦身回填开关打开时有值）
+    if backfill:
+        total = int(backfill.get("entities_total") or 0)
+        grounded = int(backfill.get("entities_grounded") or 0)
+        if total and grounded < total:
+            issues.append(
+                f"确定性回填命中 {grounded}/{total} 个实体："
+                f"部分实体在正文找不到出处（疑似幻觉，需人工复核）")
+        ambiguous = backfill.get("ambiguous_mentions") or []
+        if ambiguous:
+            issues.append(
+                f"回填有 {len(ambiguous)} 处出现无法唯一归属（同名/别名冲突），"
+                f"需人工复核")
 
     verdict = ReviewVerdict.PASS if not issues else ReviewVerdict.NEEDS_FIX
     return ExtractionReview(verdict=verdict, issues=issues,
@@ -116,6 +147,7 @@ async def run_extraction_team(
     extractor: ExtractorFn,
     reviewer: ReviewerFn | None = None,
     max_iters: int = 3,
+    backfill_sink: dict | None = None,
 ) -> ReviewedExtraction:
     """抽取-审校-返工质量闭环。
 
@@ -124,9 +156,12 @@ async def run_extraction_team(
     reviewer:  async (text, result) -> ExtractionReview；默认用规则审校员。
     max_iters: 最多抽取轮数（含首轮），超出仍不通过则按最后结果返回并标记
                accepted=False，交给上层（通常转人工）。
+    backfill_sink: 可选字典。provider 闭包把最后一次抽取的回填信号写进
+               ``backfill_sink["backfill"]``，规则审校要消费它（命中率/歧义），
+               返回的 ReviewedExtraction 也带上，避免主链丢信号。
     """
     async def _default_reviewer(t: str, r: ExtractionResult) -> ExtractionReview:
-        return rule_review(t, r)
+        return rule_review(t, r, backfill=(backfill_sink or {}).get("backfill"))
 
     reviewer = reviewer or _default_reviewer
     history: list[ExtractionReview] = []
@@ -143,7 +178,8 @@ async def run_extraction_team(
         if last_review.verdict == ReviewVerdict.PASS:
             return ReviewedExtraction(
                 result=last_result, accepted=True,
-                review=last_review, history=history)
+                review=last_review, history=history,
+                backfill=(backfill_sink or {}).get("backfill"))
 
         # 把问题清单拼成下一轮反馈
         feedback = "请修正以下问题后重新输出完整结果：\n" + "\n".join(
@@ -152,7 +188,8 @@ async def run_extraction_team(
     # 预算耗尽仍未通过
     return ReviewedExtraction(
         result=last_result, accepted=False,
-        review=last_review, history=history)
+        review=last_review, history=history,
+        backfill=(backfill_sink or {}).get("backfill"))
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +210,7 @@ async def run_chunked_team(
     result_cache=None,
     document_id: str | None = None,
     metrics_sink: list | None = None,
+    backfill_sink: dict | None = None,
 ) -> ReviewedExtraction:
     """超过分块阈值且有真 Extractor 可取时，走「分块 map → 全局坐标归并 →
     单轮规则审校」；否则逐字节保持 :func:`run_extraction_team` 旧行为。
@@ -228,7 +266,9 @@ async def run_chunked_team(
                         domain_code, usage_sink=usage, metrics_sink=sink,
                         **extra_kwargs)
         reviewed = await run_extraction_team(
-            text, extractor=short_extractor, max_iters=max_iters)
+            text, extractor=short_extractor, max_iters=max_iters,
+            # 短文档同样要让规则审校消费回填信号（命中率/歧义）
+            backfill_sink=short_backfill)
         if sink:
             dm = DocumentMetrics(
                 document_id=document_id or "chunked", n_chunks=1)
@@ -236,6 +276,8 @@ async def run_chunked_team(
             reviewed.document_metrics = dm
         if reviewed.backfill is None:
             reviewed.backfill = short_backfill.get("backfill")
+        if backfill_sink is not None:
+            backfill_sink["backfill"] = reviewed.backfill
         return reviewed
 
     real, _domain = await provider.get_extractor(domain_code)
@@ -253,7 +295,11 @@ async def run_chunked_team(
     if usage is not None:
         usage.add(output.usage)
 
-    review = rule_review(text, output.result)
+    # 回填信号既要进审校（命中率/歧义是 slim 模式唯一的质量依据），
+    # 也要继续往上层透传（看板/API 响应）。
+    if backfill_sink is not None:
+        backfill_sink["backfill"] = output.backfill
+    review = rule_review(text, output.result, backfill=output.backfill)
     review.iterations = 1
     return ReviewedExtraction(
         result=output.result,

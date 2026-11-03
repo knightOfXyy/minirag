@@ -90,12 +90,20 @@ def remap_spans(result: ExtractionResult, chunk: Chunk) -> ExtractionResult:
     return ExtractionResult(entities=entities, relations=relations)
 
 
-def naive_merge(partials: list[ExtractionResult]) -> ExtractionResult:
+def naive_merge(
+    partials: list[ExtractionResult],
+    *,
+    merge_relation_duplicates: bool = True,
+) -> ExtractionResult:
     """朴素归并（L09 会升级为向量+LLM 共指消解）。
 
     规则：实体按 (type, 标准名) 聚合；别名并集；mention 全部保留。
     关系按三元组字符串去重，置信度取最大值。
     overlap 区域产生的重复 mention 会自然落在同一实体下，不会重复造实体。
+
+    ``merge_relation_duplicates=False`` 退回 262319b 的旧语义：同一三元组
+    首见赢家通吃（后见的证据/置信度都不并入）。该开关由抽取器的
+    ``local_backfill`` 决定——关开关必须逐字段等于改造前，打开才用改进版。
     """
     bucket: dict[tuple[str, str], Entity] = {}
     for part in partials:
@@ -120,10 +128,15 @@ def naive_merge(partials: list[ExtractionResult]) -> ExtractionResult:
             key = (r.head, r.predicate, r.tail)
             existing = rel_index.get(key)
             if existing is not None:
+                if not merge_relation_duplicates:
+                    # 关开关：旧语义，首见赢家，后见不并入
+                    continue
                 # 同一三元组在别的块可能才拿到证据/更高置信度：首见不能赢家通吃。
                 if existing.evidence_span is None and r.evidence_span is not None:
                     existing.evidence_span = r.evidence_span
-                existing.confidence = max(existing.confidence, r.confidence)
+                known = [c for c in (existing.confidence, r.confidence)
+                         if c is not None]
+                existing.confidence = max(known) if known else None
                 continue
             rel_index[key] = r
             relations.append(r)
@@ -360,12 +373,18 @@ class ChunkedExtractionPipeline:
         partials: list[ExtractionResult] = []
         failed: list[str] = []
         backfill_reports: list[BackfillReport] = []
+        chunk_by_id = {c.id: c for c in chunks}
         for res, u, cid, _m, raw_backfill in settled:
             usage.add(u)
             # 分块回填信号在这里汇总（03）：先收集，等归并后再统一聚合，
-            # 失败块没有信号（None）直接跳过。
+            # 失败块没有信号（None）直接跳过。块内偏移在此一次性平移到
+            # 文档全局坐标，并带上 chunk_id，看板才能定位到具体块。
             if raw_backfill is not None:
-                backfill_reports.append(BackfillReport.from_dict(raw_backfill))
+                ch = chunk_by_id.get(cid)
+                backfill_reports.append(BackfillReport.from_dict(
+                    raw_backfill,
+                    chunk_start=ch.start if ch is not None else 0,
+                    chunk_id=cid))
             if res is None:
                 failed.append(cid)
                 continue
@@ -380,7 +399,12 @@ class ChunkedExtractionPipeline:
             err.document_metrics = metrics  # type: ignore[attr-defined]
             raise err
 
-        merged = naive_merge(partials)
+        # 归并口径跟抽取器开关走：关开关时保持 262319b 的旧语义
+        # （同一三元组首见赢家），打开才合并后见证据/更高置信度（03 r2）。
+        merged = naive_merge(
+            partials,
+            merge_relation_duplicates=getattr(
+                self.extractor, "local_backfill", True))
         # 分块回填信号必须汇总后继续往上层传，不能在 pipeline 这里丢掉。
         # 关开关时所有块都是 None -> 保持 None（与改造前一致）。
         backfill = (merge_backfill_reports(backfill_reports).to_dict()

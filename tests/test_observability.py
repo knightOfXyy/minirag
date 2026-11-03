@@ -166,3 +166,35 @@ async def test_slim_output_without_confidence_is_not_counted_as_low_confidence()
     assert rec.low_confidence_entities == 0
     # span 检查没有 mention -> ratio=1；未知置信度不扣分；非空得分
     assert rec.quality_score == pytest.approx(1.0, abs=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_slim_output_with_ungrounded_entity_lowers_quality_score():
+    """瘦身输出没有 mention 时，质量分要用本地回填命中率，不能空转给满分。"""
+    collector = MetricsCollector()
+    collector.start("Extractor")
+    mw = ExtractionMetricsMiddleware(collector)
+
+    text = "华为在深圳。"
+    final = Msg(name="Extractor", role="assistant", content=[])
+    final.structured_output = {
+        "entities": [
+            {"name": "华为", "type": "ORG", "aliases": [], "attributes": {}},
+            # 正文里根本不存在的实体：回填命中率 1/2 -> 必须降分
+            {"name": "幽灵公司", "type": "ORG", "aliases": [], "attributes": {}},
+        ],
+        "relations": [],
+    }
+
+    async def fake_next():
+        yield final
+
+    agent = _FakeAgent(source_text=text)
+    [ev async for ev in mw.on_reply(agent, {}, fake_next)]
+    rec = collector.current()
+    assert rec.entities_total == 2
+    assert rec.entities_grounded == 1
+    assert rec.block_confidence == pytest.approx(0.5)
+    # 0.5*0.5(命中率) + 0.3*1(未知置信中性) + 0.2*1(非空) = 0.75
+    assert rec.quality_score == pytest.approx(0.75, abs=1e-6)
+    assert rec.quality_score < 1.0

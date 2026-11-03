@@ -48,7 +48,15 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     -- NULL=该请求形态下不可测（生产默认非流式）；不要写 0 冒充"测到了"
     prefill_ms          INTEGER,                     -- 首 token（prefill）总耗时
     decode_ms           INTEGER,                     -- 解码总耗时
-    chunk_metrics       JSONB                         -- 每块一条明细，供下钻
+    chunk_metrics       JSONB,                        -- 每块一条明细，供下钻
+
+    -- 工单 03：瘦身回填的确定性接地信号（slim 输出不自报 confidence 时的
+    -- 替代质量依据）。NULL=开关关闭/无信号——不是 0，不能当"全错"聚合。
+    block_confidence        REAL,                     -- 实体在正文里有出处的占比
+    entities_grounded       INTEGER,                  -- 命中的实体数
+    entities_total          INTEGER,                  -- 参与回填的实体数
+    relation_evidence_ratio REAL,                     -- 关系拿到同句证据的占比
+    ambiguous_mentions      INTEGER NOT NULL DEFAULT 0  -- 无法唯一归属的出现数
 );
 CREATE INDEX IF NOT EXISTS idx_runs_doc ON pipeline_runs(document_id);
 CREATE INDEX IF NOT EXISTS idx_runs_created ON pipeline_runs(created_at);
@@ -68,6 +76,11 @@ ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS chunk_latency_ms INTEGER;
 ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS prefill_ms INTEGER;
 ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS decode_ms INTEGER;
 ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS chunk_metrics JSONB;
+ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS block_confidence REAL;
+ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS entities_grounded INTEGER;
+ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS entities_total INTEGER;
+ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS relation_evidence_ratio REAL;
+ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS ambiguous_mentions INTEGER NOT NULL DEFAULT 0;
 -- 旧库的 prefill_ms/decode_ms 是 NOT NULL DEFAULT 0；改成可空以区分"不可测"。
 ALTER TABLE pipeline_runs ALTER COLUMN prefill_ms DROP NOT NULL;
 ALTER TABLE pipeline_runs ALTER COLUMN decode_ms DROP NOT NULL;
