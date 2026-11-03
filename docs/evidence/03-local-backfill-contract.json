@@ -257,6 +257,13 @@
       "[\"LOC\", \"杭州\"]": 1
     },
     "unmatched_aliases": [],
+    "seen_literals": [
+      "BABA",
+      "杭州",
+      "阿里",
+      "阿里巴巴",
+      "马云"
+    ],
     "ambiguous_mentions": [],
     "relations_without_evidence": [],
     "relation_evidence_candidates": {
@@ -266,6 +273,8 @@
           "tail_start": 15,
           "sent_start": 0,
           "sent_end": 26,
+          "evidence_start": 0,
+          "evidence_end": 26,
           "distance": 6,
           "selected": true
         },
@@ -274,6 +283,8 @@
           "tail_start": 7,
           "sent_start": 0,
           "sent_end": 26,
+          "evidence_start": 0,
+          "evidence_end": 26,
           "distance": 14,
           "selected": false
         },
@@ -282,6 +293,8 @@
           "tail_start": 0,
           "sent_start": 0,
           "sent_end": 26,
+          "evidence_start": 0,
+          "evidence_end": 26,
           "distance": 21,
           "selected": false
         }
@@ -292,6 +305,8 @@
           "tail_start": 34,
           "sent_start": 26,
           "sent_end": 37,
+          "evidence_start": 26,
+          "evidence_end": 37,
           "distance": 8,
           "selected": true
         }
@@ -422,6 +437,13 @@
         "[\"LOC\", \"杭州\"]": 1
       },
       "unmatched_aliases": [],
+      "seen_literals": [
+        "BABA",
+        "杭州",
+        "阿里",
+        "阿里巴巴",
+        "马云"
+      ],
       "ambiguous_mentions": [],
       "relations_without_evidence": [],
       "relation_evidence_candidates": {
@@ -431,6 +453,8 @@
             "tail_start": 15,
             "sent_start": 0,
             "sent_end": 26,
+            "evidence_start": 0,
+            "evidence_end": 26,
             "distance": 6,
             "selected": true
           },
@@ -439,6 +463,8 @@
             "tail_start": 7,
             "sent_start": 0,
             "sent_end": 26,
+            "evidence_start": 0,
+            "evidence_end": 26,
             "distance": 14,
             "selected": false
           },
@@ -447,6 +473,8 @@
             "tail_start": 0,
             "sent_start": 0,
             "sent_end": 26,
+            "evidence_start": 0,
+            "evidence_end": 26,
             "distance": 21,
             "selected": false
           }
@@ -457,6 +485,8 @@
             "tail_start": 34,
             "sent_start": 26,
             "sent_end": 37,
+            "evidence_start": 26,
+            "evidence_end": 37,
             "distance": 8,
             "selected": true
           }

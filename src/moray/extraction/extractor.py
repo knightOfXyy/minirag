@@ -51,7 +51,10 @@ from .chunk_metrics import (
     is_length_finish_reason,
 )
 from .document import Document, ExtractionOutput, Usage
-from .local_backfill import BackfillReport, backfill_provenance
+from .local_backfill import (
+    BackfillReport,
+    cached_backfill_provenance,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -434,7 +437,10 @@ class Extractor:
             #    text；分块流水线随后用既有的 remap_spans 平移成全局偏移。
             backfill: BackfillReport | None = None
             if self.local_backfill:
-                core, backfill = backfill_provenance(core, source_text)
+                # 与质量中间件共用同一份回填产物（agent 上按结果缓存），
+                # 块正文只扫描一次（r10 N5）。
+                core, backfill = cached_backfill_provenance(
+                    agent, core, source_text)
 
             # 全部通过
             return ExtractionOutput(

@@ -39,9 +39,11 @@ from .document import CacheSavings, Document, ExtractionOutput, Usage
 from .extractor import ExtractionError, Extractor
 from .local_backfill import (
     BackfillReport,
+    entity_identity_key,
     max_confidence,
     merge_backfill_reports,
     merge_entity_metadata,
+    reconcile_span_ambiguity,
 )
 
 logger = logging.getLogger(__name__)
@@ -95,6 +97,7 @@ def naive_merge(
     partials: list[ExtractionResult], *,
     merge_relation_duplicates: bool = False,
     fill_description: bool = False,
+    strip_entity_name: bool = False,
 ) -> ExtractionResult:
     """朴素归并（L09 会升级为向量+LLM 共指消解）。
 
@@ -111,11 +114,17 @@ def naive_merge(
     合并是两个独立行为（r4 N6）：此前它隐式跟随
     ``merge_relation_duplicates``，改关系口径会莫名改变实体描述。默认
     False，保持 262319b 旧输出；分块流水线在瘦身开关打开时显式传 True。
+
+    ``strip_entity_name``：实体身份键是否忽略标准名首尾空白（r10 N9）。
+    回填在块内按 ``(type, name.strip())`` 合并实体；归并层若仍用精确键，
+    会把「腾讯 」与「腾讯」重新拆成两个实体（slim 模式又跳过了同名重复
+    检查，静默产出重复实体）。默认 False 保持 262319b 精确键，供公开 helper
+    的直接调用方与关闭态使用。
     """
     bucket: dict[tuple[str, str], Entity] = {}
     for part in partials:
         for e in part.entities:
-            key = (e.type, e.name)
+            key = entity_identity_key(e, strip_name=strip_entity_name)
             if key not in bucket:
                 bucket[key] = Entity(
                     name=e.name, type=e.type,
@@ -144,8 +153,11 @@ def naive_merge(
                     existing.confidence = max_confidence(
                         existing.confidence, r.confidence)
                 continue
-            rel_index[key] = r
-            relations.append(r)
+            # 存副本：后面可能补证据/抬置信度，不能改写入参 partial 里的
+            # Relation 对象（公开 helper，调用方可能复用 partials；r10 N10）。
+            kept = r.model_copy(deep=True)
+            rel_index[key] = kept
+            relations.append(kept)
 
     return ExtractionResult(entities=list(bucket.values()), relations=relations)
 
@@ -431,7 +443,8 @@ class ChunkedExtractionPipeline:
         merged = naive_merge(
             partials,
             merge_relation_duplicates=slim,
-            fill_description=slim)
+            fill_description=slim,
+            strip_entity_name=slim)
         # 分块回填信号必须汇总后继续往上层传，不能在 pipeline 这里丢掉。
         # 关开关时所有块都是 None -> 保持 None（与改造前一致）。
         # 块内偏移的平移由 merge_backfill_reports 按各块 chunk_start 统一完成。
@@ -444,9 +457,15 @@ class ChunkedExtractionPipeline:
             document.source_text
             if document.source_text is not None else document.text
         )
-        backfill = (merge_backfill_reports(
-            backfill_reports, document_text=document_text).to_dict()
-            if backfill_reports else None)
+        backfill: dict | None = None
+        if backfill_reports:
+            merged_report = merge_backfill_reports(
+                backfill_reports, document_text=document_text)
+            # 重叠块可能让同一处全局 span 同时归属两个逻辑实体；归并后
+            # 统一对账，冲突处撤归属并留歧义信号（r10 S2）。
+            merged, merged_report = reconcile_span_ambiguity(
+                merged, merged_report)
+            backfill = merged_report.to_dict()
         return ExtractionOutput(
             document_id=document.id,
             domain_code=self.extractor.domain.code,

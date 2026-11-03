@@ -15,9 +15,14 @@
 不再作为验收 9 的数字。命令与完整明细见 `docs/evidence/03-r3-fix-evidence.md`、
 `docs/evidence/03-r3-stress-ab.json`（`chunk_summary` / `chunk_details`）。
 
-## 验收 9：单块平均输出 token ≥30% 降、截断块数不增加 —— r2 时未闭环
+## 历史记录（r2，已被上面的 r3 结果取代，勿作为当前结论）
 
-阻塞原因（如实标注，不用代理指标冒充）：
+> r10 N7 标注：本节是 **r2 当时**的状态快照。`chunk_metrics` 早已随工单 01
+> 合入本分支（`src/moray/extraction/chunk_metrics.py`），验收 9 已在 r3 用
+> `03-r3-stress-ab.json` 闭环；下面的「未闭环 / 后续动作」只保留作历史，
+> 不是当前结论。
+
+r2 当时的阻塞原因（如实标注，当时不用代理指标冒充）：
 1. 口径：工单 01 的 chunk_metrics（单块 output token / 截断块计数）在本分支
    **不存在**（01 只在 dev 与 tmp-…-01 分支）；本分支也没有合并它。
 2. 环境：本 worktree 没有 ARK_API_KEY/.env，本轮无法复跑真实 LLM。
@@ -39,10 +44,9 @@
 数据源：docs/evidence/03-ab-llm.json（语料=data/gold 6 篇基线集）
 复跑：PYTHONPATH=src python tools/backfill_ab_eval.py --mode llm
 
-## 闭环所需的后续动作（不写未跑过的东西）
+## 历史记录（r2）当时列出的后续动作 —— r3 已全部完成
 
-1. 合入工单 01 的 chunk_metrics（每块 output token + 截断计数）到本分支/dev。
-2. 配置可用模型密钥后，分别对 full/slim 跑同一分块语料，输出：
-   - 单块平均 output token 与降幅；
-   - 命中 max_tokens / finish_reason=length 的块数（或 01 定义的截断口径）。
-3. 在证据文件里写命令与结果，替换本节的「未闭环」。
+1. ~~合入工单 01 的 chunk_metrics~~ → 已合入（`chunk_metrics.py`）。
+2. ~~配置密钥后对 full/slim 跑同一分块语料~~ → r3 已跑，数字见文首
+   （2365.98 → 582.13 tokens/块，截断 6 → 0）。
+3. ~~在证据文件里替换「未闭环」~~ → 已替换为 r3 的 delta 口径。

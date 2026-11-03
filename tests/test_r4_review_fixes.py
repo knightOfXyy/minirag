@@ -191,7 +191,8 @@ def test_merge_backfill_reports_keeps_alias_absent_from_whole_document():
         [BackfillReport.from_dict(r0.to_dict(), chunk_start=0, chunk_id="d#c0")],
         document_text="腾讯发布财报。",
     )
-    assert merged.unmatched_aliases == [{"entity": "腾讯", "literal": "鹅厂"}]
+    assert merged.unmatched_aliases == [
+        {"type": "ORG", "entity": "腾讯", "literal": "鹅厂"}]
 
 
 # ---------------------------------------------------------------------------
