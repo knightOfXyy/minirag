@@ -22,6 +22,11 @@
   ``real_doc_coverage_exercises_budget`` fail（验收 #4）。overlap 的最小值只在
   多块文档上统计，单块文档的 0 对不再误判，但整批没有多块文档时仍 fail closed。
 
+  评审 r8 再补一处：真实文档批次逐块容错，失败块不会产生 finish_reason，
+  所以 ``truncated=0`` 与 real-doc 覆盖仍可能同时成立。压力语料的
+  ``failed_chunks_max`` 与真实文档的 ``failed_chunks_total`` 合起来进
+  ``failed_chunks_zero``，候选档失败块必须为 0（验收 #4/#5）。
+
   全量口径（含 02 金标刻意未标注句面上的 FP）与覆盖子集口径并列列报；
   两者都参与放行（评审 r2 F2 修复：此前全量 F1 只列报，导致全量掉 7pt
   仍可返回 passed）。评审 r5 S1 进一步把全量关系 F1 拆成 raw/normalized
@@ -175,7 +180,9 @@ _REQUIRED_GATE_KEYS = (
     "raw_relation_f1_mean", "raw_relation_f1_worst",
 )
 # 评审 r2 F11：只有候选档读 ``truncated_chunks``，基线不再被强制要求。
-_REQUIRED_CANDIDATE_KEYS = ("truncated_chunks",)
+# 评审 r8 S1：失败块同样只要求候选档；压力语料取 failed_chunks_max、
+# 真实文档取 failed_chunks_total，由 A/B 工具合成一个整数。
+_REQUIRED_CANDIDATE_KEYS = ("truncated_chunks", "failed_chunks")
 
 # 调用方提供的 explicit worst delta 与 rounds 的对应关系（评审 r4 N3）。
 _WORST_DELTA_ROUND_KEY = {
@@ -231,6 +238,9 @@ def evaluate_budget_gate(
     * 关系「金标覆盖子集」recall 的 mean/worst 不下降；
     * 关系「金标覆盖子集」precision 的 mean/worst 跌幅 ≤0.5pt；
     * 候选档截断块为 0；
+    * 候选档失败块为 0（压力语料 ``failed_chunks_max`` + 真实文档
+      ``failed_chunks_total``；评审 r8 S1，失败块不产生 finish_reason，
+      截断与 real-doc 覆盖都可能仍通过）；
     * real-doc 批次非空且最大文档 units 严格超过候选预算（验收 #4；评审
       r7 S2，空批次/短桩直接 fail）；
     * overlap 配置不变（冻结基线，不接受调用方自证）且**多块文档**中实际
@@ -387,6 +397,10 @@ def evaluate_budget_gate(
         "relation_covered_precision_worst_within_0_5pt": (
             covered_precision_worst_delta >= -MAX_RELATION_PRECISION_DROP_PT),
         "truncated_chunks_zero": int(candidate["truncated_chunks"]) == 0,
+        # 评审 r8 S1：失败块不产生 finish_reason（truncated 仍为 0），也不能
+        # 由原文 units 满足 real-doc 覆盖；必须单独为 0，否则验收 #4/#5 的
+        # 证据可在整块失败时空转。
+        "failed_chunks_zero": int(candidate["failed_chunks"]) == 0,
         # 评审 r7 S2：空 real-doc 批次或没有超过候选预算的长文都不能放行。
         "real_doc_coverage_exercises_budget": (
             real_doc_coverage_exercises_budget),
@@ -418,6 +432,8 @@ def evaluate_budget_gate(
         "real_doc_max_document_units": real_doc_max_document_units,
         "real_doc_coverage_exercises_budget": (
             real_doc_coverage_exercises_budget),
+        # 评审 r8 S1：失败块原始量落盘，便于复审复算合并值。
+        "failed_chunks": candidate.get("failed_chunks"),
         "relation_covered_recall_mean_delta_pt": covered_recall_mean_delta,
         "relation_covered_recall_worst_delta_pt": covered_recall_worst_delta,
         "relation_covered_precision_mean_delta_pt": covered_precision_mean_delta,
@@ -463,6 +479,10 @@ def evaluate_budget_gate(
             "overlap_observed": (
                 "只统计有多块文档的实际重叠对；单块文档不参与最小值，"
                 "但没有任何多块文档时 fail closed（评审 r7 N3）"),
+            "failed_chunks": (
+                "候选档压力语料 failed_chunks_max 与真实文档 "
+                "failed_chunks_total 之和必须为 0；失败块不产生 "
+                "finish_reason，truncated=0 不能代替它（评审 r8 S1）"),
         },
         "overlap_unchanged": overlap_unchanged,
         "overlap_observed": overlap_observed,

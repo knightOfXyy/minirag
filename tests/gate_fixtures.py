@@ -25,6 +25,8 @@ def gate_metrics(**overrides):
         "real_doc_max_document_units": 5360,
         "chunk_calls": 14,
         "truncated_chunks": 3,
+        # 评审 r8 S1：候选档失败块必须为 0；基线值不影响 checks。
+        "failed_chunks": 0,
         "context_window": 1048576,
         "max_context_input_tokens": 2614,
         "max_context_output_tokens": 5482,
@@ -156,6 +158,7 @@ def evidence_payload(*, candidate_overrides=None, overlap=None) -> dict:
                 "cases": [{
                     "n_chunks": possible + 1,
                     "overlap_pairs": actual,
+                    "failed_chunks": 0,
                     "predicted_entities": [
                         {"type": "EVENT", "name": "案件编号 A2024-942"},
                         {"type": "PER", "name": "张三"},
@@ -175,6 +178,7 @@ def evidence_payload(*, candidate_overrides=None, overlap=None) -> dict:
             "overlap_pairs_min": metrics["overlap_pairs_min"],
             "chunk_calls_total_mean": metrics["chunk_calls"],
             "truncated_chunks_max": metrics["truncated_chunks"],
+            "failed_chunks_max": metrics["failed_chunks"],
             "max_chunk_input_tokens": metrics[
                 "max_context_input_tokens"],
             "max_chunk_output_tokens": metrics[
@@ -218,6 +222,7 @@ def evidence_payload(*, candidate_overrides=None, overlap=None) -> dict:
         "real_docs": {
             str(b): {
                 "truncated_chunks_total": 0,
+                "failed_chunks_total": 0,
                 "max_chunk_input_tokens": 100,
                 "max_chunk_output_tokens": 20,
                 # 评审 r7 S2：真实文档批次必须非空且包含超过候选预算的长文；
@@ -266,6 +271,8 @@ GATE_FAILURE_CASES = [
     ({"max_context_input_tokens": 0, "max_context_output_tokens": 0},
      "context_within_window"),
     ({"truncated_chunks": 1}, "truncated_chunks_zero"),
+    # 评审 r8 S1：失败块与截断块相互独立，必须单独为 0。
+    ({"failed_chunks": 1}, "failed_chunks_zero"),
     # 评审 r7 S2：空 real-doc 批次不能放过验收 #4。
     ({"real_doc_documents": 0, "real_doc_max_document_units": 0},
      "real_doc_coverage_exercises_budget"),

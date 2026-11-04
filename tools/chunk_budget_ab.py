@@ -167,6 +167,39 @@ def _delta_summary_pt(values: list[float]) -> dict:
     }
 
 
+def _possible_pairs(row: dict) -> int:
+    """一篇文档“可重叠的相邻对数”（评审 r8 N3：只此一份实现）。
+
+    旧证据没有 ``overlap_pairs_possible`` 时按 ``n_chunks-1`` 回退；显式
+    写出的 0 是权威值（例如单块文档），不能被回退覆盖。
+    """
+    value = row.get("overlap_pairs_possible")
+    if value is None:
+        value = max(0, int(row.get("n_chunks", 1) or 1) - 1)
+    return int(value or 0)
+
+
+def _overlap_aggregate(rounds: list[dict]) -> dict:
+    """live 聚合：每轮多块文档数的最小值 + 多块文档的最小实际重叠对数。
+
+    评审 r8 N3：``_run_corpus`` 此前没有 ``n_chunks-1`` 回退，同一份输入在
+    live 与 ``--from-json`` 两条路径可能给出不同结果；这里与
+    ``_enrich_result_derived`` 共用 ``_possible_pairs``。
+    """
+    return {
+        "overlap_documents_with_multiple_chunks": min(
+            (sum(1 for row in rnd.get("cases", [])
+                 if _possible_pairs(row) > 0)
+             for rnd in rounds),
+            default=0),
+        "overlap_pairs_min": min(
+            (int(row.get("overlap_pairs", 0) or 0)
+             for rnd in rounds for row in rnd.get("cases", [])
+             if _possible_pairs(row) > 0),
+            default=0),
+    }
+
+
 def _overlap_stats(result: dict) -> dict:
     """一档预算下相邻块实际重叠对数 / 可重叠对数（评审 r5 S2）。
 
@@ -174,13 +207,16 @@ def _overlap_stats(result: dict) -> dict:
     overlap units 时 ``overlap_seed`` 为空，该对不会重叠。因此不能把
     “最小值 >0”写成“逐对重叠”。这里取**实际重叠比例最小**的那篇，
     同时给出分母，报告中按 ``实际对数/可重叠对数`` 列报。
+
+    评审 r8 N2：``case_runs_with_multiple_chunks`` 是 **case-run** 计数
+    （5 轮 × 3 篇 = 15），与 ``budgets.<档>.overlap_documents_with_multiple_
+    chunks``（每轮篇数的最小值 = 3）不是同一基数，字段名必须区分。
     """
     rows = [row for rnd in result.get("rounds", [])
             for row in rnd.get("cases", [])]
     pairs = []
     for row in rows:
-        possible = int(row.get("overlap_pairs_possible")
-                       or max(0, int(row.get("n_chunks", 1) or 1) - 1))
+        possible = _possible_pairs(row)
         if possible <= 0:
             continue
         actual = int(row.get("overlap_pairs", 0) or 0)
@@ -192,14 +228,14 @@ def _overlap_stats(result: dict) -> dict:
             # 分母；字段名必须说清楚，避免与全局 min_overlap_pairs 混淆。
             "min_ratio_document_possible_pairs": 0,
             "min_pair_ratio": None,
-            "documents_with_multiple_chunks": 0,
+            "case_runs_with_multiple_chunks": 0,
         }
     actual, possible = min(pairs, key=lambda item: item[0] / item[1])
     return {
         "min_overlap_pairs": actual,
         "min_ratio_document_possible_pairs": possible,
         "min_pair_ratio": round(actual / possible, 4),
-        "documents_with_multiple_chunks": len(pairs),
+        "case_runs_with_multiple_chunks": len(pairs),
     }
 
 
@@ -283,19 +319,21 @@ def _enrich_result_derived(result: dict, *, cases=None) -> None:
     result.pop("overlap_pairs_possible_min", None)
     result.pop("overlap_pairs_ratio_min", None)
     rows = [row for rnd in rounds for row in rnd.get("cases", [])]
+    # 评审 r8 S1：旧证据没有顶层 failed_chunks_max 时，从逐篇行重建，
+    # 让 --from-json 不会把失败块静默当成 0。
+    if "failed_chunks_max" not in result:
+        result["failed_chunks_max"] = max(
+            (sum(int(row.get("failed_chunks", 0) or 0)
+                 for row in rnd.get("cases", []))
+             for rnd in rounds),
+            default=0)
     # 评审 r7 N3：单块文档没有可重叠的相邻对，不能参与 overlap 最小值，
-    # 否则一篇单块文档就会让整档 overlap_observed 误判为 0。旧证据没有
-    # ``overlap_pairs_possible`` 时按 n_chunks-1 回退。
-    def _possible(row: dict) -> int:
-        value = row.get("overlap_pairs_possible")
-        if value is None:
-            value = max(0, int(row.get("n_chunks", 1) or 1) - 1)
-        return int(value or 0)
-
-    multi_chunk_rows = [row for row in rows if _possible(row) > 0]
+    # 否则一篇单块文档就会让整档 overlap_observed 误判为 0。评审 r8 N3：
+    # 回退逻辑收敛到 ``_possible_pairs``，与 live 聚合共用一份。
+    multi_chunk_rows = [row for row in rows if _possible_pairs(row) > 0]
     # 按“每轮有多少篇多块文档”取最小值；同一篇文档被 repeat 多次不重复计数。
     per_round_multi = [
-        sum(1 for row in rnd.get("cases", []) if _possible(row) > 0)
+        sum(1 for row in rnd.get("cases", []) if _possible_pairs(row) > 0)
         for rnd in rounds
     ]
     result["overlap_documents_with_multiple_chunks"] = min(
@@ -614,16 +652,9 @@ async def _run_corpus(
             (row["max_chunk_chars"] for row in all_rows), default=0),
         # 评审 r7 N3：单块文档没有可重叠的相邻对，不参与最小值；没有
         # 任何多块文档时 min 为 0，由 gate 的 overlap_observed fail closed。
-        # 计数取每轮多块文档数的最小值，repeat 不重复放大小样本。
-        "overlap_documents_with_multiple_chunks": min(
-            (sum(1 for row in rnd["cases"]
-                 if int(row.get("overlap_pairs_possible", 0) or 0) > 0)
-             for rnd in rounds),
-            default=0),
-        "overlap_pairs_min": min(
-            (row["overlap_pairs"] for row in all_rows
-             if int(row.get("overlap_pairs_possible", 0) or 0) > 0),
-            default=0),
+        # 评审 r8 N3：计数与最小值由 ``_overlap_aggregate`` 统一计算，
+        # 与 ``--from-json`` 共用 ``_possible_pairs`` 的 n_chunks-1 回退。
+        **_overlap_aggregate(rounds),
     }
 
 
@@ -837,6 +868,10 @@ def gate_thresholds() -> dict:
         "relation_note": ("评审 r5 S1：raw_relation_f1_* 必填并进 checks，"
                           "不再只列报"),
         "truncated_chunks": "候选档必须为 0（压力语料 + 真实文档）",
+        "failed_chunks": (
+            "候选档压力语料 failed_chunks_max 与真实文档 failed_chunks_total "
+            "之和必须为 0；失败块不产生 finish_reason，不能靠 truncated=0 "
+            "或 real-doc 覆盖间接放行（评审 r8 S1，验收 #4/#5）"),
         "real_doc_coverage": (
             "real-doc 批次必须非空且最大文档 units 超过候选预算；空批次或"
             "只有短桩时 real_doc_coverage_exercises_budget fail（评审 r7 S2，"
@@ -898,6 +933,11 @@ def _gate_input(
         "truncated_chunks": (
             result["truncated_chunks_max"]
             + real["truncated_chunks_total"]),
+        # 评审 r8 S1：real-doc 批次逐块容错，失败块不会产生 finish_reason，
+        # 因此 truncated=0 仍成立；失败块必须单独进 gate，否则验收 #4/#5
+        # 的证据可整批空转。压力语料取逐轮最大，真实文档取本轮合计。
+        "failed_chunks": (
+            result["failed_chunks_max"] + real["failed_chunks_total"]),
         "entity_macro_f1_mean": result["entity_macro_f1_mean"],
         "entity_macro_f1_worst": result["entity_macro_f1_worst"],
         "raw_entity_macro_f1_mean": result["raw_entity_macro_f1_mean"],
@@ -977,6 +1017,10 @@ def _derive_comparison(
         candidate_rounds=_gate_rounds(candidate))
     gate["real_docs_truncated_chunks"] = cand_real["truncated_chunks_total"]
     gate["stress_truncated_chunks"] = candidate["truncated_chunks_max"]
+    # 评审 r8 S1：失败块与截断块分开落盘，便于复审核对 gate 的合并值来源。
+    gate["real_docs_failed_chunks"] = cand_real.get(
+        "failed_chunks_total", 0)
+    gate["stress_failed_chunks"] = candidate.get("failed_chunks_max", 0)
     gate["real_doc_coverage"] = _real_doc_coverage(
         cand_real, candidate_budget=budgets[-1])
 
@@ -1071,6 +1115,13 @@ def _recompute_from_payload(
             enrich_cases = None
     for budget in budgets:
         _enrich_result_derived(results[str(budget)], cases=enrich_cases)
+    # 评审 r8 S1：旧证据没有真实文档 failed_chunks_total 时，从逐篇行重建，
+    # 再由 _gate_input 与压力语料合并且严格取值（缺失直接报错，不静默按 0）。
+    for real in real_results.values():
+        if "failed_chunks_total" not in real:
+            real["failed_chunks_total"] = sum(
+                int(row.get("failed_chunks", 0) or 0)
+                for row in real.get("rows", []))
     baseline = results[str(budgets[0])]
     candidate = results[str(budgets[-1])]
     base_real = real_results[str(budgets[0])]
