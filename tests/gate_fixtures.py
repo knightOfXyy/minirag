@@ -25,7 +25,8 @@ def gate_metrics(**overrides):
         "real_doc_max_document_units": 5360,
         "chunk_calls": 14,
         "truncated_chunks": 3,
-        # 评审 r8 S1：候选档失败块必须为 0；基线值不影响 checks。
+        # 评审 r8 S1：候选档失败块必须为 0；评审 r9 S1：基线档同样必须为 0，
+        # 否则相对 F1 判据不可比。
         "failed_chunks": 0,
         "context_window": 1048576,
         "max_context_input_tokens": 2614,

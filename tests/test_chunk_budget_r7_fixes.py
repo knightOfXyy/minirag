@@ -116,7 +116,7 @@ def test_gate_overlap_fails_closed_when_no_multi_chunk_document():
 def test_enrichment_excludes_single_chunk_docs_from_overlap_min():
     from tools.chunk_budget_ab import _enrich_result_derived
 
-    result = {"rounds": [{"cases": [
+    result = {"failed_chunks_max": 0, "rounds": [{"cases": [
         {"n_chunks": 1, "overlap_pairs": 0, "overlap_pairs_possible": 0},
         {"n_chunks": 3, "overlap_pairs": 2, "overlap_pairs_possible": 2},
     ]}]}

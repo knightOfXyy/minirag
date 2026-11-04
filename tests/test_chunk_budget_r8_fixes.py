@@ -103,7 +103,7 @@ def test_enrichment_and_live_aggregate_agree_without_possible_field():
         {"n_chunks": 3, "overlap_pairs": 2},
         {"n_chunks": 2, "overlap_pairs": 1},
     ]}]
-    result = {"rounds": rounds}
+    result = {"failed_chunks_max": 0, "rounds": rounds}
     _enrich_result_derived(result)
     aggregate = _overlap_aggregate(rounds)
     assert result["overlap_documents_with_multiple_chunks"] == 2
