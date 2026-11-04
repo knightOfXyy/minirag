@@ -1,0 +1,182 @@
+FFFFF..FF.FFFF                                                           [100%]
+=================================== FAILURES ===================================
+______________ test_gate_fails_closed_when_token_counts_are_zero _______________
+
+    def test_gate_fails_closed_when_token_counts_are_zero():
+        gate = evaluate_gate(
+            gate_metrics(),
+            passing_candidate(
+                max_context_input_tokens=0,
+                max_context_output_tokens=0,
+            ),
+        )
+>       assert gate["checks"]["context_within_window"] is False
+E       assert True is False
+
+tests/test_chunk_budget_r7_fixes.py:46: AssertionError
+__________ test_gate_fails_closed_when_output_token_count_is_missing ___________
+
+    def test_gate_fails_closed_when_output_token_count_is_missing():
+        gate = evaluate_gate(
+            gate_metrics(),
+            passing_candidate(max_context_output_tokens=0),
+        )
+>       assert gate["checks"]["context_within_window"] is False
+E       assert True is False
+
+tests/test_chunk_budget_r7_fixes.py:55: AssertionError
+_________________ test_gate_fails_when_real_doc_batch_is_empty _________________
+
+    def test_gate_fails_when_real_doc_batch_is_empty():
+        gate = evaluate_gate(
+            gate_metrics(),
+            passing_candidate(
+                real_doc_documents=0,
+                real_doc_max_document_units=0,
+            ),
+        )
+>       assert gate["checks"]["real_doc_coverage_exercises_budget"] is False
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'real_doc_coverage_exercises_budget'
+
+tests/test_chunk_budget_r7_fixes.py:70: KeyError
+____ test_gate_fails_when_real_doc_batch_does_not_exercise_candidate_budget ____
+
+    def test_gate_fails_when_real_doc_batch_does_not_exercise_candidate_budget():
+        gate = evaluate_gate(
+            gate_metrics(),
+            passing_candidate(real_doc_max_document_units=341),
+        )
+>       assert gate["checks"]["real_doc_coverage_exercises_budget"] is False
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'real_doc_coverage_exercises_budget'
+
+tests/test_chunk_budget_r7_fixes.py:79: KeyError
+________ test_gate_passes_real_doc_check_when_long_document_is_present _________
+
+    def test_gate_passes_real_doc_check_when_long_document_is_present():
+        gate = evaluate_gate(gate_metrics(), passing_candidate())
+>       assert gate["checks"]["real_doc_coverage_exercises_budget"] is True
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'real_doc_coverage_exercises_budget'
+
+tests/test_chunk_budget_r7_fixes.py:85: KeyError
+_________ test_enrichment_excludes_single_chunk_docs_from_overlap_min __________
+
+    def test_enrichment_excludes_single_chunk_docs_from_overlap_min():
+        from tools.chunk_budget_ab import _enrich_result_derived
+    
+        result = {"rounds": [{"cases": [
+            {"n_chunks": 1, "overlap_pairs": 0, "overlap_pairs_possible": 0},
+            {"n_chunks": 3, "overlap_pairs": 2, "overlap_pairs_possible": 2},
+        ]}]}
+        _enrich_result_derived(result)
+>       assert result["overlap_pairs_min"] == 2
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'overlap_pairs_min'
+
+tests/test_chunk_budget_r7_fixes.py:124: KeyError
+___________ test_raw_entity_by_type_rebuild_rejects_misaligned_rows ____________
+
+    def test_raw_entity_by_type_rebuild_rejects_misaligned_rows():
+        from tools.chunk_budget_ab import _raw_entity_by_type_from_rows
+    
+        class _Case:
+            gold = None
+    
+        rows = [{
+            "predicted_entities": [{"type": "PER", "name": "张三"}],
+        }]
+        # 2 个 case 只给了 1 行：旧实现会 modulo 映射到第 1 个 case，
+        # 这里必须显式报错，不能产出看似合法但错配的数字。
+        with pytest.raises(ValueError, match="对齐|轮次|cases"):
+>           _raw_entity_by_type_from_rows(rows, [_Case(), _Case()])
+
+tests/test_chunk_budget_r7_fixes.py:143: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tools/chunk_budget_ab.py:232: in _raw_entity_by_type_from_rows
+    per_type = _entity_by_type_for_case(case.gold, pred)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tools/chunk_budget_ab.py:210: in _entity_by_type_for_case
+    for etype, (tp, fp, fn) in entity_type_counts(gold, pred).items()
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+gold = None
+pred = ExtractionResult(entities=[Entity(name='张三', type='PER', aliases=[], mentions=[], confidence=None, attributes={}, description='')], relations=[])
+strict = False
+
+    def entity_type_counts(
+        gold: ExtractionResult, pred: ExtractionResult, *, strict: bool = False
+    ) -> dict[str, tuple[int, int, int]]:
+        """按实体类型返回 ``(tp, fp, fn)``（relaxed 默认，评审 r6 F4）。
+    
+        只遍历金标与预测里实际出现的类型；与 :func:`aggregate_cases` 共用
+        :func:`_count_keys`，避免按类型表与顶层实体数分叉。
+        """
+>       types = sorted({e.type for e in (*gold.entities, *pred.entities)})
+                                          ^^^^^^^^^^^^^
+E       AttributeError: 'NoneType' object has no attribute 'entities'
+
+src/moray/evaluation/stress/metrics.py:270: AttributeError
+______________ test_report_explains_strict_delta_rounding_caliber ______________
+
+    def test_report_explains_strict_delta_rounding_caliber():
+        text = (_REPO_ROOT / "docs/evidence/04-budget-ab.md").read_text(
+            encoding="utf-8")
+>       assert "−0.534" in text
+E       AssertionError: assert '−0.534' in '# 工单 04：分块预算 1500 → 3500 A/B 与上线判据（评审 r6 修复后：strict + 上下文余量进 gate、raw 按类型 P/R）\n\n- 分支/worktree：`yzc/tmp-yzd-feat-rel...红记录，保留 |\n| `docs/evidence/04-green-tests.txt` | 首版定向用例，保留 |\n| `docs/evidence/04-full-suite.txt` | 首版全量 pytest，保留 |\n'
+
+tests/test_chunk_budget_r7_fixes.py:174: AssertionError
+____________ test_from_json_regenerates_real_doc_and_overlap_checks ____________
+
+tmp_path = PosixPath('/tmp/pytest-of-dell/pytest-826/test_from_json_regenerates_rea0')
+
+    def test_from_json_regenerates_real_doc_and_overlap_checks(tmp_path):
+        regen = _run_inline_from_json(evidence_payload(), tmp_path)
+        checks = regen["gate"]["checks"]
+>       assert checks["real_doc_coverage_exercises_budget"] is True
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'real_doc_coverage_exercises_budget'
+
+tests/test_chunk_budget_r7_fixes.py:202: KeyError
+________________ test_from_json_empty_real_doc_batch_fails_gate ________________
+
+tmp_path = PosixPath('/tmp/pytest-of-dell/pytest-826/test_from_json_empty_real_doc_0')
+
+    def test_from_json_empty_real_doc_batch_fails_gate(tmp_path):
+        payload = evidence_payload()
+        payload["real_docs"]["3500"]["rows"] = []
+        regen = _run_inline_from_json(payload, tmp_path)
+>       assert regen["gate"]["checks"][
+            "real_doc_coverage_exercises_budget"] is False
+E       KeyError: 'real_doc_coverage_exercises_budget'
+
+tests/test_chunk_budget_r7_fixes.py:212: KeyError
+________________ test_shared_failure_cases_cover_new_r7_checks _________________
+
+    def test_shared_failure_cases_cover_new_r7_checks():
+        failed = {case[1] for case in GATE_FAILURE_CASES}
+>       assert {
+            "real_doc_coverage_exercises_budget",
+            "overlap_observed",
+        } <= failed
+E       AssertionError: assert {'overlap_obs...cises_budget'} <= {'chunk_calls...n_0_5pt', ...}
+E         
+E         Extra items in the left set:
+E         'real_doc_coverage_exercises_budget'
+
+tests/test_chunk_budget_r7_fixes.py:219: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_chunk_budget_r7_fixes.py::test_gate_fails_closed_when_token_counts_are_zero
+FAILED tests/test_chunk_budget_r7_fixes.py::test_gate_fails_closed_when_output_token_count_is_missing
+FAILED tests/test_chunk_budget_r7_fixes.py::test_gate_fails_when_real_doc_batch_is_empty
+FAILED tests/test_chunk_budget_r7_fixes.py::test_gate_fails_when_real_doc_batch_does_not_exercise_candidate_budget
+FAILED tests/test_chunk_budget_r7_fixes.py::test_gate_passes_real_doc_check_when_long_document_is_present
+FAILED tests/test_chunk_budget_r7_fixes.py::test_enrichment_excludes_single_chunk_docs_from_overlap_min
+FAILED tests/test_chunk_budget_r7_fixes.py::test_raw_entity_by_type_rebuild_rejects_misaligned_rows
+FAILED tests/test_chunk_budget_r7_fixes.py::test_report_explains_strict_delta_rounding_caliber
+FAILED tests/test_chunk_budget_r7_fixes.py::test_from_json_regenerates_real_doc_and_overlap_checks
+FAILED tests/test_chunk_budget_r7_fixes.py::test_from_json_empty_real_doc_batch_fails_gate
+FAILED tests/test_chunk_budget_r7_fixes.py::test_shared_failure_cases_cover_new_r7_checks
+11 failed, 3 passed in 2.44s
