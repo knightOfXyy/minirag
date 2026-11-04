@@ -1,0 +1,153 @@
+FFFFFFFFF.                                                               [100%]
+=================================== FAILURES ===================================
+____________________ test_gate_requires_raw_relation_fields ____________________
+
+    def test_gate_requires_raw_relation_fields():
+        baseline = gate_metrics()
+        candidate = passing_candidate()
+        baseline.pop("raw_relation_f1_mean")
+>       with pytest.raises(ValueError, match="raw_relation_f1_mean"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_chunk_budget_r5_fixes.py:39: Failed
+______ test_gate_fails_when_raw_relation_drops_even_if_normalized_passes _______
+
+    def test_gate_fails_when_raw_relation_drops_even_if_normalized_passes():
+        candidate = passing_candidate(
+            # 归一化辅助口径持平/更好，但原始验收口径全量关系 F1 掉 2pt。
+            relation_f1_mean=0.5200,
+            relation_f1_worst=0.4700,
+            raw_relation_f1_mean=0.4800,
+            raw_relation_f1_worst=0.4300,
+        )
+        gate = evaluate_budget_gate(gate_metrics(), candidate)
+        assert gate["checks"]["relation_full_f1_mean_not_lower"] is True
+        assert gate["checks"]["relation_full_f1_worst_not_lower"] is True
+>       assert gate["checks"]["relation_raw_full_f1_mean_not_lower"] is False
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'relation_raw_full_f1_mean_not_lower'
+
+tests/test_chunk_budget_r5_fixes.py:54: KeyError
+__________ test_gate_recomputes_raw_relation_worst_delta_from_rounds ___________
+
+    def test_gate_recomputes_raw_relation_worst_delta_from_rounds():
+        baseline_rounds = [
+            {"entity_macro_f1": 0.9000, "raw_entity_macro_f1": 0.9000,
+             "relation_f1": 0.5000, "raw_relation_f1": 0.5000,
+             "relation_covered_recall": 0.8000,
+             "relation_covered_precision": 0.9000},
+            {"entity_macro_f1": 0.9000, "raw_entity_macro_f1": 0.9000,
+             "relation_f1": 0.5000, "raw_relation_f1": 0.5000,
+             "relation_covered_recall": 0.8000,
+             "relation_covered_precision": 0.9000},
+        ]
+        candidate_rounds = [
+            {"entity_macro_f1": 0.8960, "raw_entity_macro_f1": 0.8960,
+             "relation_f1": 0.5000, "raw_relation_f1": 0.4900,
+             "relation_covered_recall": 0.8000,
+             "relation_covered_precision": 0.8950},
+            {"entity_macro_f1": 0.8960, "raw_entity_macro_f1": 0.8960,
+             "relation_f1": 0.5000, "raw_relation_f1": 0.4800,
+             "relation_covered_recall": 0.8000,
+             "relation_covered_precision": 0.8950},
+        ]
+        gate = evaluate_budget_gate(
+            gate_metrics(), passing_candidate(),
+            baseline_rounds=baseline_rounds, candidate_rounds=candidate_rounds)
+>       assert gate["relation_raw_full_worst_delta_pt"] == pytest.approx(-2.0)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'relation_raw_full_worst_delta_pt'
+
+tests/test_chunk_budget_r5_fixes.py:85: KeyError
+_____________ test_evidence_thresholds_describe_raw_relation_gate ______________
+
+    def test_evidence_thresholds_describe_raw_relation_gate():
+        from tools.chunk_budget_ab import gate_thresholds
+    
+        thresholds = gate_thresholds()
+        scope = thresholds["relation_full_scope"]
+>       assert "raw" in scope and "normalized" in scope
+E       AssertionError: assert ('raw' in '全量口径（含 02 金标刻意未标注句面的 FP）mean/worst 也参与放行（gate.checks），与覆盖子集并列列报')
+
+tests/test_chunk_budget_r5_fixes.py:94: AssertionError
+______________ test_from_json_reports_overlap_pairs_over_possible ______________
+
+tmp_path = PosixPath('/tmp/pytest-of-dell/pytest-791/test_from_json_reports_overlap0')
+
+    def test_from_json_reports_overlap_pairs_over_possible(tmp_path):
+        out = tmp_path / "regen.json"
+        payload = _run_from_json(out)
+>       observed = payload["overlap_observed"]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'overlap_observed'
+
+tests/test_chunk_budget_r5_fixes.py:104: KeyError
+_____ test_from_json_regenerates_raw_relation_gate_and_per_budget_coverage _____
+
+tmp_path = PosixPath('/tmp/pytest-of-dell/pytest-791/test_from_json_regenerates_raw0')
+
+    def test_from_json_regenerates_raw_relation_gate_and_per_budget_coverage(
+            tmp_path):
+        out = tmp_path / "regen.json"
+        payload = _run_from_json(out)
+        gate = payload["gate"]
+>       assert gate["checks"]["relation_raw_full_f1_mean_not_lower"] is False
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'relation_raw_full_f1_mean_not_lower'
+
+tests/test_chunk_budget_r5_fixes.py:121: KeyError
+__________ test_metrics_docstring_does_not_claim_full_table_fallback ___________
+
+    def test_metrics_docstring_does_not_claim_full_table_fallback():
+        from moray.evaluation.stress.metrics import apply_type_label_aliases
+    
+        doc = inspect.getdoc(apply_type_label_aliases) or ""
+>       assert "全表回退" not in doc
+E       AssertionError: assert '全表回退' not in '返回实体名（以及关系头...别名把\n原文差异抹平。'
+E         
+E         '全表回退' is contained here:
+E           REFIXES``
+E           全表回退（评审给出的最小修法）。
+E         ? ++++
+E           
+E           ``mentions`` 原样保留：strict 口径比 ``mention.surface``，不能用别名把
+E           原文差异抹平。
+
+tests/test_chunk_budget_r5_fixes.py:154: AssertionError
+_______ test_report_does_not_claim_per_chunk_details_or_pairwise_overlap _______
+
+    def test_report_does_not_claim_per_chunk_details_or_pairwise_overlap():
+        text = (_REPO_ROOT / "docs/evidence/04-budget-ab.md").read_text(
+            encoding="utf-8")
+>       assert "逐块明细" not in text
+E       AssertionError: assert '逐块明细' not in '# 工单 04：分块预...ytest，保留 |\n'
+E         
+E         '逐块明细' is contained here:
+E           on`（逐轮、逐篇、逐块明细 +
+E         ?           ++++
+E             **逐篇预测实体/关系面（原始端点 + 归一化端点）**）；本轮未重跑 LLM，
+E             gate/thresholds 由 `tools/chunk_budget_ab.py --from-json` 从既有逐轮数据
+E             复算，JSON `gate_recompute` 记录源提交与重算时间。...
+E         
+E         ...Full output truncated (419 lines hidden), use '-vv' to show
+
+tests/test_chunk_budget_r5_fixes.py:164: AssertionError
+________ test_gate_input_helper_fills_all_required_keys_from_one_place _________
+
+    def test_gate_input_helper_fills_all_required_keys_from_one_place():
+>       from tools.chunk_budget_ab import _gate_input
+E       ImportError: cannot import name '_gate_input' from 'tools.chunk_budget_ab' (/home/dell/orca/workspaces/minirag/tmp-yzd-feat-relation-202610-04/tools/chunk_budget_ab.py)
+
+tests/test_chunk_budget_r5_fixes.py:173: ImportError
+=========================== short test summary info ============================
+FAILED tests/test_chunk_budget_r5_fixes.py::test_gate_requires_raw_relation_fields
+FAILED tests/test_chunk_budget_r5_fixes.py::test_gate_fails_when_raw_relation_drops_even_if_normalized_passes
+FAILED tests/test_chunk_budget_r5_fixes.py::test_gate_recomputes_raw_relation_worst_delta_from_rounds
+FAILED tests/test_chunk_budget_r5_fixes.py::test_evidence_thresholds_describe_raw_relation_gate
+FAILED tests/test_chunk_budget_r5_fixes.py::test_from_json_reports_overlap_pairs_over_possible
+FAILED tests/test_chunk_budget_r5_fixes.py::test_from_json_regenerates_raw_relation_gate_and_per_budget_coverage
+FAILED tests/test_chunk_budget_r5_fixes.py::test_metrics_docstring_does_not_claim_full_table_fallback
+FAILED tests/test_chunk_budget_r5_fixes.py::test_report_does_not_claim_per_chunk_details_or_pairwise_overlap
+FAILED tests/test_chunk_budget_r5_fixes.py::test_gate_input_helper_fills_all_required_keys_from_one_place
+9 failed, 1 passed in 2.38s

@@ -78,10 +78,12 @@ def test_gate_rejects_same_budget_on_both_sides():
 
 def test_gate_recomputes_explicit_worst_delta_from_rounds():
     baseline_rounds = [{"entity_macro_f1": 0.9000, "raw_entity_macro_f1": 0.9000,
-                        "relation_f1": 0.5000, "relation_covered_recall": 0.8000,
+                        "relation_f1": 0.5000, "raw_relation_f1": 0.5000,
+                        "relation_covered_recall": 0.8000,
                         "relation_covered_precision": 0.9000}]
     candidate_rounds = [{"entity_macro_f1": 0.8800, "raw_entity_macro_f1": 0.8500,
-                         "relation_f1": 0.4990, "relation_covered_recall": 0.7990,
+                         "relation_f1": 0.4990, "raw_relation_f1": 0.4900,
+                         "relation_covered_recall": 0.7990,
                          "relation_covered_precision": 0.8990}]
     with pytest.raises(ValueError, match="relation_f1_worst_delta_pt"):
         evaluate_budget_gate(
@@ -92,18 +94,22 @@ def test_gate_recomputes_explicit_worst_delta_from_rounds():
 def test_gate_uses_round_recomputed_worst_when_no_explicit_delta():
     baseline_rounds = [
         {"entity_macro_f1": 0.9000, "raw_entity_macro_f1": 0.9000,
-         "relation_f1": 0.5000, "relation_covered_recall": 0.8000,
+         "relation_f1": 0.5000, "raw_relation_f1": 0.5000,
+         "relation_covered_recall": 0.8000,
          "relation_covered_precision": 0.9000},
         {"entity_macro_f1": 0.8900, "raw_entity_macro_f1": 0.8900,
-         "relation_f1": 0.4900, "relation_covered_recall": 0.7900,
+         "relation_f1": 0.4900, "raw_relation_f1": 0.4900,
+         "relation_covered_recall": 0.7900,
          "relation_covered_precision": 0.8900},
     ]
     candidate_rounds = [
         {"entity_macro_f1": 0.8960, "raw_entity_macro_f1": 0.8960,
-         "relation_f1": 0.5000, "relation_covered_recall": 0.8000,
+         "relation_f1": 0.5000, "raw_relation_f1": 0.5000,
+         "relation_covered_recall": 0.8000,
          "relation_covered_precision": 0.8950},
         {"entity_macro_f1": 0.8760, "raw_entity_macro_f1": 0.8760,
-         "relation_f1": 0.4490, "relation_covered_recall": 0.7500,
+         "relation_f1": 0.4490, "raw_relation_f1": 0.4490,
+         "relation_covered_recall": 0.7500,
          "relation_covered_precision": 0.8450},
     ]
     gate = evaluate_budget_gate(
