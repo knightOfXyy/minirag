@@ -65,7 +65,10 @@
   },
   "thresholds": {
     "entity_macro_f1_max_drop_pt": 0.5,
+    "relation_covered_precision_max_drop_pt": 0.5,
     "entity_macro_f1_note": "raw（原始未归一化，验收口径）与 normalized（类型前缀标签归一化，辅助口径）两套 macro-F1 的 mean/worst 都进 checks，任一跌幅 >0.5pt 即 fail；辅助口径不能替代验收口径",
+    "entity_strict_note": "strict 实体 F1（比 mention.surface + span，不做前缀归一化）的 mean/worst 也进 checks，门槛同为 0.5pt（评审 r6 F3）",
+    "context_margin": "候选档 provider 真实 tokenizer 的 max_chunk_input_tokens + max_chunk_output_tokens 必须 <= /models context_window；能力缺失（None/0）时 context_within_window fail closed（评审 r6 F1，验收 #5）",
     "relation_gate": "金标覆盖子集 recall mean/worst 不下降；precision mean/worst 跌幅 <=0.5pt",
     "relation_full_scope": "全量口径（含 02 金标刻意未标注句面的 FP）的 raw（原始未归一化，验收口径）与 normalized（类型前缀标签归一化，辅助口径）两套 mean/worst 都参与放行（gate.checks），与覆盖子集并列列报；辅助口径不能替代验收口径",
     "relation_note": "评审 r5 S1：raw_relation_f1_* 必填并进 checks，不再只列报",
@@ -1378,7 +1381,49 @@
                   "normalized_head": "桥南顺达实业集团有限公司",
                   "normalized_tail": "铜官山区"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 5,
+                  "fp": 0,
+                  "fn": 3,
+                  "precision": 1.0,
+                  "recall": 0.625,
+                  "f1": 0.7692
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 3,
+                  "fn": 0,
+                  "precision": 0.8571,
+                  "recall": 1.0,
+                  "f1": 0.9231
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 2,
+                  "fn": 0,
+                  "precision": 0.9524,
+                  "recall": 1.0,
+                  "f1": 0.9756
+                }
+              }
             },
             {
               "name": "stress_seed20261103",
@@ -3644,7 +3689,49 @@
                   "normalized_head": "桥南顺达运输有限公司",
                   "normalized_tail": "铜官山区"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 4,
+                  "fp": 0,
+                  "fn": 6,
+                  "precision": 1.0,
+                  "recall": 0.4,
+                  "f1": 0.5714
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 4,
+                  "fn": 0,
+                  "precision": 0.8182,
+                  "recall": 1.0,
+                  "f1": 0.9
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             },
             {
               "name": "stress_seed20261104",
@@ -4918,7 +5005,49 @@
                   "normalized_head": "北辰恒泰建筑工程有限公司",
                   "normalized_tail": "铜官山区"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 4,
+                  "fp": 0,
+                  "fn": 6,
+                  "precision": 1.0,
+                  "recall": 0.4,
+                  "f1": 0.5714
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 3,
+                  "fn": 0,
+                  "precision": 0.8571,
+                  "recall": 1.0,
+                  "f1": 0.9231
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             }
           ],
           "micro": {
@@ -6323,7 +6452,49 @@
                   "normalized_head": "桥南顺达实业集团有限公司",
                   "normalized_tail": "铜官山区"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 1,
+                  "fp": 0,
+                  "fn": 7,
+                  "precision": 1.0,
+                  "recall": 0.125,
+                  "f1": 0.2222
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 3,
+                  "fn": 0,
+                  "precision": 0.8571,
+                  "recall": 1.0,
+                  "f1": 0.9231
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 1,
+                  "fn": 0,
+                  "precision": 0.9756,
+                  "recall": 1.0,
+                  "f1": 0.9877
+                }
+              }
             },
             {
               "name": "stress_seed20261103",
@@ -7691,7 +7862,49 @@
                   "normalized_head": "锦江华诚物流有限责任公司",
                   "normalized_tail": "望江路"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 5,
+                  "fp": 0,
+                  "fn": 5,
+                  "precision": 1.0,
+                  "recall": 0.5,
+                  "f1": 0.6667
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 4,
+                  "fn": 0,
+                  "precision": 0.8182,
+                  "recall": 1.0,
+                  "f1": 0.9
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             },
             {
               "name": "stress_seed20261104",
@@ -8970,7 +9183,49 @@
                   "normalized_head": "北辰恒泰建筑工程有限公司",
                   "normalized_tail": "铜官山区"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 4,
+                  "fp": 0,
+                  "fn": 6,
+                  "precision": 1.0,
+                  "recall": 0.4,
+                  "f1": 0.5714
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 4,
+                  "fn": 0,
+                  "precision": 0.8182,
+                  "recall": 1.0,
+                  "f1": 0.9
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             }
           ],
           "micro": {
@@ -10356,7 +10611,49 @@
                   "normalized_head": "桥南顺达实业集团有限公司",
                   "normalized_tail": "铜官山区"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 1,
+                  "fp": 0,
+                  "fn": 7,
+                  "precision": 1.0,
+                  "recall": 0.125,
+                  "f1": 0.2222
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 3,
+                  "fn": 0,
+                  "precision": 0.8571,
+                  "recall": 1.0,
+                  "f1": 0.9231
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             },
             {
               "name": "stress_seed20261103",
@@ -12508,7 +12805,49 @@
                   "normalized_head": "桥南顺达运输有限公司",
                   "normalized_tail": "铜官山区"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 5,
+                  "fp": 0,
+                  "fn": 5,
+                  "precision": 1.0,
+                  "recall": 0.5,
+                  "f1": 0.6667
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 4,
+                  "fn": 0,
+                  "precision": 0.8182,
+                  "recall": 1.0,
+                  "f1": 0.9
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             },
             {
               "name": "stress_seed20261104",
@@ -13760,7 +14099,49 @@
                   "normalized_head": "北辰恒泰建筑工程有限公司",
                   "normalized_tail": "铜官山区"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 10,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 4,
+                  "fn": 0,
+                  "precision": 0.8182,
+                  "recall": 1.0,
+                  "f1": 0.9
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             }
           ],
           "micro": {
@@ -15173,7 +15554,49 @@
                   "normalized_head": "桥南顺达实业集团有限公司",
                   "normalized_tail": "铜官山区"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 5,
+                  "fp": 0,
+                  "fn": 3,
+                  "precision": 1.0,
+                  "recall": 0.625,
+                  "f1": 0.7692
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 3,
+                  "fn": 0,
+                  "precision": 0.8571,
+                  "recall": 1.0,
+                  "f1": 0.9231
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             },
             {
               "name": "stress_seed20261103",
@@ -17381,7 +17804,49 @@
                   "normalized_head": "桥南顺达运输有限公司",
                   "normalized_tail": "铜官山区"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 5,
+                  "fp": 0,
+                  "fn": 5,
+                  "precision": 1.0,
+                  "recall": 0.5,
+                  "f1": 0.6667
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 4,
+                  "fn": 0,
+                  "precision": 0.8182,
+                  "recall": 1.0,
+                  "f1": 0.9
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             },
             {
               "name": "stress_seed20261104",
@@ -18655,7 +19120,49 @@
                   "normalized_head": "北辰恒泰建筑工程有限公司",
                   "normalized_tail": "铜官山区"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 4,
+                  "fp": 0,
+                  "fn": 6,
+                  "precision": 1.0,
+                  "recall": 0.4,
+                  "f1": 0.5714
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 3,
+                  "fn": 0,
+                  "precision": 0.8571,
+                  "recall": 1.0,
+                  "f1": 0.9231
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             }
           ],
           "micro": {
@@ -20050,7 +20557,49 @@
                   "normalized_head": "桥南顺达实业集团有限公司",
                   "normalized_tail": "铜官山区"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 3,
+                  "fn": 0,
+                  "precision": 0.8571,
+                  "recall": 1.0,
+                  "f1": 0.9231
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             },
             {
               "name": "stress_seed20261103",
@@ -21341,7 +21890,49 @@
                   "normalized_head": "桥南顺达运输有限公司",
                   "normalized_tail": "铜官山区"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 5,
+                  "fp": 0,
+                  "fn": 5,
+                  "precision": 1.0,
+                  "recall": 0.5,
+                  "f1": 0.6667
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 4,
+                  "fn": 0,
+                  "precision": 0.8182,
+                  "recall": 1.0,
+                  "f1": 0.9
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             },
             {
               "name": "stress_seed20261104",
@@ -22638,7 +23229,49 @@
                   "normalized_head": "裕民广泰建筑工程有限公司",
                   "normalized_tail": "望江路"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 4,
+                  "fp": 0,
+                  "fn": 6,
+                  "precision": 1.0,
+                  "recall": 0.4,
+                  "f1": 0.5714
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 1,
+                  "fn": 0,
+                  "precision": 0.9474,
+                  "recall": 1.0,
+                  "f1": 0.973
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 1,
+                  "fn": 0,
+                  "precision": 0.9756,
+                  "recall": 1.0,
+                  "f1": 0.9877
+                }
+              }
             }
           ],
           "micro": {
@@ -22883,8 +23516,49 @@
       "overlap_pairs_min": 8,
       "raw_relation_f1_mean": 0.7042,
       "raw_relation_f1_worst": 0.5876,
-      "overlap_pairs_possible_min": 25,
-      "overlap_pairs_ratio_min": 0.32
+      "entity_strict_f1_worst": 0.9559,
+      "raw_entity_by_type": {
+        "EVENT": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 120,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0
+        },
+        "LOC": {
+          "tp": 225,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0
+        },
+        "MISC": {
+          "tp": 52,
+          "fp": 0,
+          "fn": 88,
+          "precision": 1.0,
+          "recall": 0.3714,
+          "f1": 0.5417
+        },
+        "ORG": {
+          "tp": 270,
+          "fp": 50,
+          "fn": 0,
+          "precision": 0.8438,
+          "recall": 1.0,
+          "f1": 0.9153
+        },
+        "PER": {
+          "tp": 600,
+          "fp": 4,
+          "fn": 0,
+          "precision": 0.9934,
+          "recall": 1.0,
+          "f1": 0.9967
+        }
+      }
     },
     "3500": {
       "budget": 3500,
@@ -24773,7 +25447,49 @@
                   "normalized_head": "裕民广泰实业集团有限公司",
                   "normalized_tail": "望江路"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 8,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 4,
+                  "fp": 0,
+                  "fn": 4,
+                  "precision": 1.0,
+                  "recall": 0.5,
+                  "f1": 0.6667
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 14,
+                  "fn": 0,
+                  "precision": 0.7407,
+                  "recall": 1.0,
+                  "f1": 0.8511
+                }
+              }
             },
             {
               "name": "stress_seed20261103",
@@ -26612,7 +27328,49 @@
                   "normalized_head": "杨俊杰",
                   "normalized_tail": "检察机关"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 8,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 4,
+                  "fp": 0,
+                  "fn": 6,
+                  "precision": 1.0,
+                  "recall": 0.4,
+                  "f1": 0.5714
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 3,
+                  "fn": 0,
+                  "precision": 0.8571,
+                  "recall": 1.0,
+                  "f1": 0.9231
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             },
             {
               "name": "stress_seed20261104",
@@ -28437,7 +29195,49 @@
                   "normalized_head": "云岭金鼎商贸有限公司",
                   "normalized_tail": "望江路"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 8,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 4,
+                  "fp": 0,
+                  "fn": 6,
+                  "precision": 1.0,
+                  "recall": 0.4,
+                  "f1": 0.5714
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 3,
+                  "fn": 0,
+                  "precision": 0.8571,
+                  "recall": 1.0,
+                  "f1": 0.9231
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             }
           ],
           "micro": {
@@ -30403,7 +31203,49 @@
                   "normalized_head": "胡俊杰",
                   "normalized_tail": "断线钳"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 8,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 5,
+                  "fp": 0,
+                  "fn": 3,
+                  "precision": 1.0,
+                  "recall": 0.625,
+                  "f1": 0.7692
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 2,
+                  "fn": 0,
+                  "precision": 0.9,
+                  "recall": 1.0,
+                  "f1": 0.9474
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             },
             {
               "name": "stress_seed20261103",
@@ -32256,7 +33098,49 @@
                   "normalized_head": "云岭金鼎实业集团有限公司",
                   "normalized_tail": "望江路"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 8,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 4,
+                  "fp": 0,
+                  "fn": 6,
+                  "precision": 1.0,
+                  "recall": 0.4,
+                  "f1": 0.5714
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 3,
+                  "fn": 0,
+                  "precision": 0.8571,
+                  "recall": 1.0,
+                  "f1": 0.9231
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             },
             {
               "name": "stress_seed20261104",
@@ -34116,7 +35000,49 @@
                   "normalized_head": "谢丽娟",
                   "normalized_tail": "检察机关"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 8,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 4,
+                  "fp": 0,
+                  "fn": 6,
+                  "precision": 1.0,
+                  "recall": 0.4,
+                  "f1": 0.5714
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 3,
+                  "fn": 0,
+                  "precision": 0.8571,
+                  "recall": 1.0,
+                  "f1": 0.9231
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             }
           ],
           "micro": {
@@ -36053,7 +36979,49 @@
                   "normalized_head": "裕民广泰实业集团有限公司",
                   "normalized_tail": "望江路"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 8,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 4,
+                  "fp": 0,
+                  "fn": 4,
+                  "precision": 1.0,
+                  "recall": 0.5,
+                  "f1": 0.6667
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             },
             {
               "name": "stress_seed20261103",
@@ -37863,7 +38831,49 @@
                   "normalized_head": "云岭金鼎实业集团有限公司",
                   "normalized_tail": "望江路"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 8,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 4,
+                  "fp": 0,
+                  "fn": 6,
+                  "precision": 1.0,
+                  "recall": 0.4,
+                  "f1": 0.5714
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             },
             {
               "name": "stress_seed20261104",
@@ -39718,7 +40728,49 @@
                   "normalized_head": "徐永刚",
                   "normalized_tail": "检察机关"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 8,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 4,
+                  "fp": 0,
+                  "fn": 6,
+                  "precision": 1.0,
+                  "recall": 0.4,
+                  "f1": 0.5714
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 2,
+                  "fn": 0,
+                  "precision": 0.9,
+                  "recall": 1.0,
+                  "f1": 0.9474
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             }
           ],
           "micro": {
@@ -41655,7 +42707,49 @@
                   "normalized_head": "裕民广泰实业集团有限公司",
                   "normalized_tail": "望江路"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 8,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 4,
+                  "fp": 0,
+                  "fn": 4,
+                  "precision": 1.0,
+                  "recall": 0.5,
+                  "f1": 0.6667
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             },
             {
               "name": "stress_seed20261103",
@@ -43493,7 +44587,49 @@
                   "normalized_head": "云岭金鼎实业集团有限公司",
                   "normalized_tail": "望江路"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 8,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 4,
+                  "fp": 0,
+                  "fn": 6,
+                  "precision": 1.0,
+                  "recall": 0.4,
+                  "f1": 0.5714
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             },
             {
               "name": "stress_seed20261104",
@@ -45303,7 +46439,49 @@
                   "normalized_head": "云岭金鼎商贸有限公司",
                   "normalized_tail": "望江路"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 8,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 4,
+                  "fp": 0,
+                  "fn": 6,
+                  "precision": 1.0,
+                  "recall": 0.4,
+                  "f1": 0.5714
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             }
           ],
           "micro": {
@@ -47240,7 +48418,49 @@
                   "normalized_head": "裕民广泰实业集团有限公司",
                   "normalized_tail": "望江路"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 8,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 4,
+                  "fp": 0,
+                  "fn": 4,
+                  "precision": 1.0,
+                  "recall": 0.5,
+                  "f1": 0.6667
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             },
             {
               "name": "stress_seed20261103",
@@ -49050,7 +50270,49 @@
                   "normalized_head": "云岭金鼎实业集团有限公司",
                   "normalized_tail": "望江路"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 8,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 4,
+                  "fp": 0,
+                  "fn": 6,
+                  "precision": 1.0,
+                  "recall": 0.4,
+                  "f1": 0.5714
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             },
             {
               "name": "stress_seed20261104",
@@ -50882,7 +52144,49 @@
                   "normalized_head": "谢丽娟",
                   "normalized_tail": "检察机关"
                 }
-              ]
+              ],
+              "raw_entity_by_type": {
+                "EVENT": {
+                  "tp": 0,
+                  "fp": 8,
+                  "fn": 8,
+                  "precision": 0.0,
+                  "recall": 0.0,
+                  "f1": 0.0
+                },
+                "LOC": {
+                  "tp": 15,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                },
+                "MISC": {
+                  "tp": 4,
+                  "fp": 0,
+                  "fn": 6,
+                  "precision": 1.0,
+                  "recall": 0.4,
+                  "f1": 0.5714
+                },
+                "ORG": {
+                  "tp": 18,
+                  "fp": 3,
+                  "fn": 0,
+                  "precision": 0.8571,
+                  "recall": 1.0,
+                  "f1": 0.9231
+                },
+                "PER": {
+                  "tp": 40,
+                  "fp": 0,
+                  "fn": 0,
+                  "precision": 1.0,
+                  "recall": 1.0,
+                  "f1": 1.0
+                }
+              }
             }
           ],
           "micro": {
@@ -51127,8 +52431,49 @@
       "overlap_pairs_min": 7,
       "raw_relation_f1_mean": 0.5954,
       "raw_relation_f1_worst": 0.5908,
-      "overlap_pairs_possible_min": 8,
-      "overlap_pairs_ratio_min": 0.875
+      "entity_strict_f1_worst": 0.8802,
+      "raw_entity_by_type": {
+        "EVENT": {
+          "tp": 0,
+          "fp": 120,
+          "fn": 120,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0
+        },
+        "LOC": {
+          "tp": 225,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0
+        },
+        "MISC": {
+          "tp": 61,
+          "fp": 0,
+          "fn": 79,
+          "precision": 1.0,
+          "recall": 0.4357,
+          "f1": 0.607
+        },
+        "ORG": {
+          "tp": 270,
+          "fp": 19,
+          "fn": 0,
+          "precision": 0.9343,
+          "recall": 1.0,
+          "f1": 0.966
+        },
+        "PER": {
+          "tp": 600,
+          "fp": 14,
+          "fn": 0,
+          "precision": 0.9772,
+          "recall": 1.0,
+          "f1": 0.9885
+        }
+      }
     }
   },
   "real_docs": {
@@ -51667,6 +53012,23 @@
       "max_pt": -1.23,
       "label": "unpaired independent repeats; worst-of-N = min over round-aligned repeats (no seed, not a paired test)"
     },
+    "entity_strict_f1": {
+      "values": [
+        -8.5,
+        0.6,
+        2.54,
+        1.85,
+        0.84
+      ],
+      "n": 5,
+      "mean_pt": -0.534,
+      "sd_pt": 4.5212,
+      "ci95_low_pt": -6.1469,
+      "ci95_high_pt": 5.0789,
+      "min_pt": -8.5,
+      "max_pt": 2.54,
+      "label": "unpaired independent repeats; worst-of-N = min over round-aligned repeats (no seed, not a paired test)"
+    },
     "relation_full": {
       "values": [
         -3.68,
@@ -51751,6 +53113,13 @@
       -1.23,
       -2.83,
       -2.4
+    ],
+    "entity_strict_f1": [
+      -8.5,
+      0.6,
+      2.54,
+      1.85,
+      0.84
     ],
     "relation_full": [
       -3.68,
@@ -52225,6 +53594,9 @@
       "entity_raw_worst_within_0_5pt": false,
       "entity_normalized_mean_within_0_5pt": true,
       "entity_normalized_worst_within_0_5pt": true,
+      "entity_strict_mean_within_0_5pt": false,
+      "entity_strict_worst_within_0_5pt": false,
+      "context_within_window": true,
       "relation_full_f1_mean_not_lower": false,
       "relation_full_f1_worst_not_lower": false,
       "relation_raw_full_f1_mean_not_lower": false,
@@ -52242,6 +53614,8 @@
     "failures": [
       "entity_raw_mean_within_0_5pt",
       "entity_raw_worst_within_0_5pt",
+      "entity_strict_mean_within_0_5pt",
+      "entity_strict_worst_within_0_5pt",
       "relation_full_f1_mean_not_lower",
       "relation_full_f1_worst_not_lower",
       "relation_raw_full_f1_mean_not_lower",
@@ -52253,6 +53627,11 @@
     "entity_macro_f1_worst_delta_pt": 3.36,
     "raw_entity_macro_f1_mean_delta_pt": -2.92,
     "raw_entity_macro_f1_worst_delta_pt": -5.44,
+    "entity_strict_f1_mean_delta_pt": -0.54,
+    "entity_strict_f1_worst_delta_pt": -8.5,
+    "context_window": 1048576,
+    "max_context_input_tokens": 4448,
+    "max_context_output_tokens": 5402,
     "relation_covered_recall_mean_delta_pt": 8.3,
     "relation_covered_recall_worst_delta_pt": 2.63,
     "relation_covered_precision_mean_delta_pt": -12.28,
@@ -52273,8 +53652,10 @@
     },
     "caliber": {
       "entity_macro_f1": "macro: 逐篇 F1 先平均，再跨轮平均",
+      "entity_strict_f1": "strict: 比 mention.surface + span，不做类型前缀归一化；mean/worst 与 relaxed 同用 0.5pt 门槛（评审 r6 F3）",
       "relation_full_f1": "macro: 逐篇 F1 先平均，再跨轮平均",
-      "relation_covered_prf": "micro: TP/FP/FN 跨篇池化后再跨轮平均"
+      "relation_covered_prf": "micro: TP/FP/FN 跨篇池化后再跨轮平均",
+      "context_margin": "provider 真实 tokenizer：max_chunk_input + max_chunk_output <= /models context_window；能力缺失 fail closed"
     },
     "overlap_unchanged": true,
     "overlap_observed": true,
@@ -52306,10 +53687,10 @@
     "source_json": "docs/evidence/04-budget-ab.json",
     "source_git_sha": "e78dd35d70bcc2c7f1d29f89973914439e6fbfb4",
     "source_generated_at": "2026-11-03T08:46:42.466076+00:00",
-    "regenerated_at": "2026-11-04T01:22:29.681686+00:00",
+    "regenerated_at": "2026-11-04T01:41:18.328088+00:00",
     "regenerator": {
-      "git_sha": "d67d682f6817ef1531baa4aeb2f98a2a19df2f09",
-      "git_describe": "d67d682",
+      "git_sha": "f27e7c26c5ef47282409940e047942f5bb081563",
+      "git_describe": "f27e7c2",
       "git_dirty": false,
       "git_status_porcelain": ""
     },
@@ -52319,14 +53700,14 @@
     "baseline": {
       "budget": 1500,
       "min_overlap_pairs": 8,
-      "min_possible_pairs": 25,
+      "min_ratio_document_possible_pairs": 25,
       "min_pair_ratio": 0.32,
       "documents_with_multiple_chunks": 15
     },
     "candidate": {
       "budget": 3500,
       "min_overlap_pairs": 7,
-      "min_possible_pairs": 8,
+      "min_ratio_document_possible_pairs": 8,
       "min_pair_ratio": 0.875,
       "documents_with_multiple_chunks": 15
     },
