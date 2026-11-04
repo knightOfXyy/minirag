@@ -1,12 +1,13 @@
-# 工单 04：分块预算 1500 → 3500 A/B 与上线判据（评审 r6 修复后：strict + 上下文余量进 gate、raw 按类型 P/R）
+# 工单 04：分块预算 1500 → 3500 A/B 与上线判据（评审 r7 修复后：上下文 0/0 与 real-doc 覆盖进 checks、overlap 单块误判修正）
 
 - 分支/worktree：`yzc/tmp-yzd-feat-relation-202610-04`
   （`/home/dell/orca/workspaces/minirag/tmp-yzd-feat-relation-202610-04`）
-- 代码提交：`acac46f`（本轮 r6 修复：F1–F4 + N1–N6）；原始 A/B 数据
-  采集自 `e78dd35`、采集时 `git_dirty=false`；上一轮 r5 修复为 `4698445`
-- 证据提交：紧随 `acac46f` 的 evidence commit（报告/日志/修复说明 +
-  重生成 JSON；gate/thresholds/safety/strict/raw-by-type 均由
-  `--from-json` 从既有逐轮数据复算，未重跑 LLM）
+- 代码提交：`0f7efa7`（本轮 r7 修复：S1/S2 + N1–N3，基于 r6 的 `acac46f`）；
+  原始 A/B 数据采集自 `e78dd35`、采集时 `git_dirty=false`；上一轮 r6 修复为
+  `acac46f`
+- 证据提交：紧随 `9400e6d` 的 evidence commit（报告/日志/修复说明 +
+  重生成 JSON；gate/thresholds/safety/strict/raw-by-type/real-doc/overlap
+  均由 `--from-json` 从既有逐轮数据复算，未重跑 LLM）
 - 模型：`deepseek-flash`（provider `deepseek`，`api.deepseek.com`），temperature=0，
   **5 轮独立重复**（无 seed）；压力语料 3 篇 / 3 seed / 79,362 字；
   真实文档 **12 篇**（6 篇黄金集短样本 + 5 篇 samples + 1 篇 5,360-unit 长文
@@ -97,7 +98,7 @@ Python，不发请求）；不含 12 篇真实文档批次（每篇 1–2 块）
 |---|---:|---:|---:|
 | 实体 macro-F1（归一化后，辅助口径） | 0.8974 / 0.8874 | 0.9583 / 0.9346 | **+6.09pt / +3.36pt** |
 | 实体 macro-F1（原始未归一化，**验收口径 + gate**） | 0.8974 / 0.8874 | 0.8682 / 0.8466 | **−2.92pt / −5.44pt** |
-| 实体 strict-F1（**也进 gate**，mean / worst） | 0.9624 / 0.9559 | 0.9570 / 0.8802 | **−0.54pt / −8.50pt** |
+| 实体 strict-F1（**也进 gate**，mean / worst） | 0.9624 / 0.9559 | 0.9570 / 0.8802 | **−0.54pt / −8.50pt**（mean 的另一算法见下注） |
 | 关系 F1（全量，归一化口径，辅助，也进 gate） | 0.7042 / 0.5876 | 0.6410 / 0.6151 | **−6.32pt / −16.33pt** |
 | 关系 F1（全量，原始未归一化，**验收口径 + gate**） | 0.7042 / 0.5876 | 0.5954 / 0.5908 | **−10.88pt / −19.28pt** |
 | 关系 recall（金标覆盖子集，micro） | 0.7731 / 0.6842 | 0.8561 / 0.8275 | **+8.30pt / +2.63pt** |
@@ -139,6 +140,13 @@ Python，不发请求）；不含 12 篇真实文档批次（每篇 1–2 块）
 
 `delta_summary` 的完整数值、每轮差值与 `n` 都在 JSON 里；CI 用 t 分布
 （n=5，t=2.776），标签明确写 `unpaired independent repeats`。
+
+**strict mean 的两种显示口径（评审 r7 N2）**：主表与 gate 的 `−0.54pt`
+是“两档四位存储均值相减”（0.9570−0.9624）；上表 CI 的 `−0.53pt` 来自
+`delta_summary.entity_strict_f1.mean_pt = −0.534`，即**逐轮对齐差的均值**。
+两者只差 0.006pt 的舍入，方向与门槛结论一致（都低于 −0.5pt）；JSON 同时
+保留 `gate.entity_strict_f1_mean_delta_pt=-0.54` 与 `delta_summary.mean_pt=-0.534`，
+报告不再把这两个数当同一个算法。
 
 ### 逐轮 macro（mean-of-N 与 worst-of-N 的原始来源）
 
@@ -343,8 +351,14 @@ gate 返回的 `caliber` 字段把三种口径写死，报告不再把两列当�
 - **合成用例**才是逐对断言：`tests/test_chunk_budget.py` 用正常句界的正文
   验证每一对相邻块 **0 < overlap ≤ 200**（评审 N1 加固）；压力语料只保证
   `overlap_pairs_min > 0`，gate 的 `overlap_observed` 因此只是冒烟检查。
+- **单块文档不再误判（评审 r7 N3）**：单块文档没有“可重叠的相邻对”，
+  旧实现把它算进 `overlap_pairs_min` 会把 0 当成失败。现在
+  `overlap_pairs_min` 只在多块文档上取最小值，并额外落盘
+  `overlap_documents_with_multiple_chunks`；若整批一篇多块文档都没有，
+  `overlap_observed` 仍 fail closed（无法观测就不放行）。
 - 证据字段：JSON `overlap_frozen_baseline` +
   `overlap_observed.{baseline,candidate}`（实际对数/可重叠对数/比例）+
+  `budgets.<budget>.overlap_documents_with_multiple_chunks` +
   `gate.checks.overlap_*`。
 
 ## 残余文档级跨块关系（显式统计，不算本单回归）
@@ -380,8 +394,8 @@ gate 返回的 `caliber` 字段把三种口径写死，报告不再把两列当�
 | 1 | 3500 可经现有配置项设置；overlap 默认值与行为不变（配置级测试） | **达成**：默认 1500/200；3500 可设且 overlap 仍 200；合成用例逐对断言 0<x≤200；压力语料实际重叠 1500 8/25、3500 7/8（长句使 seed 为空，非逐对） |
 | 2 | 1500/3500 同口径：实体 macro-F1 跌 ≤0.5pt、关系 F1 不降、附类型 P/R | **未通过（不切换）**：实体原始验收口径 −2.92/−5.44（gate raw 两条 fail）；实体 strict mean −0.54 / worst −8.50（gate strict 两条也 fail）；归一化后 +6.09/+3.36 只作辅助口径且同样进 gate；全量关系 F1 归一化 −6.32/−16.33、原始 −10.88/−19.28（两条 raw check 也 fail）、覆盖子集 precision −12.28/−28.66（不过）；覆盖子集 recall +8.30/+2.63（过）；按类型 P/R 的 raw 与 normalized 两套都已在报告/JSON 出数 |
 | 3 | 同报告含调用数、输入/输出 token、端到端耗时，方向与探针一致 | **调用/token 达成，墙钟未改善**：调用 −65.38%，输入 −43.64%，输出 −22.61%，墙钟 +14.25%（如实） |
-| 4 | 3500 档压力语料 + 真实文档截断块为 0（或不高于 1500） | **达成**：压力 0/0；真实 12 篇 0/0，含 5,360-unit 长文在 3500 档切成 2 块、最大 3,483 units、截断 0；`exercises_candidate_budget=true` |
-| 5 | 真实 tokenizer 核算最大块总输入并给出安全余量 | **达成且进 gate**：4,448 tokens（来自长文），input+output 余量 1,038,726（99.06%）；评审 r6 F1 后 `context_within_window` 是 gate 的一条 check（`4,448+5,402<=1,048,576`），能力缺失时 fail closed |
+| 4 | 3500 档压力语料 + 真实文档截断块为 0（或不高于 1500） | **达成且覆盖进 gate**：压力 0/0；真实 12 篇 0/0，含 5,360-unit 长文在 3500 档切成 2 块、最大 3,483 units、截断 0；评审 r7 S2 后 `real_doc_coverage_exercises_budget` 是 gate 的一条 check（空批次或只有短桩直接 fail），不再只写报告 |
+| 5 | 真实 tokenizer 核算最大块总输入并给出安全余量 | **达成且进 gate**：4,448 tokens（来自长文），input+output 余量 1,038,726（99.06%）；评审 r6 F1 + r7 S1 后 `context_within_window` 是 gate 的一条 check（`4,448+5,402<=1,048,576`），能力缺失或 usage 计数为 0/0 时 fail closed |
 | 6 | 残余文档级跨块关系比例显式统计并写入报告 | **达成**：1500=1.17%，3500=0%；文档级远距类别 17.54% 另列；跨句 gold 未覆盖计数已落盘（本轮 0） |
 | 7 | 改默认值是独立可回滚步骤；未切换时线上行为不变 | **未切换**：默认仍 1500；切换 commit 未添加；配置未设时行为由测试锁定不变 |
 | 8 | 既有分块偏移不变量测试全部通过 | **达成**：`tests/test_chunking.py` + 新增 3500 偏移/切片断言全绿 |
@@ -521,12 +535,42 @@ closed 规则。
   `-10.88/-19.28/0.5954/8/25`；改为内联小 payload，保留 `--from-json`
   冒烟。
 
+## 评审 r7 修复（S1 / S2 + N1–N3）
+
+- **S1（should）**：`context_within_window` 不再接受 0/0 token。判断改为
+  context window、input、output 都必须是**有限正数**；provider usage
+  缺失时 max_input/max_output 为 0，直接 fail closed。`_safety_margin.
+  within_context` 同步修正，报告不再把 0/0 写成“在上下文内”。
+- **S2（should）**：real-doc 覆盖进 gate。`_gate_input` 增加
+  `real_doc_documents` / `real_doc_max_document_units`，gate 新增
+  `real_doc_coverage_exercises_budget`：批次必须非空且最大文档 units
+  严格超过候选预算；空 rows 或只有 ≤341 units 短桩时直接 fail，验收 #4
+  不再能空转。`--from-json` 与 live 走同一个 `_gate_input`。
+- **N1（nit）**：`_raw_entity_by_type_from_rows` 删除 `index % len(cases)`
+  的静默重建；rows 不是 cases 整数倍时直接 `ValueError`，对齐时按“每轮
+  完整重复 cases”展开，避免缺行/乱序时产出错配的按类型数字。
+- **N2（nit）**：报告显式区分 strict mean 的两种显示：gate 的 −0.54pt
+  （四位存储均值相减）与 `delta_summary.mean_pt=-0.534`（逐轮对齐均值，
+  CI 表显示 −0.53pt）；两者不当作同一算法。
+- **N3（nit）**：`overlap_pairs_min` 只在多块文档上取最小值，单块文档不再
+  把 0 误判成 overlap 失败；新增
+  `overlap_documents_with_multiple_chunks`（每轮多块文档数的最小值），
+  整批都没有多块文档时仍 fail closed。
+
+本轮 gate 新增 1 条 check（`real_doc_coverage_exercises_budget`），并修正
+已有 `overlap_observed` 的单块误判；两条均通过。`gate.failures` 仍是原有
+**10 条**（验收 #2 未达成，默认不切换）。
+
 ## 证据文件
 
 | 文件 | 内容 |
 |---|---|
 | `docs/evidence/04-budget-ab.json` | 逐轮/逐篇聚合与单块极值、逐篇预测面（原始+归一化关系端点）、类型 P/R、双口径关系指标、overlap 实际/可重叠对数、残差明细、上下文余量、gate（实体与关系均 raw+normalized、caliber、gate_recompute）、CI |
 | `docs/evidence/04-budget-ab.md` | 本报告 |
+| `docs/evidence/04-r7-red-tests.txt` | 先红：评审 r7 新增测试在 r6 HEAD 上的失败输出（11 failed / 3 passed） |
+| `docs/evidence/04-r7-green-tests.txt` | 后绿：评审 r7 定向用例 |
+| `docs/evidence/04-r7-full-suite.txt` | 全量 pytest（离线） |
+| `docs/evidence/04-r7-fix-evidence.md` | S1/S2 + N1–N3 逐条处理结果与证据 |
 | `docs/evidence/04-r6-red-tests.txt` | 先红：评审 r6 新增测试在 `9753ae3` 上的失败输出（13 failed / 1 passed） |
 | `docs/evidence/04-r6-green-tests.txt` | 后绿：评审 r6 定向用例（113 passed） |
 | `docs/evidence/04-r6-full-suite.txt` | 全量 pytest（离线，563 passed / 66 skipped） |

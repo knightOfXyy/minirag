@@ -218,13 +218,24 @@ def _raw_entity_by_type_from_rows(rows, cases=None) -> dict:
     ``cases``（金标语料）与 ``predicted_entities`` 重建，并把结果写回行，
     让后续 ``--from-json`` 不再依赖语料目录。两边都没有时返回空 dict，
     不伪造数字。
+
+    评审 r7 N1：旧实现用 ``index % len(cases)`` 猜对应关系，rows 缺行或
+    轮次顺序变化时会静默错配。这里要求 rows 是 cases 的整数倍，并按
+    “每轮完整重复一遍 cases”展开；不能整除时直接报错，不产出看似合法
+    但错配的按类型数字。
     """
     totals: dict[str, list[int]] = {}
+    aligned_cases = None
+    if cases:
+        if len(rows) % len(cases) != 0:
+            raise ValueError(
+                "raw_entity_by_type 重建需要 rows 与 cases 按轮次对齐："
+                f"rows={len(rows)} 不是 cases={len(cases)} 的整数倍")
+        aligned_cases = list(cases) * (len(rows) // len(cases))
     for index, row in enumerate(rows):
         per_type = row.get("raw_entity_by_type")
-        if not per_type and cases:
-            # rows 按轮次展开；同一轮内与 cases 顺序一一对应。
-            case = cases[index % len(cases)]
+        if not per_type and aligned_cases is not None:
+            case = aligned_cases[index]
             pred = ExtractionResult(entities=[
                 Entity(type=e.get("type", ""), name=e.get("name", ""))
                 for e in row.get("predicted_entities", [])
@@ -272,6 +283,28 @@ def _enrich_result_derived(result: dict, *, cases=None) -> None:
     result.pop("overlap_pairs_possible_min", None)
     result.pop("overlap_pairs_ratio_min", None)
     rows = [row for rnd in rounds for row in rnd.get("cases", [])]
+    # 评审 r7 N3：单块文档没有可重叠的相邻对，不能参与 overlap 最小值，
+    # 否则一篇单块文档就会让整档 overlap_observed 误判为 0。旧证据没有
+    # ``overlap_pairs_possible`` 时按 n_chunks-1 回退。
+    def _possible(row: dict) -> int:
+        value = row.get("overlap_pairs_possible")
+        if value is None:
+            value = max(0, int(row.get("n_chunks", 1) or 1) - 1)
+        return int(value or 0)
+
+    multi_chunk_rows = [row for row in rows if _possible(row) > 0]
+    # 按“每轮有多少篇多块文档”取最小值；同一篇文档被 repeat 多次不重复计数。
+    per_round_multi = [
+        sum(1 for row in rnd.get("cases", []) if _possible(row) > 0)
+        for rnd in rounds
+    ]
+    result["overlap_documents_with_multiple_chunks"] = min(
+        per_round_multi, default=0)
+    result["overlap_pairs_min"] = min(
+        (int(row.get("overlap_pairs", 0) or 0)
+         for row in multi_chunk_rows),
+        default=0,
+    )
     if rows and not result.get("raw_entity_by_type"):
         result["raw_entity_by_type"] = _raw_entity_by_type_from_rows(
             rows, cases)
@@ -579,8 +612,18 @@ async def _run_corpus(
             (row["max_chunk_units"] for row in all_rows), default=0),
         "max_chunk_chars": max(
             (row["max_chunk_chars"] for row in all_rows), default=0),
+        # 评审 r7 N3：单块文档没有可重叠的相邻对，不参与最小值；没有
+        # 任何多块文档时 min 为 0，由 gate 的 overlap_observed fail closed。
+        # 计数取每轮多块文档数的最小值，repeat 不重复放大小样本。
+        "overlap_documents_with_multiple_chunks": min(
+            (sum(1 for row in rnd["cases"]
+                 if int(row.get("overlap_pairs_possible", 0) or 0) > 0)
+             for rnd in rounds),
+            default=0),
         "overlap_pairs_min": min(
-            (row["overlap_pairs"] for row in all_rows), default=0),
+            (row["overlap_pairs"] for row in all_rows
+             if int(row.get("overlap_pairs_possible", 0) or 0) > 0),
+            default=0),
     }
 
 
@@ -748,7 +791,11 @@ def _safety_margin(budget_result: dict, real_docs: dict, capabilities: dict) -> 
         out["input_plus_output_margin_tokens"] = context - max_input - max_output
         out["input_plus_output_margin_pct"] = round(
             (context - max_input - max_output) / context * 100, 4)
-        out["within_context"] = (max_input + max_output) <= context
+        # 评审 r7 S1：usage 缺失时 max_input/max_output 为 0，不能因为
+        # “0+0 <= context”就写成 within_context。
+        out["within_context"] = (
+            max_input > 0 and max_output > 0
+            and (max_input + max_output) <= context)
     if output_cap:
         out["output_cap_margin_tokens"] = output_cap - max_output
     return out
@@ -776,8 +823,9 @@ def gate_thresholds() -> dict:
         "context_margin": (
             "候选档 provider 真实 tokenizer 的 "
             "max_chunk_input_tokens + max_chunk_output_tokens 必须 "
-            "<= /models context_window；能力缺失（None/0）时 "
-            "context_within_window fail closed（评审 r6 F1，验收 #5）"),
+            "<= /models context_window；能力缺失（None/0）或 usage 计数为 "
+            "0/0 时 context_within_window fail closed（评审 r6 F1 + r7 S1，"
+            "验收 #5）"),
         "relation_gate": ("金标覆盖子集 recall mean/worst 不下降；"
                           f"precision mean/worst 跌幅 <="
                           f"{MAX_RELATION_PRECISION_DROP_PT}pt"),
@@ -789,9 +837,14 @@ def gate_thresholds() -> dict:
         "relation_note": ("评审 r5 S1：raw_relation_f1_* 必填并进 checks，"
                           "不再只列报"),
         "truncated_chunks": "候选档必须为 0（压力语料 + 真实文档）",
+        "real_doc_coverage": (
+            "real-doc 批次必须非空且最大文档 units 超过候选预算；空批次或"
+            "只有短桩时 real_doc_coverage_exercises_budget fail（评审 r7 S2，"
+            "验收 #4）"),
         "overlap": ("冻结基线 200 不变；overlap_observed 只做 >0 冒烟检查，"
-                    "实际重叠对数/可重叠对数见 overlap_observed（长句可致"
-                    "并非逐对重叠）"),
+                    "单块文档不参与最小值（不再误判 0 对），但没有任何多块"
+                    "文档时 fail closed（评审 r7 N3）；实际重叠对数/可重叠"
+                    "对数见 overlap_observed（长句可致并非逐对重叠）"),
         "chunk_calls": "候选档必须下降",
         "budgets": "两档预算必须不同（1500-vs-1500 不能 passed）",
     }
@@ -827,6 +880,8 @@ def _gate_input(
     两处同步；收敛到这里后，新增口径只改这一个函数。
     """
     safety = safety or {}
+    # 评审 r7 S2：覆盖率不再只写进 gate 报告，而是作为 gate 输入进 checks。
+    coverage = _real_doc_coverage(real, candidate_budget=budget)
     return {
         "budget": budget,
         # 评审 r6 F1：上下文余量能力。缺失时保持 None，由 gate fail closed。
@@ -835,6 +890,10 @@ def _gate_input(
         "max_context_output_tokens": safety.get("max_chunk_output_tokens"),
         "overlap_units": overlap_units,
         "overlap_pairs_min": result["overlap_pairs_min"],
+        "overlap_documents_with_multiple_chunks": result.get(
+            "overlap_documents_with_multiple_chunks", 0),
+        "real_doc_documents": coverage["documents"],
+        "real_doc_max_document_units": coverage["max_document_units"],
         "chunk_calls": result["chunk_calls_total_mean"],
         "truncated_chunks": (
             result["truncated_chunks_max"]

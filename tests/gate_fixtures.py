@@ -20,6 +20,9 @@ def gate_metrics(**overrides):
         "budget": 1500,
         "overlap_units": 200,
         "overlap_pairs_min": 8,
+        "overlap_documents_with_multiple_chunks": 3,
+        "real_doc_documents": 12,
+        "real_doc_max_document_units": 5360,
         "chunk_calls": 14,
         "truncated_chunks": 3,
         "context_window": 1048576,
@@ -217,7 +220,12 @@ def evidence_payload(*, candidate_overrides=None, overlap=None) -> dict:
                 "truncated_chunks_total": 0,
                 "max_chunk_input_tokens": 100,
                 "max_chunk_output_tokens": 20,
-                "rows": [],
+                # 评审 r7 S2：真实文档批次必须非空且包含超过候选预算的长文；
+                # 旧夹具的空 rows 会让 gate 的 real-doc check 空转。
+                "rows": [{
+                    "document_units": 5360,
+                    "max_chunk_units": 3483 if b == 3500 else 1497,
+                }],
             }
             for b in (1500, 3500)
         },
@@ -254,7 +262,13 @@ GATE_FAILURE_CASES = [
      "entity_strict_worst_within_0_5pt"),
     ({"max_context_input_tokens": 1048576},
      "context_within_window"),
+    # 评审 r7 S1：usage 缺失（0/0）时必须 fail closed。
+    ({"max_context_input_tokens": 0, "max_context_output_tokens": 0},
+     "context_within_window"),
     ({"truncated_chunks": 1}, "truncated_chunks_zero"),
+    # 评审 r7 S2：空 real-doc 批次不能放过验收 #4。
+    ({"real_doc_documents": 0, "real_doc_max_document_units": 0},
+     "real_doc_coverage_exercises_budget"),
     ({"overlap_units": 0}, "overlap_unchanged"),
     ({"overlap_pairs_min": 0}, "overlap_observed"),
     ({"chunk_calls": 14}, "chunk_calls_decreased"),
