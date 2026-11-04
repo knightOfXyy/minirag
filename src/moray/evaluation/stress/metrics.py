@@ -259,6 +259,21 @@ def _prf_dict(tp: int, fp: int, fn: int) -> dict:
     return PRF(tp=tp, fp=fp, fn=fn).as_dict()
 
 
+def entity_type_counts(
+    gold: ExtractionResult, pred: ExtractionResult, *, strict: bool = False
+) -> dict[str, tuple[int, int, int]]:
+    """按实体类型返回 ``(tp, fp, fn)``（relaxed 默认，评审 r6 F4）。
+
+    只遍历金标与预测里实际出现的类型；与 :func:`aggregate_cases` 共用
+    :func:`_count_keys`，避免按类型表与顶层实体数分叉。
+    """
+    types = sorted({e.type for e in (*gold.entities, *pred.entities)})
+    return {
+        etype: _count_keys(pred, gold, etype, strict=strict)
+        for etype in types
+    }
+
+
 def aggregate_cases(evaluations: list[CaseEvaluation]) -> dict:
     """跨文档微平均：实体 strict/relaxed + 按类型 relaxed + 关系。"""
     strict = PRF()
@@ -288,18 +303,16 @@ def aggregate_cases(evaluations: list[CaseEvaluation]) -> dict:
 
     # 同时收金标与预测的类型：只遍历金标会把"金标里没有的类型"的 FP
     # 丢出按类型表（顶层 entity_relaxed 仍计入），两张表对不上账。
-    types = sorted({e.type for ev in evaluations
-                    for e in (*ev.gold.entities, *ev.pred.entities)})
-    by_type: dict[str, dict] = {}
-    for etype in types:
-        tp = fp = fn = 0
-        for ev in evaluations:
-            t, f, miss = _count_keys(
-                ev.pred, ev.gold, etype, strict=False)
-            tp += t
-            fp += f
-            fn += miss
-        by_type[etype] = _prf_dict(tp, fp, fn)
+    totals: dict[str, list[int]] = {}
+    for ev in evaluations:
+        for etype, (tp, fp, fn) in entity_type_counts(
+                ev.gold, ev.pred).items():
+            acc = totals.setdefault(etype, [0, 0, 0])
+            acc[0] += tp
+            acc[1] += fp
+            acc[2] += fn
+    by_type = {
+        etype: _prf_dict(*acc) for etype, acc in sorted(totals.items())}
 
     out = {
         "documents": len(evaluations),

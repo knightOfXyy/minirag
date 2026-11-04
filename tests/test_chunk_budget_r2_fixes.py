@@ -29,7 +29,7 @@ from moray.evaluation.stress.budget import evaluate_budget_gate
 from moray.evaluation.stress.metrics import relation_covered_stats
 from moray.schema import Entity, EntityMention, ExtractionResult, Relation, Span
 
-from gate_fixtures import gate_metrics, passing_candidate
+from gate_fixtures import evaluate_gate, gate_metrics, passing_candidate
 
 # ---------------------------------------------------------------------------
 # F1：关系端点归一化
@@ -118,14 +118,14 @@ def test_evaluate_case_default_keeps_legacy_raw_caliber():
 # F2：全量关系 F1 也必须参与放行（覆盖子集不能替代）
 # ---------------------------------------------------------------------------
 def test_gate_passes_only_when_full_relation_f1_also_holds():
-    gate = evaluate_budget_gate(gate_metrics(), passing_candidate())
+    gate = evaluate_gate(gate_metrics(), passing_candidate())
     assert gate["passed"] is True
     assert gate["checks"]["relation_full_f1_mean_not_lower"] is True
     assert gate["checks"]["relation_full_f1_worst_not_lower"] is True
 
 
 def test_gate_fails_when_full_relation_f1_drops_even_if_covered_subset_passes():
-    gate = evaluate_budget_gate(
+    gate = evaluate_gate(
         gate_metrics(), passing_candidate(
             relation_f1_mean=0.4300, relation_f1_worst=0.4000))
     # 覆盖子集全过，但全量关系 F1 掉 7pt：工单要求“关系 F1 不下降”，必须拦下。
@@ -202,7 +202,7 @@ def test_chunk_cases_does_not_collide_on_duplicate_names():
 # F7：gate 显式标注两轴口径
 # ---------------------------------------------------------------------------
 def test_gate_reports_macro_and_micro_calibers():
-    gate = evaluate_budget_gate(gate_metrics(), passing_candidate())
+    gate = evaluate_gate(gate_metrics(), passing_candidate())
     assert "macro" in gate["caliber"]["entity_macro_f1"]
     assert "micro" in gate["caliber"]["relation_covered_prf"]
     assert "macro" in gate["caliber"]["relation_full_f1"]
