@@ -9,15 +9,17 @@
 * :func:`evaluate_budget_gate` —— 把 1500/3500 两档的指标塞进同一套门槛：
   **实体原始（未归一化）macro-F1 与类型前缀标签归一化后的 macro-F1 两套
   口径的 mean/worst 跌幅都 ≤0.5pt**（评审 r4 B1：辅助口径不能替代验收
-  口径）、**全量关系 F1 的 mean/worst 不下降**（工单验收 2）、**关系
-  「金标覆盖子集」的 recall mean/worst 不下降、precision mean/worst 跌幅
-  ≤0.5pt**、候选档截断块为 0、overlap 配置不变且实际仍发生重叠、单文档
-  调用数下降、两档预算必须不同。任一不满足即 ``passed=False``，并逐项给出
-  失败原因——门槛写在代码里，不能靠报告手写一句“达标”放行。
+  口径）、**全量关系 F1 的 raw 与 normalized 两套 mean/worst 都不下降**
+  （工单验收 2；评审 r5 S1：原始口径不能只列报）、**关系「金标覆盖子集」
+  的 recall mean/worst 不下降、precision mean/worst 跌幅 ≤0.5pt**、候选档
+  截断块为 0、overlap 配置不变且实际仍发生重叠、单文档调用数下降、两档
+  预算必须不同。任一不满足即 ``passed=False``，并逐项给出失败原因——门槛
+  写在代码里，不能靠报告手写一句“达标”放行。
 
   全量口径（含 02 金标刻意未标注句面上的 FP）与覆盖子集口径并列列报；
   两者都参与放行（评审 r2 F2 修复：此前全量 F1 只列报，导致全量掉 7pt
-  仍可返回 passed）。
+  仍可返回 passed）。评审 r5 S1 进一步把全量关系 F1 拆成 raw/normalized
+  双口径，两套都进 checks。
 
 口径说明（与工单 02/01 对齐）：
 
@@ -153,6 +155,9 @@ _REQUIRED_GATE_KEYS = (
     "relation_covered_precision_mean", "relation_covered_precision_worst",
     # 工单 04 验收 2 明确要求“关系 F1 不下降”，全量口径必须参与放行。
     "relation_f1_mean", "relation_f1_worst",
+    # 评审 r5 S1：全量关系 F1 也分 raw/normalized 双口径；原始（验收）
+    # 口径不能只列报，否则归一化口径转正时可在原始关系 F1 更低时放行。
+    "raw_relation_f1_mean", "raw_relation_f1_worst",
 )
 # 评审 r2 F11：只有候选档读 ``truncated_chunks``，基线不再被强制要求。
 _REQUIRED_CANDIDATE_KEYS = ("truncated_chunks",)
@@ -162,6 +167,7 @@ _WORST_DELTA_ROUND_KEY = {
     "entity_macro_f1_worst_delta_pt": "entity_macro_f1",
     "raw_entity_macro_f1_worst_delta_pt": "raw_entity_macro_f1",
     "relation_f1_worst_delta_pt": "relation_f1",
+    "raw_relation_f1_worst_delta_pt": "raw_relation_f1",
     "relation_covered_recall_worst_delta_pt": "relation_covered_recall",
     "relation_covered_precision_worst_delta_pt": "relation_covered_precision",
 }
@@ -200,11 +206,14 @@ def evaluate_budget_gate(
     * 实体 **原始未归一化** macro-F1 的 mean/worst 跌幅 ≤0.5pt（验收口径）；
     * 实体 **类型前缀标签归一化后** macro-F1 的 mean/worst 跌幅 ≤0.5pt
       （辅助口径；两套都进 ``checks``，评审 r4 B1）；
-    * **全量关系 F1 的 mean/worst 不下降**（工单验收 2 的原始判据，F2）；
+    * **全量关系 F1 的 raw（验收）与 normalized（辅助）两套 mean/worst
+      都不下降**（工单验收 2 的原始判据，F2 + 评审 r5 S1）；
     * 关系「金标覆盖子集」recall 的 mean/worst 不下降；
     * 关系「金标覆盖子集」precision 的 mean/worst 跌幅 ≤0.5pt；
     * 候选档截断块为 0；
-    * overlap 配置不变（冻结基线，不接受调用方自证）且实际仍有重叠；
+    * overlap 配置不变（冻结基线，不接受调用方自证）且实际仍有重叠
+      （``overlap_observed`` 只是 >0 冒烟检查；压力语料并非每对相邻块都
+      重叠，逐档实际对数/可重叠对数由 A/B 工具的 ``overlap_observed`` 落盘）；
     * 单文档调用数下降；
     * 两档预算必须不同（评审 r4 N3：1500-vs-1500 不能 passed）。
 
@@ -271,6 +280,9 @@ def evaluate_budget_gate(
     full_mean_delta = _delta("relation_f1_mean")
     full_worst_delta = _delta(
         "relation_f1_worst", "relation_f1_worst_delta_pt")
+    raw_full_mean_delta = _delta("raw_relation_f1_mean")
+    raw_full_worst_delta = _delta(
+        "raw_relation_f1_worst", "raw_relation_f1_worst_delta_pt")
 
     overlap_unchanged = (
         candidate["overlap_units"] == baseline["overlap_units"])
@@ -286,6 +298,8 @@ def evaluate_budget_gate(
             entity_worst_delta >= -max_entity_drop_pt),
         "relation_full_f1_mean_not_lower": full_mean_delta >= 0.0,
         "relation_full_f1_worst_not_lower": full_worst_delta >= 0.0,
+        "relation_raw_full_f1_mean_not_lower": raw_full_mean_delta >= 0.0,
+        "relation_raw_full_f1_worst_not_lower": raw_full_worst_delta >= 0.0,
         "relation_covered_recall_mean_not_lower": covered_recall_mean_delta >= 0.0,
         "relation_covered_recall_worst_not_lower": covered_recall_worst_delta >= 0.0,
         "relation_covered_precision_mean_within_0_5pt": (
@@ -317,12 +331,22 @@ def evaluate_budget_gate(
         # 全量口径：与覆盖子集并列列报，并参与 checks（F2）。
         "relation_full_mean_delta_pt": full_mean_delta,
         "relation_full_worst_delta_pt": full_worst_delta,
+        # 评审 r5 S1：全量关系 F1 也分 raw/normalized 双口径，均进 checks。
+        "relation_raw_full_mean_delta_pt": raw_full_mean_delta,
+        "relation_raw_full_worst_delta_pt": raw_full_worst_delta,
         # 评审 r4 B1：实体轴双口径显式标注，raw 是验收口径。
         "entity_caliber": {
             "acceptance": "raw（原始未归一化）macro-F1",
             "auxiliary": "normalized（类型前缀标签归一化后）macro-F1",
             "rule": ("raw 与 normalized 的 mean/worst 都进 checks，"
                      "任一跌幅超过 0.5pt 即 fail；辅助口径不能替代验收口径"),
+        },
+        # 评审 r5 S1：关系轴沿用同一规则，raw 不能只列报。
+        "relation_caliber": {
+            "acceptance": "raw（原始未归一化）全量关系 F1",
+            "auxiliary": "normalized（类型前缀标签归一化后）全量关系 F1",
+            "rule": ("raw 与 normalized 全量关系 F1 的 mean/worst 都进 "
+                     "checks，任一低于基线即 fail；辅助口径不能替代验收口径"),
         },
         # 评审 r2 F7：两轴口径不同，报告不得按同一列直接比较。
         "caliber": {

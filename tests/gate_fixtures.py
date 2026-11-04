@@ -31,6 +31,8 @@ def gate_metrics(**overrides):
         "relation_covered_precision_worst": 0.8500,
         "relation_f1_mean": 0.5000,
         "relation_f1_worst": 0.4500,
+        "raw_relation_f1_mean": 0.5000,
+        "raw_relation_f1_worst": 0.4500,
     }
     base.update(overrides)
     return base
@@ -53,6 +55,8 @@ def passing_candidate(**overrides):
         relation_covered_precision_worst=0.8450,
         relation_f1_mean=0.5000,
         relation_f1_worst=0.4500,
+        raw_relation_f1_mean=0.5000,   # 原始验收口径：持平
+        raw_relation_f1_worst=0.4500,
     )
     candidate.update(overrides)
     return candidate
@@ -78,6 +82,10 @@ GATE_FAILURE_CASES = [
      "relation_covered_precision_worst_within_0_5pt"),
     ({"relation_f1_mean": 0.4999}, "relation_full_f1_mean_not_lower"),
     ({"relation_f1_worst": 0.4499}, "relation_full_f1_worst_not_lower"),
+    ({"raw_relation_f1_mean": 0.4999},
+     "relation_raw_full_f1_mean_not_lower"),
+    ({"raw_relation_f1_worst": 0.4499},
+     "relation_raw_full_f1_worst_not_lower"),
     ({"truncated_chunks": 1}, "truncated_chunks_zero"),
     ({"overlap_units": 0}, "overlap_unchanged"),
     ({"overlap_pairs_min": 0}, "overlap_observed"),
