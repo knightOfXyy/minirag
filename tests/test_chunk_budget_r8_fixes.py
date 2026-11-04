@@ -123,7 +123,7 @@ def test_report_header_references_existing_evidence_commits():
     assert "9400e6d" not in header
     assert "a7dbdfe" in header and "ff0f33c" in header
     assert "评审 r4 只改判据" not in text
-    assert "评审 r4–r7 只改判据" in text
+    assert "评审 r4–r9 只改判据" in text
 
 
 # ---------------------------------------------------------------------------
