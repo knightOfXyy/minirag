@@ -16,6 +16,12 @@
   预算必须不同。任一不满足即 ``passed=False``，并逐项给出失败原因——门槛
   写在代码里，不能靠报告手写一句“达标”放行。
 
+  评审 r7 又补了两处空转口：真实 tokenizer 的 input/output 计数为 0（provider
+  usage 缺失）时 ``context_within_window`` fail closed；real-doc 批次必须非空
+  且最大文档 units 超过候选预算，空批次或只有短桩时
+  ``real_doc_coverage_exercises_budget`` fail（验收 #4）。overlap 的最小值只在
+  多块文档上统计，单块文档的 0 对不再误判，但整批没有多块文档时仍 fail closed。
+
   全量口径（含 02 金标刻意未标注句面上的 FP）与覆盖子集口径并列列报；
   两者都参与放行（评审 r2 F2 修复：此前全量 F1 只列报，导致全量掉 7pt
   仍可返回 passed）。评审 r5 S1 进一步把全量关系 F1 拆成 raw/normalized
@@ -218,15 +224,20 @@ def evaluate_budget_gate(
       （辅助口径；两套都进 ``checks``，评审 r4 B1）；
     * 实体 **strict** F1 的 mean/worst 跌幅 ≤0.5pt（评审 r6 F3）；
     * 候选档真实 tokenizer 的 ``max_input + max_output <= context_window``
-      （验收 #5；能力缺失 fail closed，评审 r6 F1）；
+      （验收 #5；能力缺失或 usage 计数 0/0 时 fail closed，评审 r6 F1 +
+      r7 S1）；
     * **全量关系 F1 的 raw（验收）与 normalized（辅助）两套 mean/worst
       都不下降**（工单验收 2 的原始判据，F2 + 评审 r5 S1）；
     * 关系「金标覆盖子集」recall 的 mean/worst 不下降；
     * 关系「金标覆盖子集」precision 的 mean/worst 跌幅 ≤0.5pt；
     * 候选档截断块为 0；
-    * overlap 配置不变（冻结基线，不接受调用方自证）且实际仍有重叠
-      （``overlap_observed`` 只是 >0 冒烟检查；压力语料并非每对相邻块都
-      重叠，逐档实际对数/可重叠对数由 A/B 工具的 ``overlap_observed`` 落盘）；
+    * real-doc 批次非空且最大文档 units 严格超过候选预算（验收 #4；评审
+      r7 S2，空批次/短桩直接 fail）；
+    * overlap 配置不变（冻结基线，不接受调用方自证）且**多块文档**中实际
+      仍有重叠（``overlap_observed`` 只是 >0 冒烟检查；单块文档没有可重叠
+      相邻对，不参与最小值，但整批没有多块文档时 fail closed；压力语料并非
+      每对相邻块都重叠，逐档实际对数/可重叠对数由 A/B 工具的
+      ``overlap_observed`` 落盘）；
     * 单文档调用数下降；
     * 两档预算必须不同（评审 r4 N3：1500-vs-1500 不能 passed）。
 
