@@ -188,6 +188,8 @@ def test_gate_input_helper_fills_all_required_keys_from_one_place():
         "overlap_pairs_min": 8,
         "chunk_calls_total_mean": 26.0,
         "truncated_chunks_max": 0,
+        # 评审 r8 S1：_gate_input 现在合并压力语料与真实文档的失败块。
+        "failed_chunks_max": 0,
         "entity_macro_f1_mean": 0.9,
         "entity_macro_f1_worst": 0.9,
         "raw_entity_macro_f1_mean": 0.9,
@@ -204,10 +206,12 @@ def test_gate_input_helper_fills_all_required_keys_from_one_place():
         "raw_relation_f1_worst": 0.7,
     }
     gate_input = _gate_input(
-        result, budget=1500, real={"truncated_chunks_total": 0},
+        result, budget=1500,
+        real={"truncated_chunks_total": 0, "failed_chunks_total": 0},
         overlap_units=200)
     assert set(_REQUIRED_GATE_KEYS) <= set(gate_input)
     assert gate_input["truncated_chunks"] == 0
+    assert gate_input["failed_chunks"] == 0
 
 
 # ---------------------------------------------------------------------------

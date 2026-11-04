@@ -1,0 +1,161 @@
+FFFFFFFFFFFFF                                                            [100%]
+=================================== FAILURES ===================================
+_______________ test_gate_fails_when_candidate_has_failed_chunks _______________
+
+    def test_gate_fails_when_candidate_has_failed_chunks():
+        gate = evaluate_gate(
+            gate_metrics(),
+            passing_candidate(failed_chunks=1),
+        )
+>       assert gate["checks"]["failed_chunks_zero"] is False
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'failed_chunks_zero'
+
+tests/test_chunk_budget_r8_fixes.py:41: KeyError
+________________ test_gate_passes_failed_chunks_check_when_zero ________________
+
+    def test_gate_passes_failed_chunks_check_when_zero():
+        gate = evaluate_gate(gate_metrics(), passing_candidate(failed_chunks=0))
+>       assert gate["checks"]["failed_chunks_zero"] is True
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'failed_chunks_zero'
+
+tests/test_chunk_budget_r8_fixes.py:47: KeyError
+______________ test_overlap_stats_names_case_run_count_distinctly ______________
+
+    def test_overlap_stats_names_case_run_count_distinctly():
+        from tools.chunk_budget_ab import _overlap_stats
+    
+        case = {"n_chunks": 2, "overlap_pairs": 1, "overlap_pairs_possible": 1}
+        result = {"rounds": [{"cases": [dict(case) for _ in range(3)]}
+                             for _ in range(5)]}
+        stats = _overlap_stats(result)
+        # 5 轮 × 3 篇 = 15 个 case-run，不是 15 篇不同的多块文档。
+>       assert stats["case_runs_with_multiple_chunks"] == 15
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'case_runs_with_multiple_chunks'
+
+tests/test_chunk_budget_r8_fixes.py:62: KeyError
+_____________ test_overlap_stats_empty_result_uses_new_field_name ______________
+
+    def test_overlap_stats_empty_result_uses_new_field_name():
+        from tools.chunk_budget_ab import _overlap_stats
+    
+        stats = _overlap_stats({"rounds": []})
+>       assert stats["case_runs_with_multiple_chunks"] == 0
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'case_runs_with_multiple_chunks'
+
+tests/test_chunk_budget_r8_fixes.py:70: KeyError
+_____________ test_possible_pairs_falls_back_to_n_chunks_minus_one _____________
+
+    def test_possible_pairs_falls_back_to_n_chunks_minus_one():
+>       from tools.chunk_budget_ab import _possible_pairs
+E       ImportError: cannot import name '_possible_pairs' from 'tools.chunk_budget_ab' (/tmp/opencode/minirag-r8-red/tools/chunk_budget_ab.py)
+
+tests/test_chunk_budget_r8_fixes.py:78: ImportError
+_________ test_live_overlap_aggregate_uses_same_fallback_as_from_json __________
+
+    def test_live_overlap_aggregate_uses_same_fallback_as_from_json():
+>       from tools.chunk_budget_ab import _overlap_aggregate
+E       ImportError: cannot import name '_overlap_aggregate' from 'tools.chunk_budget_ab' (/tmp/opencode/minirag-r8-red/tools/chunk_budget_ab.py)
+
+tests/test_chunk_budget_r8_fixes.py:88: ImportError
+_______ test_enrichment_and_live_aggregate_agree_without_possible_field ________
+
+    def test_enrichment_and_live_aggregate_agree_without_possible_field():
+>       from tools.chunk_budget_ab import _enrich_result_derived, _overlap_aggregate
+E       ImportError: cannot import name '_overlap_aggregate' from 'tools.chunk_budget_ab' (/tmp/opencode/minirag-r8-red/tools/chunk_budget_ab.py)
+
+tests/test_chunk_budget_r8_fixes.py:99: ImportError
+___________ test_report_header_references_existing_evidence_commits ____________
+
+    def test_report_header_references_existing_evidence_commits():
+        text = (_REPO_ROOT / "docs/evidence/04-budget-ab.md").read_text(
+            encoding="utf-8")
+        header = "\n".join(text.splitlines()[:12])
+        # 头部不能再把 9400e6d 当成 r7 的证据提交（正文的修复说明可以提到它）。
+>       assert "9400e6d" not in header
+E       AssertionError: assert '9400e6d' not in '# 工单 04：分块预... / 79,362 字；'
+E         
+E         '9400e6d' is contained here:
+E            证据提交：紧随 `9400e6d` 的 evidence commit（报告/日志/修复说明 +
+E         ?           +++++++
+E             重生成 JSON；gate/thresholds/safety/strict/raw-by-type/real-doc/overlap
+E             均由 `--from-json` 从既有逐轮数据复算，未重跑 LLM）
+E           - 模型：`deepseek-flash`（provider `deepseek`，`api.deepseek.com`），temperature=0，
+E             **5 轮独立重复**（无 seed）；压力语料 3 篇 / 3 seed / 79,362 字；
+
+tests/test_chunk_budget_r8_fixes.py:123: AssertionError
+________ test_from_json_regenerates_failed_chunks_and_overlap_case_runs ________
+
+tmp_path = PosixPath('/tmp/pytest-of-dell/pytest-844/test_from_json_regenerates_fai0')
+
+    def test_from_json_regenerates_failed_chunks_and_overlap_case_runs(tmp_path):
+        regen = _run_inline_from_json(evidence_payload(), tmp_path)
+        checks = regen["gate"]["checks"]
+>       assert checks["failed_chunks_zero"] is True
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'failed_chunks_zero'
+
+tests/test_chunk_budget_r8_fixes.py:151: KeyError
+____________ test_from_json_stress_corpus_failed_chunks_fails_gate _____________
+
+tmp_path = PosixPath('/tmp/pytest-of-dell/pytest-844/test_from_json_stress_corpus_f0')
+
+    def test_from_json_stress_corpus_failed_chunks_fails_gate(tmp_path):
+        payload = evidence_payload()
+        payload["budgets"]["3500"]["failed_chunks_max"] = 2
+        regen = _run_inline_from_json(payload, tmp_path)
+>       assert regen["gate"]["checks"]["failed_chunks_zero"] is False
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'failed_chunks_zero'
+
+tests/test_chunk_budget_r8_fixes.py:163: KeyError
+_______________ test_from_json_real_doc_failed_chunks_fails_gate _______________
+
+tmp_path = PosixPath('/tmp/pytest-of-dell/pytest-844/test_from_json_real_doc_failed0')
+
+    def test_from_json_real_doc_failed_chunks_fails_gate(tmp_path):
+        payload = evidence_payload()
+        payload["real_docs"]["3500"]["failed_chunks_total"] = 1
+        regen = _run_inline_from_json(payload, tmp_path)
+>       assert regen["gate"]["checks"]["failed_chunks_zero"] is False
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'failed_chunks_zero'
+
+tests/test_chunk_budget_r8_fixes.py:171: KeyError
+_________ test_from_json_rebuilds_failed_chunks_from_old_evidence_rows _________
+
+tmp_path = PosixPath('/tmp/pytest-of-dell/pytest-844/test_from_json_rebuilds_failed0')
+
+    def test_from_json_rebuilds_failed_chunks_from_old_evidence_rows(tmp_path):
+        # 旧证据没有顶层 failed_chunks_max，但逐篇行有 failed_chunks；不能按 0 放行。
+        payload = evidence_payload()
+>       payload["budgets"]["3500"].pop("failed_chunks_max")
+E       KeyError: 'failed_chunks_max'
+
+tests/test_chunk_budget_r8_fixes.py:178: KeyError
+_____________ test_shared_failure_cases_cover_failed_chunks_check ______________
+
+    def test_shared_failure_cases_cover_failed_chunks_check():
+        failed = {case[1] for case in GATE_FAILURE_CASES}
+>       assert "failed_chunks_zero" in failed
+E       AssertionError: assert 'failed_chunks_zero' in {'chunk_calls_decreased', 'context_within_window', 'entity_normalized_mean_within_0_5pt', 'entity_normalized_worst_within_0_5pt', 'entity_raw_mean_within_0_5pt', 'entity_raw_worst_within_0_5pt', ...}
+
+tests/test_chunk_budget_r8_fixes.py:188: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_chunk_budget_r8_fixes.py::test_gate_fails_when_candidate_has_failed_chunks
+FAILED tests/test_chunk_budget_r8_fixes.py::test_gate_passes_failed_chunks_check_when_zero
+FAILED tests/test_chunk_budget_r8_fixes.py::test_overlap_stats_names_case_run_count_distinctly
+FAILED tests/test_chunk_budget_r8_fixes.py::test_overlap_stats_empty_result_uses_new_field_name
+FAILED tests/test_chunk_budget_r8_fixes.py::test_possible_pairs_falls_back_to_n_chunks_minus_one
+FAILED tests/test_chunk_budget_r8_fixes.py::test_live_overlap_aggregate_uses_same_fallback_as_from_json
+FAILED tests/test_chunk_budget_r8_fixes.py::test_enrichment_and_live_aggregate_agree_without_possible_field
+FAILED tests/test_chunk_budget_r8_fixes.py::test_report_header_references_existing_evidence_commits
+FAILED tests/test_chunk_budget_r8_fixes.py::test_from_json_regenerates_failed_chunks_and_overlap_case_runs
+FAILED tests/test_chunk_budget_r8_fixes.py::test_from_json_stress_corpus_failed_chunks_fails_gate
+FAILED tests/test_chunk_budget_r8_fixes.py::test_from_json_real_doc_failed_chunks_fails_gate
+FAILED tests/test_chunk_budget_r8_fixes.py::test_from_json_rebuilds_failed_chunks_from_old_evidence_rows
+FAILED tests/test_chunk_budget_r8_fixes.py::test_shared_failure_cases_cover_failed_chunks_check
+13 failed in 3.17s

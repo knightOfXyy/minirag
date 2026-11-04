@@ -1,13 +1,14 @@
-# 工单 04：分块预算 1500 → 3500 A/B 与上线判据（评审 r7 修复后：上下文 0/0 与 real-doc 覆盖进 checks、overlap 单块误判修正）
+# 工单 04：分块预算 1500 → 3500 A/B 与上线判据（评审 r8 修复后：失败块进 gate、overlap case-run 计数与可重叠对数收敛）
 
 - 分支/worktree：`yzc/tmp-yzd-feat-relation-202610-04`
   （`/home/dell/orca/workspaces/minirag/tmp-yzd-feat-relation-202610-04`）
-- 代码提交：`0f7efa7`（本轮 r7 修复：S1/S2 + N1–N3，基于 r6 的 `acac46f`）；
-  原始 A/B 数据采集自 `e78dd35`、采集时 `git_dirty=false`；上一轮 r6 修复为
-  `acac46f`
-- 证据提交：紧随 `9400e6d` 的 evidence commit（报告/日志/修复说明 +
+- 代码提交：本轮 r8 修复 `7ebfcd1`（S1 + N1–N3，基于 r7 的 `0f7efa7`）；
+  上一轮 r7 代码为 `0f7efa7`（基于 r6 的 `acac46f`）；原始 A/B 数据采集自
+  `e78dd35`、采集时 `git_dirty=false`
+- 证据提交：r7 证据为 `a7dbdfe` 起、`ff0f33c` 止（报告/日志/修复说明 +
   重生成 JSON；gate/thresholds/safety/strict/raw-by-type/real-doc/overlap
-  均由 `--from-json` 从既有逐轮数据复算，未重跑 LLM）
+  均由 `--from-json` 从既有逐轮数据复算，未重跑 LLM）；本轮 r8 证据提交
+  紧随下方 r8 代码提交
 - 模型：`deepseek-flash`（provider `deepseek`，`api.deepseek.com`），temperature=0，
   **5 轮独立重复**（无 seed）；压力语料 3 篇 / 3 seed / 79,362 字；
   真实文档 **12 篇**（6 篇黄金集短样本 + 5 篇 samples + 1 篇 5,360-unit 长文
@@ -66,7 +67,7 @@ PYTHONPATH=src .venv/bin/python tools/chunk_budget_ab.py \
 （本轮实际用装有 agentscope 的 venv：`/home/dell/orca/workspaces/minirag/moray/.venv/bin/python`；
 密钥只从 `../moray/.env` 读取，不落仓。）
 
-评审 r4 只改判据、不重跑 LLM；gate/thresholds 由既有逐轮数据重算：
+评审 r4–r7 只改判据、不重跑 LLM；gate/thresholds 由既有逐轮数据重算：
 
 ```bash
 PYTHONPATH=src .venv/bin/python tools/chunk_budget_ab.py \
@@ -356,9 +357,20 @@ gate 返回的 `caliber` 字段把三种口径写死，报告不再把两列当�
   `overlap_pairs_min` 只在多块文档上取最小值，并额外落盘
   `overlap_documents_with_multiple_chunks`；若整批一篇多块文档都没有，
   `overlap_observed` 仍 fail closed（无法观测就不放行）。
+- **两个多块计数不是同一基数（评审 r8 N2）**：
+  `overlap_observed.<档>.case_runs_with_multiple_chunks` 是 **case-run**
+  计数（5 轮 × 3 篇 = 15，同一篇文档被重复计数）；`budgets.<档>.
+  overlap_documents_with_multiple_chunks` 是**每轮**多块文档数的最小值
+  （= 3，repeat 不放大）。旧字段名 `documents_with_multiple_chunks` 容易被
+  读成“批里有 15 篇多块文档”，本轮改名并在此显式说明。
+- **可重叠对数只有一份实现（评审 r8 N3）**：`_possible_pairs` 统一处理
+  “缺 `overlap_pairs_possible` 时按 `n_chunks-1` 回退”，`_overlap_stats`、
+  `--from-json` 的派生与 live 的 `_overlap_aggregate` 三处共用；同一份
+  输入在 live / from-json 两条路径不会再给出不同的 `overlap_observed`。
 - 证据字段：JSON `overlap_frozen_baseline` +
-  `overlap_observed.{baseline,candidate}`（实际对数/可重叠对数/比例）+
-  `budgets.<budget>.overlap_documents_with_multiple_chunks` +
+  `overlap_observed.{baseline,candidate}`（实际对数/可重叠对数/比例/
+  `case_runs_with_multiple_chunks`）+
+  `budgets.<budget>.overlap_documents_with_multiple_chunks`（每轮篇数）+
   `gate.checks.overlap_*`。
 
 ## 残余文档级跨块关系（显式统计，不算本单回归）
@@ -561,12 +573,46 @@ closed 规则。
 已有 `overlap_observed` 的单块误判；两条均通过。`gate.failures` 仍是原有
 **10 条**（验收 #2 未达成，默认不切换）。
 
+## 评审 r8 修复（S1 + N1–N3）
+
+本轮代码提交 `7ebfcd1`（基于 `0f7efa7`），证据提交紧随其后；未重跑 LLM，
+JSON 由 `--from-json` 从既有逐轮数据重生成。
+
+- **S1（should）**：失败块进 gate。真实文档批次用
+  `raise_on_chunk_error=False` 逐块容错，失败块只写进
+  `real_docs.<档>.failed_chunks_total`；它**不产生 finish_reason**，所以
+  `truncated_chunks=0` 仍成立，`real_doc_coverage_exercises_budget` 也仍可由
+  原文 units 满足，验收 #4/#5 的证据可整批空转。`_gate_input` 新增
+  `failed_chunks = 压力语料 failed_chunks_max + 真实文档 failed_chunks_total`，
+  gate 新增 `failed_chunks_zero`；本轮两档均为 0，check 通过、
+  `gate.failures` 仍是 10 条。`gate` 同时落盘
+  `stress_failed_chunks` / `real_docs_failed_chunks` 与合并值供复审复算。
+  `--from-json` 与 live 共用 `_gate_input`，两条路径都会重生成该 check。
+- **N1（nit）**：报告头部删掉不存在的 `9400e6d`，改为真实证据区间
+  `a7dbdfe`–`ff0f33c`；复现说明的“评审 r4”改为“评审 r4–r7”，本轮 r8 的
+  代码/证据提交在头部与本节显式列出。
+- **N2（nit）**：`_overlap_stats` 的 `documents_with_multiple_chunks`
+  改名为 `case_runs_with_multiple_chunks`（5 轮 × 3 篇 = 15 个 case-run），
+  与 `budgets.<档>.overlap_documents_with_multiple_chunks`（每轮篇数的最小
+  值 = 3）显式区分；报告“overlap 不变的证明”一节同步说明两者基数不同。
+- **N3（nit）**：抽出 `_possible_pairs(row)`（缺 `overlap_pairs_possible`
+  时按 `n_chunks-1` 回退，显式 0 保持权威），`_overlap_stats`、
+  `_enrich_result_derived`、`_run_corpus` 经 `_overlap_aggregate` 三处共用；
+  live 路径补齐回退，不再与 from-json 可能给出不同结果。
+
+本轮 gate 只新增 1 条 check（`failed_chunks_zero`），数值 0 通过；
+`gate.failures` 仍是原有 **10 条**（验收 #2 未达成，默认不切换）。
+
 ## 证据文件
 
 | 文件 | 内容 |
 |---|---|
-| `docs/evidence/04-budget-ab.json` | 逐轮/逐篇聚合与单块极值、逐篇预测面（原始+归一化关系端点）、类型 P/R、双口径关系指标、overlap 实际/可重叠对数、残差明细、上下文余量、gate（实体与关系均 raw+normalized、caliber、gate_recompute）、CI |
+| `docs/evidence/04-budget-ab.json` | 逐轮/逐篇聚合与单块极值、逐篇预测面（原始+归一化关系端点）、类型 P/R、双口径关系指标、overlap 实际/可重叠对数、残差明细、上下文余量、gate（实体与关系均 raw+normalized、失败块、caliber、gate_recompute）、CI |
 | `docs/evidence/04-budget-ab.md` | 本报告 |
+| `docs/evidence/04-r8-red-tests.txt` | 先红：评审 r8 新增测试在 `0f7efa7` 上的失败输出（13 failed） |
+| `docs/evidence/04-r8-green-tests.txt` | 后绿：评审 r8 定向用例（164 passed / 2 skipped） |
+| `docs/evidence/04-r8-full-suite.txt` | 全量 pytest（离线，596 passed / 66 skipped） |
+| `docs/evidence/04-r8-fix-evidence.md` | S1 + N1–N3 逐条处理结果与证据 |
 | `docs/evidence/04-r7-red-tests.txt` | 先红：评审 r7 新增测试在 r6 HEAD 上的失败输出（11 failed / 3 passed） |
 | `docs/evidence/04-r7-green-tests.txt` | 后绿：评审 r7 定向用例 |
 | `docs/evidence/04-r7-full-suite.txt` | 全量 pytest（离线） |
