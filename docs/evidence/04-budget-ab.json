@@ -53703,12 +53703,12 @@
     "source_json": "docs/evidence/04-budget-ab.json",
     "source_git_sha": "e78dd35d70bcc2c7f1d29f89973914439e6fbfb4",
     "source_generated_at": "2026-11-03T08:46:42.466076+00:00",
-    "regenerated_at": "2026-11-04T02:07:27.988029+00:00",
+    "regenerated_at": "2026-11-04T02:07:56.480148+00:00",
     "regenerator": {
-      "git_sha": "7ebfcd18c5a19cd5fb699d5934c553306ce85f5e",
-      "git_describe": "7ebfcd1-dirty",
-      "git_dirty": true,
-      "git_status_porcelain": "M docs/evidence/04-budget-ab.md"
+      "git_sha": "38790db9302909f940f289c7a4352057fa4600b3",
+      "git_describe": "38790db",
+      "git_dirty": false,
+      "git_status_porcelain": ""
     },
     "note": "原始逐轮/逐篇数据未重跑 LLM；gate 与 thresholds 由当前实现从既有 JSON 复算，gate 用 rounds 校验 explicit deltas"
   },
