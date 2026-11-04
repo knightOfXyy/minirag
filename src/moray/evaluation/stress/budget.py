@@ -32,6 +32,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Iterable
 
 from ...extraction.chunking import Chunker, estimate_tokens
@@ -147,6 +148,11 @@ def relation_chunk_profile(
 
 _REQUIRED_GATE_KEYS = (
     "budget", "overlap_units", "overlap_pairs_min", "chunk_calls",
+    # 评审 r7 N3：overlap 最小值只统计“可重叠”的多块文档；单块文档不能
+    # 把 min_overlap_pairs 拉到 0 造成误判，但“没有任何多块文档”仍 fail closed。
+    "overlap_documents_with_multiple_chunks",
+    # 评审 r7 S2：验收 #4 的真实文档覆盖必须进 checks，不能只写进 gate 报告。
+    "real_doc_documents", "real_doc_max_document_units",
     # 实体轴双口径：raw 是验收口径，normalized 是辅助口径；两套都必填、
     # 都进 checks。评审 r4 B1：不允许只填归一化辅助口径就放行。
     "entity_macro_f1_mean", "entity_macro_f1_worst",
@@ -300,20 +306,50 @@ def evaluate_budget_gate(
     raw_full_worst_delta = _delta(
         "raw_relation_f1_worst", "raw_relation_f1_worst_delta_pt")
 
+    def _positive_number(value: Any) -> bool:
+        """有限正数才算“拿到了 provider 计数”（bool 不算）。"""
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(float(value))
+            and value > 0
+        )
+
     overlap_unchanged = (
         candidate["overlap_units"] == baseline["overlap_units"])
-    overlap_observed = int(candidate["overlap_pairs_min"]) > 0
-    # 评审 r6 F1：验收 #5 要求真实 tokenizer 口径的上下文余量；这里把
-    # max_input+max_output<=context 作为放行 check。模型能力缺失（None/0/非数）
-    # 时 fail closed，不能因为拿不到 /models 就默认放行。
+    # 评审 r7 N3：单块文档没有“可重叠的相邻对”，不能把它的 0 误判成
+    # overlap 行为坏了；只统计有多块文档的最小实际重叠对数。若一篇多块
+    # 文档都没有，则无法观测 overlap，fail closed。
+    overlap_documents = candidate.get("overlap_documents_with_multiple_chunks")
+    overlap_observed = (
+        isinstance(overlap_documents, int)
+        and not isinstance(overlap_documents, bool)
+        and overlap_documents > 0
+        and int(candidate["overlap_pairs_min"]) > 0
+    )
+    # 评审 r6 F1 + r7 S1：验收 #5 要求真实 tokenizer 口径的上下文余量；
+    # 这里把 max_input+max_output<=context 作为放行 check。模型能力缺失
+    # （None/非数）或 provider usage 缺失（0/0 tokens）时都必须 fail closed，
+    # 不能因为“加到 0 也小于 context”就静默放行。
     context_window = candidate.get("context_window")
     max_context_input = candidate.get("max_context_input_tokens")
     max_context_output = candidate.get("max_context_output_tokens")
     context_within_window = (
-        isinstance(context_window, (int, float)) and context_window > 0
-        and isinstance(max_context_input, (int, float))
-        and isinstance(max_context_output, (int, float))
+        _positive_number(context_window)
+        and _positive_number(max_context_input)
+        and _positive_number(max_context_output)
         and (max_context_input + max_context_output) <= context_window
+    )
+    # 评审 r7 S2：验收 #4 的 real-doc 批次必须非空且真的包含超过候选预算的
+    # 长文；只把 real_doc_coverage 写进 gate 报告会让空批次仍然 passed。
+    real_doc_documents = candidate.get("real_doc_documents")
+    real_doc_max_document_units = candidate.get("real_doc_max_document_units")
+    real_doc_coverage_exercises_budget = (
+        isinstance(real_doc_documents, int)
+        and not isinstance(real_doc_documents, bool)
+        and real_doc_documents > 0
+        and _positive_number(real_doc_max_document_units)
+        and float(real_doc_max_document_units) > float(candidate["budget"])
     )
     checks = {
         "entity_raw_mean_within_0_5pt": (
@@ -340,6 +376,9 @@ def evaluate_budget_gate(
         "relation_covered_precision_worst_within_0_5pt": (
             covered_precision_worst_delta >= -MAX_RELATION_PRECISION_DROP_PT),
         "truncated_chunks_zero": int(candidate["truncated_chunks"]) == 0,
+        # 评审 r7 S2：空 real-doc 批次或没有超过候选预算的长文都不能放行。
+        "real_doc_coverage_exercises_budget": (
+            real_doc_coverage_exercises_budget),
         "overlap_unchanged": overlap_unchanged,
         "overlap_observed": overlap_observed,
         "chunk_calls_decreased": (
@@ -363,6 +402,11 @@ def evaluate_budget_gate(
         "context_window": context_window,
         "max_context_input_tokens": max_context_input,
         "max_context_output_tokens": max_context_output,
+        # 评审 r7 S2：real-doc 覆盖判定所需的原始量也要落盘，便于复审复算。
+        "real_doc_documents": real_doc_documents,
+        "real_doc_max_document_units": real_doc_max_document_units,
+        "real_doc_coverage_exercises_budget": (
+            real_doc_coverage_exercises_budget),
         "relation_covered_recall_mean_delta_pt": covered_recall_mean_delta,
         "relation_covered_recall_worst_delta_pt": covered_recall_worst_delta,
         "relation_covered_precision_mean_delta_pt": covered_precision_mean_delta,
@@ -400,10 +444,18 @@ def evaluate_budget_gate(
                 "micro: TP/FP/FN 跨篇池化后再跨轮平均"),
             "context_margin": (
                 "provider 真实 tokenizer：max_chunk_input + max_chunk_output "
-                "<= /models context_window；能力缺失 fail closed"),
+                "<= /models context_window；能力缺失或 usage 计数为 0 时 "
+                "fail closed（评审 r7 S1）"),
+            "real_doc_coverage": (
+                "real-doc 批次必须非空且最大文档 units 超过候选预算；"
+                "空批次或只有短桩时 fail（评审 r7 S2，验收 #4）"),
+            "overlap_observed": (
+                "只统计有多块文档的实际重叠对；单块文档不参与最小值，"
+                "但没有任何多块文档时 fail closed（评审 r7 N3）"),
         },
         "overlap_unchanged": overlap_unchanged,
         "overlap_observed": overlap_observed,
+        "overlap_documents_with_multiple_chunks": overlap_documents,
         "max_entity_drop_pt": max_entity_drop_pt,
         "max_relation_precision_drop_pt": MAX_RELATION_PRECISION_DROP_PT,
         "budgets": {
