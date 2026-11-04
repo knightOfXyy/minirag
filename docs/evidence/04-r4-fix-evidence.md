@@ -1,10 +1,10 @@
 # 工单 04 评审 r4：11 条发现逐条处理结果
 
-- 代码提交：本轮 r4 修复（`src/moray/evaluation/stress/{budget,metrics}.py`、
+- 代码提交：`5036760`（本轮 r4 修复：`src/moray/evaluation/stress/{budget,metrics}.py`、
   `tools/chunk_budget_ab.py`、`tests/*`、`docs/DEPLOYMENT.md`）
 - A/B 证据：`docs/evidence/04-budget-ab.json` 的 gate/thresholds 由
   `--from-json` 从既有逐轮数据复算（未重跑 LLM），`gate_recompute` 记录
-  源提交/重算提交
+  源提交与重算提交（`regenerator.git_sha=5036760`、`git_dirty=false`）
 - 定向：**79 passed**（`test_chunking.py` + 4 个 chunk-budget 文件）；
   全量：**529 passed / 66 skipped**（`ARK_API_KEY=dummy`）
 - 先红/后绿/全量：`04-r4-red-tests.txt` / `04-r4-green-tests.txt` /

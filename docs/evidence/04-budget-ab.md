@@ -2,9 +2,10 @@
 
 - 分支/worktree：`yzc/tmp-yzd-feat-relation-202610-04`
   （`/home/dell/orca/workspaces/minirag/tmp-yzd-feat-relation-202610-04`）
-- 代码提交：`e78dd35`（r2 修复）+ 本轮 r4 修复（B1/S1/S2/N1–N6）；
-  原始 A/B 数据采集时 `git_dirty=false`
-- 证据提交：本分支 `devflow(04): 评审 r4 修复（实体 raw+normalized 双轴 gate、全量 F1 说明、切换步骤）`
+- 代码提交：`5036760`（本轮 r4 修复：B1/S1/S2/N1–N6）；原始 A/B 数据
+  采集自 `e78dd35`、采集时 `git_dirty=false`
+- 证据提交：本轮 evidence commit（gate 由 `--from-json` 重生成，本报告与
+  逐条证据同提交）
 - 模型：`deepseek-flash`（provider `deepseek`，`api.deepseek.com`），temperature=0，
   **5 轮独立重复**（无 seed）；压力语料 3 篇 / 3 seed / 79,362 字；
   真实文档 **12 篇**（6 篇黄金集短样本 + 5 篇 samples + 1 篇 5,360-unit 长文
