@@ -4,7 +4,7 @@
   （`/home/dell/orca/workspaces/minirag/tmp-yzd-feat-relation-202610-04`）
 - 代码提交：`acac46f`（本轮 r6 修复：F1–F4 + N1–N6）；原始 A/B 数据
   采集自 `e78dd35`、采集时 `git_dirty=false`；上一轮 r5 修复为 `4698445`
-- 证据提交：紧随 `291bd4e` 的 evidence commit（报告/日志/修复说明 +
+- 证据提交：紧随 `acac46f` 的 evidence commit（报告/日志/修复说明 +
   重生成 JSON；gate/thresholds/safety/strict/raw-by-type 均由
   `--from-json` 从既有逐轮数据复算，未重跑 LLM）
 - 模型：`deepseek-flash`（provider `deepseek`，`api.deepseek.com`），temperature=0，
