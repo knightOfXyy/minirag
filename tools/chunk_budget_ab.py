@@ -1020,7 +1020,13 @@ def _recompute_from_payload(
         baseline, candidate, base_real, cand_real, budgets=budgets,
         capabilities=payload.get("model_capabilities") or {})
     payload["thresholds"] = gate_thresholds()
-    payload["safety_margin"] = derived["safety_margin"]
+    # 全量档位都保留 safety；gate 只用 baseline/candidate 两档。
+    payload["safety_margin"] = {
+        str(b): _safety_margin(
+            results[str(b)], real_results[str(b)],
+            payload.get("model_capabilities") or {})
+        for b in budgets
+    }
     payload["calls_drop_pct"] = derived["calls_drop_pct"]
     payload["delta_summary"] = derived["delta_summary"]
     payload["round_aligned_deltas_pt"] = derived["round_aligned_deltas_pt"]
@@ -1139,7 +1145,12 @@ async def main() -> int:
     delta_summary = derived["delta_summary"]
     gate_frozen_overlap = derived["overlap_frozen_baseline"]
     calls_drop_pct = derived["calls_drop_pct"]
-    safety = derived["safety_margin"]
+    # gate 只用两档；payload 的 safety_margin 仍覆盖所有档位。
+    safety = {
+        str(b): _safety_margin(results[str(b)], real_results[str(b)],
+                               capabilities)
+        for b in budgets
+    }
     real_doc_coverage = {
         str(b): _real_doc_coverage(real_results[str(b)], candidate_budget=b)
         for b in budgets

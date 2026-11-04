@@ -19,7 +19,6 @@ import pytest
 
 from moray.config import chunk_settings
 from moray.evaluation.stress.budget import (
-    evaluate_budget_gate,
     relation_chunk_profile,
 )
 from moray.extraction import Chunker, estimate_tokens

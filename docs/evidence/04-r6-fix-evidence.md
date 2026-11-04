@@ -1,7 +1,7 @@
 # 工单 04 评审 r6 修复证据（F1–F4 + N1–N6）
 
 - 分支：`yzc/tmp-yzd-feat-relation-202610-04`
-- 基线：`9753ae3`（评审 r6 的 HEAD）；代码修复 `291bd4e`；本轮**未重跑
+- 基线：`9753ae3`（评审 r6 的 HEAD）；代码修复 `acac46f`；本轮**未重跑
   LLM**，gate/thresholds/safety/strict/raw-by-type 由 `--from-json` 从既有
   逐轮/逐篇数据重算
 - 默认值：仍是 `1500` / overlap `200`，**没有切换 commit**（验收 #2 仍未达成）

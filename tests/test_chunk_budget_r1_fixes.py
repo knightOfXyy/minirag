@@ -26,7 +26,6 @@ from moray.evaluation.stress import (
     normalize_entity_name_aliases,
     relation_chunk_profile,
 )
-from moray.evaluation.stress.budget import evaluate_budget_gate
 from moray.schema import Entity, EntityMention, ExtractionResult, Relation, Span
 
 from gate_fixtures import (
