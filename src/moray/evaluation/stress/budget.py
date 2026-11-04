@@ -151,6 +151,9 @@ _REQUIRED_GATE_KEYS = (
     # 都进 checks。评审 r4 B1：不允许只填归一化辅助口径就放行。
     "entity_macro_f1_mean", "entity_macro_f1_worst",
     "raw_entity_macro_f1_mean", "raw_entity_macro_f1_worst",
+    # 评审 r6 F3：strict 实体 F1 的 mean/worst 也落盘并进 checks；
+    # 工单 02 的评测把 strict/relaxed 并列，不能只报 relaxed。
+    "entity_strict_f1_mean", "entity_strict_f1_worst",
     "relation_covered_recall_mean", "relation_covered_recall_worst",
     "relation_covered_precision_mean", "relation_covered_precision_worst",
     # 工单 04 验收 2 明确要求“关系 F1 不下降”，全量口径必须参与放行。
@@ -166,6 +169,7 @@ _REQUIRED_CANDIDATE_KEYS = ("truncated_chunks",)
 _WORST_DELTA_ROUND_KEY = {
     "entity_macro_f1_worst_delta_pt": "entity_macro_f1",
     "raw_entity_macro_f1_worst_delta_pt": "raw_entity_macro_f1",
+    "entity_strict_f1_worst_delta_pt": "entity_strict_f1",
     "relation_f1_worst_delta_pt": "relation_f1",
     "raw_relation_f1_worst_delta_pt": "raw_relation_f1",
     "relation_covered_recall_worst_delta_pt": "relation_covered_recall",
@@ -206,6 +210,9 @@ def evaluate_budget_gate(
     * 实体 **原始未归一化** macro-F1 的 mean/worst 跌幅 ≤0.5pt（验收口径）；
     * 实体 **类型前缀标签归一化后** macro-F1 的 mean/worst 跌幅 ≤0.5pt
       （辅助口径；两套都进 ``checks``，评审 r4 B1）；
+    * 实体 **strict** F1 的 mean/worst 跌幅 ≤0.5pt（评审 r6 F3）；
+    * 候选档真实 tokenizer 的 ``max_input + max_output <= context_window``
+      （验收 #5；能力缺失 fail closed，评审 r6 F1）；
     * **全量关系 F1 的 raw（验收）与 normalized（辅助）两套 mean/worst
       都不下降**（工单验收 2 的原始判据，F2 + 评审 r5 S1）；
     * 关系「金标覆盖子集」recall 的 mean/worst 不下降；
@@ -227,8 +234,9 @@ def evaluate_budget_gate(
     ``candidate`` 如显式提供 ``*_worst_delta_pt``，必须与
     ``baseline_rounds`` / ``candidate_rounds`` 的逐轮对齐差一致；二者都提供
     时由 gate 复算并校验，防止调用方用两档各自最差值相减糊弄（评审 r4 N3）。
-    未提供 explicit 值时也用 rounds 复算。门槛参数只能收紧，不能放宽
-    （``max_entity_drop_pt > 0.5`` 直接报错）。
+    未提供 explicit 值时也用 rounds 复算；**没有 rounds 时 ``*_worst``
+    一律报错**，不再退回两档各自最差值相减（评审 r6 F2）。门槛参数只能
+    收紧，不能放宽（``max_entity_drop_pt > 0.5`` 直接报错）。
     """
     if max_entity_drop_pt > MAX_ENTITY_F1_DROP_PT:
         raise ValueError(
@@ -248,7 +256,14 @@ def evaluate_budget_gate(
         return round((after - before) * 100, 4)
 
     def _delta(key: str, explicit_key: str | None = None) -> float:
-        if explicit_key and baseline_rounds is not None:
+        if explicit_key:
+            # 评审 r6 F2：``*_worst`` 必须用逐轮对齐差。没有 rounds 时
+            # 退回“两档各自最差值相减”会系统性偏松（实测可差 4pt），
+            # 与 docstring 的契约相反，直接报错而不是静默放行。
+            if baseline_rounds is None:
+                raise ValueError(
+                    f"{explicit_key} 需要 baseline_rounds 与 candidate_rounds "
+                    "逐轮对齐；无 rounds 时不允许用两档各自最差值相减")
             computed = _round_aligned_worst_delta(
                 baseline_rounds, candidate_rounds,
                 _WORST_DELTA_ROUND_KEY[explicit_key])
@@ -259,8 +274,6 @@ def evaluate_budget_gate(
                     f"{explicit_key}={explicit} 与 rounds 逐轮对齐复算值 "
                     f"{computed} 不一致；gate 不接受调用方自证")
             return computed
-        if explicit_key and candidate.get(explicit_key) is not None:
-            return round(candidate[explicit_key], 4)
         return _pt(baseline[key], candidate[key])
 
     entity_mean_delta = _delta("entity_macro_f1_mean")
@@ -269,6 +282,9 @@ def evaluate_budget_gate(
     raw_entity_mean_delta = _delta("raw_entity_macro_f1_mean")
     raw_entity_worst_delta = _delta(
         "raw_entity_macro_f1_worst", "raw_entity_macro_f1_worst_delta_pt")
+    strict_entity_mean_delta = _delta("entity_strict_f1_mean")
+    strict_entity_worst_delta = _delta(
+        "entity_strict_f1_worst", "entity_strict_f1_worst_delta_pt")
     covered_recall_mean_delta = _delta("relation_covered_recall_mean")
     covered_recall_worst_delta = _delta(
         "relation_covered_recall_worst",
@@ -287,6 +303,18 @@ def evaluate_budget_gate(
     overlap_unchanged = (
         candidate["overlap_units"] == baseline["overlap_units"])
     overlap_observed = int(candidate["overlap_pairs_min"]) > 0
+    # 评审 r6 F1：验收 #5 要求真实 tokenizer 口径的上下文余量；这里把
+    # max_input+max_output<=context 作为放行 check。模型能力缺失（None/0/非数）
+    # 时 fail closed，不能因为拿不到 /models 就默认放行。
+    context_window = candidate.get("context_window")
+    max_context_input = candidate.get("max_context_input_tokens")
+    max_context_output = candidate.get("max_context_output_tokens")
+    context_within_window = (
+        isinstance(context_window, (int, float)) and context_window > 0
+        and isinstance(max_context_input, (int, float))
+        and isinstance(max_context_output, (int, float))
+        and (max_context_input + max_context_output) <= context_window
+    )
     checks = {
         "entity_raw_mean_within_0_5pt": (
             raw_entity_mean_delta >= -max_entity_drop_pt),
@@ -296,6 +324,11 @@ def evaluate_budget_gate(
             entity_mean_delta >= -max_entity_drop_pt),
         "entity_normalized_worst_within_0_5pt": (
             entity_worst_delta >= -max_entity_drop_pt),
+        "entity_strict_mean_within_0_5pt": (
+            strict_entity_mean_delta >= -max_entity_drop_pt),
+        "entity_strict_worst_within_0_5pt": (
+            strict_entity_worst_delta >= -max_entity_drop_pt),
+        "context_within_window": context_within_window,
         "relation_full_f1_mean_not_lower": full_mean_delta >= 0.0,
         "relation_full_f1_worst_not_lower": full_worst_delta >= 0.0,
         "relation_raw_full_f1_mean_not_lower": raw_full_mean_delta >= 0.0,
@@ -324,6 +357,12 @@ def evaluate_budget_gate(
         # 验收口径（原始未归一化）：与 normalized 并列且同样进 checks（B1）。
         "raw_entity_macro_f1_mean_delta_pt": raw_entity_mean_delta,
         "raw_entity_macro_f1_worst_delta_pt": raw_entity_worst_delta,
+        # 评审 r6 F3：strict 口径与 relaxed 并列落盘并进 checks。
+        "entity_strict_f1_mean_delta_pt": strict_entity_mean_delta,
+        "entity_strict_f1_worst_delta_pt": strict_entity_worst_delta,
+        "context_window": context_window,
+        "max_context_input_tokens": max_context_input,
+        "max_context_output_tokens": max_context_output,
         "relation_covered_recall_mean_delta_pt": covered_recall_mean_delta,
         "relation_covered_recall_worst_delta_pt": covered_recall_worst_delta,
         "relation_covered_precision_mean_delta_pt": covered_precision_mean_delta,
@@ -352,10 +391,16 @@ def evaluate_budget_gate(
         "caliber": {
             "entity_macro_f1": (
                 "macro: 逐篇 F1 先平均，再跨轮平均"),
+            "entity_strict_f1": (
+                "strict: 比 mention.surface + span，不做类型前缀归一化；"
+                "mean/worst 与 relaxed 同用 0.5pt 门槛（评审 r6 F3）"),
             "relation_full_f1": (
                 "macro: 逐篇 F1 先平均，再跨轮平均"),
             "relation_covered_prf": (
                 "micro: TP/FP/FN 跨篇池化后再跨轮平均"),
+            "context_margin": (
+                "provider 真实 tokenizer：max_chunk_input + max_chunk_output "
+                "<= /models context_window；能力缺失 fail closed"),
         },
         "overlap_unchanged": overlap_unchanged,
         "overlap_observed": overlap_observed,

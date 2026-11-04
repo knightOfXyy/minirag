@@ -43,9 +43,12 @@ from dotenv import load_dotenv
 
 from moray.config import get_settings
 from moray.evaluation.gold import load_gold_dir
-from moray.evaluation.metrics import evaluate, macro_average
+from moray.evaluation.metrics import PRF, evaluate, macro_average
 from moray.evaluation.stress import (
+    MAX_ENTITY_F1_DROP_PT,
+    MAX_RELATION_PRECISION_DROP_PT,
     aggregate_cases,
+    entity_type_counts,
     evaluate_budget_gate,
     evaluate_case,
     load_stress_dir,
@@ -53,6 +56,7 @@ from moray.evaluation.stress import (
 )
 from moray.extraction import Chunker, Document, Extractor, estimate_tokens
 from moray.extraction.pipeline import ChunkedExtractionPipeline
+from moray.schema import Entity, ExtractionResult
 
 # 默认 200：工单 04 明确不动 overlap；A/B 两档必须使用同一个值，报告里
 # 用配置值和“相邻块实际重叠对数”双证据锁定。
@@ -184,38 +188,93 @@ def _overlap_stats(result: dict) -> dict:
     if not pairs:
         return {
             "min_overlap_pairs": 0,
-            "min_possible_pairs": 0,
+            # 评审 r6 N3：这是“重叠比例最小那一篇”的分母，不是全局最小
+            # 分母；字段名必须说清楚，避免与全局 min_overlap_pairs 混淆。
+            "min_ratio_document_possible_pairs": 0,
             "min_pair_ratio": None,
             "documents_with_multiple_chunks": 0,
         }
     actual, possible = min(pairs, key=lambda item: item[0] / item[1])
     return {
         "min_overlap_pairs": actual,
-        "min_possible_pairs": possible,
+        "min_ratio_document_possible_pairs": possible,
         "min_pair_ratio": round(actual / possible, 4),
         "documents_with_multiple_chunks": len(pairs),
     }
 
 
-def _enrich_result_derived(result: dict) -> None:
+def _entity_by_type_for_case(gold, pred) -> dict:
+    """单篇 raw 按类型 P/R（评审 r6 F4）。"""
+    return {
+        etype: PRF(tp=tp, fp=fp, fn=fn).as_dict()
+        for etype, (tp, fp, fn) in entity_type_counts(gold, pred).items()
+    }
+
+
+def _raw_entity_by_type_from_rows(rows, cases=None) -> dict:
+    """从逐篇行聚合 raw 验收口径的按类型 P/R。
+
+    优先读行里已持久化的 ``raw_entity_by_type``；旧证据没有该字段时，可用
+    ``cases``（金标语料）与 ``predicted_entities`` 重建，并把结果写回行，
+    让后续 ``--from-json`` 不再依赖语料目录。两边都没有时返回空 dict，
+    不伪造数字。
+    """
+    totals: dict[str, list[int]] = {}
+    for index, row in enumerate(rows):
+        per_type = row.get("raw_entity_by_type")
+        if not per_type and cases:
+            # rows 按轮次展开；同一轮内与 cases 顺序一一对应。
+            case = cases[index % len(cases)]
+            pred = ExtractionResult(entities=[
+                Entity(type=e.get("type", ""), name=e.get("name", ""))
+                for e in row.get("predicted_entities", [])
+            ])
+            per_type = _entity_by_type_for_case(case.gold, pred)
+            row["raw_entity_by_type"] = per_type
+        for etype, prf in (per_type or {}).items():
+            acc = totals.setdefault(etype, [0, 0, 0])
+            acc[0] += int(prf["tp"])
+            acc[1] += int(prf["fp"])
+            acc[2] += int(prf["fn"])
+    return {
+        etype: PRF(tp=tp, fp=fp, fn=fn).as_dict()
+        for etype, (tp, fp, fn) in sorted(totals.items())
+    }
+
+
+def _enrich_result_derived(result: dict, *, cases=None) -> None:
     """给既有 JSON 的逐轮数据补齐本轮新增的派生字段（``--from-json`` 用）。
 
     只从 ``rounds`` 复算，不调用 LLM；live 运行的 ``_run_corpus`` 已经
     直接写入同样的字段，这里保证旧证据也能被无副作用地重生成。
     """
     rounds = result.get("rounds") or []
+    if "entity_strict_f1_worst" not in result:
+        values = [
+            rnd["macro"]["entity_strict"]["f1"] for rnd in rounds
+            if rnd.get("macro", {}).get("entity_strict", {}).get("f1")
+            is not None
+        ]
+        if values:
+            result["entity_strict_f1_mean"] = _mean(values)
+            result["entity_strict_f1_worst"] = _min(values)
     if "raw_relation_f1_mean" not in result:
         values = [
             rnd["raw_macro"]["relation"]["f1"] for rnd in rounds
             if rnd.get("raw_macro", {}).get("relation", {}).get("f1")
             is not None
         ]
-        result["raw_relation_f1_mean"] = _mean(values)
-        result["raw_relation_f1_worst"] = _min(values)
-    if "overlap_pairs_possible_min" not in result:
-        stats = _overlap_stats(result)
-        result["overlap_pairs_possible_min"] = stats["min_possible_pairs"]
-        result["overlap_pairs_ratio_min"] = stats["min_pair_ratio"]
+        if values:
+            result["raw_relation_f1_mean"] = _mean(values)
+            result["raw_relation_f1_worst"] = _min(values)
+    # 评审 r6 N3/N4：旧证据里这两个字段只写不读，重生成时清掉；分母
+    # 统一由 ``_overlap_stats`` 的 ``min_ratio_document_possible_pairs`` 给出。
+    result.pop("overlap_pairs_possible_min", None)
+    result.pop("overlap_pairs_ratio_min", None)
+    rows = [row for rnd in rounds for row in rnd.get("cases", [])]
+    if rows and not result.get("raw_entity_by_type"):
+        result["raw_entity_by_type"] = _raw_entity_by_type_from_rows(
+            rows, cases)
 
 
 def _real_doc_coverage(real_docs: dict, *, candidate_budget: int) -> dict:
@@ -310,6 +369,7 @@ async def _run_corpus(
     chunks_by_index = _chunk_cases(cases, budget=budget, overlap=overlap)
     rounds: list[dict] = []
     all_evals = []
+    all_raw_evals = []
     all_raw_reports = []
 
     extractor = Extractor(domain, max_retries=2, local_backfill=True)
@@ -334,9 +394,13 @@ async def _run_corpus(
             ev = evaluate_case(
                 case.name, case.seed, out.result, case.gold, text=case.text,
                 normalize_type_labels=True)
-            raw_report = evaluate(out.result, case.gold)
+            raw_ev = evaluate_case(
+                case.name, case.seed, out.result, case.gold,
+                normalize_type_labels=False)
+            raw_report = raw_ev.report
             evals.append(ev)
             all_evals.append(ev)
+            all_raw_evals.append(raw_ev)
             raw_reports.append(raw_report)
             all_raw_reports.append(raw_report)
 
@@ -358,6 +422,9 @@ async def _run_corpus(
                 "gold_covered_sentences": ev.gold_covered_sentences,
                 # F13：跨句 gold 关系不进 covered 子集，但必须显式计数。
                 "uncovered_gold_relations": ev.uncovered_gold_relations,
+                # 评审 r6 F4：raw 验收口径的按类型 P/R（不是归一化辅助口径）。
+                "raw_entity_by_type": _entity_by_type_for_case(
+                    case.gold, out.result),
                 # S1：逐篇预测面落盘，FP 归因可审计（不只给聚合 PRF）
                 "predicted_entities": [
                     {"type": raw.type, "name": raw.name,
@@ -414,7 +481,7 @@ async def _run_corpus(
     n_rounds = len(rounds)
     all_rows = [row for r in rounds for row in r["cases"]]
     pooled = aggregate_cases(all_evals)
-    overlap_stats = _overlap_stats({"rounds": rounds})
+    raw_pooled = aggregate_cases(all_raw_evals)
 
     return {
         "budget": budget,
@@ -427,6 +494,7 @@ async def _run_corpus(
         "raw_entity_macro_f1_mean": _mean(raw_entity_means),
         "raw_entity_macro_f1_worst": _min(raw_entity_means),
         "entity_strict_f1_mean": _mean(entity_stricts),
+        "entity_strict_f1_worst": _min(entity_stricts),
         "relation_f1_mean": _mean(relation_means),
         "relation_f1_worst": _min(relation_means),
         # 评审 r5 S1：归一化只是辅助口径，原始关系 F1 也落盘并进 gate。
@@ -468,6 +536,8 @@ async def _run_corpus(
         "entity_fn_total": sum(
             row["entity_relaxed_prf"]["fn"] for row in all_rows),
         "entity_by_type": pooled["entity_by_type"],
+        # 评审 r6 F4：raw 验收口径的按类型 P/R，与归一化辅助口径并列。
+        "raw_entity_by_type": raw_pooled["entity_by_type"],
         "micro_pooled": {
             "entity_relaxed": pooled["entity_relaxed"],
             "entity_strict": pooled["entity_strict"],
@@ -511,8 +581,6 @@ async def _run_corpus(
             (row["max_chunk_chars"] for row in all_rows), default=0),
         "overlap_pairs_min": min(
             (row["overlap_pairs"] for row in all_rows), default=0),
-        "overlap_pairs_possible_min": overlap_stats["min_possible_pairs"],
-        "overlap_pairs_ratio_min": overlap_stats["min_pair_ratio"],
     }
 
 
@@ -616,6 +684,17 @@ def _round_aligned_raw_delta_pt(baseline: dict, candidate: dict) -> list[float]:
     return out
 
 
+def _round_aligned_strict_delta_pt(baseline: dict,
+                                   candidate: dict) -> list[float]:
+    """实体 strict-F1 的逐轮对齐差（百分点，评审 r6 F3）。"""
+    out = []
+    for base_round, cand_round in zip(baseline["rounds"], candidate["rounds"]):
+        base_f1 = base_round["macro"]["entity_strict"]["f1"]
+        cand_f1 = cand_round["macro"]["entity_strict"]["f1"]
+        out.append(round((cand_f1 - base_f1) * 100, 4))
+    return out
+
+
 def _round_aligned_raw_relation_delta_pt(
     baseline: dict, candidate: dict
 ) -> list[float]:
@@ -682,13 +761,26 @@ def gate_thresholds() -> dict:
     ``relation_full_f1_*`` 正好相反；这里改成实现事实，并补充实体双口径。
     """
     return {
-        "entity_macro_f1_max_drop_pt": 0.5,
+        # 评审 r6 N5：直接复用 budget 模块的常量，避免报告/工具各写一份。
+        "entity_macro_f1_max_drop_pt": MAX_ENTITY_F1_DROP_PT,
+        "relation_covered_precision_max_drop_pt": (
+            MAX_RELATION_PRECISION_DROP_PT),
         "entity_macro_f1_note": (
             "raw（原始未归一化，验收口径）与 normalized（类型前缀标签归一化，"
             "辅助口径）两套 macro-F1 的 mean/worst 都进 checks，任一跌幅 "
-            ">0.5pt 即 fail；辅助口径不能替代验收口径"),
+            f">{MAX_ENTITY_F1_DROP_PT}pt 即 fail；辅助口径不能替代验收口径"),
+        "entity_strict_note": (
+            "strict 实体 F1（比 mention.surface + span，不做前缀归一化）的 "
+            f"mean/worst 也进 checks，门槛同为 {MAX_ENTITY_F1_DROP_PT}pt"
+            "（评审 r6 F3）"),
+        "context_margin": (
+            "候选档 provider 真实 tokenizer 的 "
+            "max_chunk_input_tokens + max_chunk_output_tokens 必须 "
+            "<= /models context_window；能力缺失（None/0）时 "
+            "context_within_window fail closed（评审 r6 F1，验收 #5）"),
         "relation_gate": ("金标覆盖子集 recall mean/worst 不下降；"
-                          "precision mean/worst 跌幅 <=0.5pt"),
+                          f"precision mean/worst 跌幅 <="
+                          f"{MAX_RELATION_PRECISION_DROP_PT}pt"),
         "relation_full_scope": ("全量口径（含 02 金标刻意未标注句面的 FP）"
                                 "的 raw（原始未归一化，验收口径）与 "
                                 "normalized（类型前缀标签归一化，辅助口径）"
@@ -711,6 +803,7 @@ def _gate_rounds(result: dict) -> list[dict[str, float]]:
         {
             "entity_macro_f1": r["macro"]["entity_relaxed"]["f1"],
             "raw_entity_macro_f1": r["raw_macro"]["entity_relaxed"]["f1"],
+            "entity_strict_f1": r["macro"]["entity_strict"]["f1"],
             "relation_f1": r["macro"]["relation"]["f1"],
             "raw_relation_f1": r["raw_macro"]["relation"]["f1"],
             "relation_covered_recall": r["relation_covered_recall"],
@@ -726,14 +819,20 @@ def _gate_input(
     budget: int,
     real: dict,
     overlap_units: int,
+    safety: dict | None = None,
 ) -> dict:
     """一份 gate 输入（评审 r5 N4：live / ``--from-json`` 共用）。
 
     此前 baseline/candidate 各手写一份 17 键 dict，新增 raw 关系口径要在
     两处同步；收敛到这里后，新增口径只改这一个函数。
     """
+    safety = safety or {}
     return {
         "budget": budget,
+        # 评审 r6 F1：上下文余量能力。缺失时保持 None，由 gate fail closed。
+        "context_window": safety.get("context_window"),
+        "max_context_input_tokens": safety.get("max_chunk_input_tokens"),
+        "max_context_output_tokens": safety.get("max_chunk_output_tokens"),
         "overlap_units": overlap_units,
         "overlap_pairs_min": result["overlap_pairs_min"],
         "chunk_calls": result["chunk_calls_total_mean"],
@@ -744,6 +843,9 @@ def _gate_input(
         "entity_macro_f1_worst": result["entity_macro_f1_worst"],
         "raw_entity_macro_f1_mean": result["raw_entity_macro_f1_mean"],
         "raw_entity_macro_f1_worst": result["raw_entity_macro_f1_worst"],
+        # 评审 r6 F3：strict 与 relaxed 并列，两者都必填。
+        "entity_strict_f1_mean": result["entity_strict_f1_mean"],
+        "entity_strict_f1_worst": result["entity_strict_f1_worst"],
         "relation_covered_recall_mean": result[
             "relation_covered_recall_mean"],
         "relation_covered_recall_worst": result[
@@ -766,21 +868,29 @@ def _derive_comparison(
     cand_real: dict,
     *,
     budgets: list[int],
+    capabilities: dict | None = None,
 ) -> dict:
     """由两档逐轮结果生成 gate 与所有派生对比字段（live / --from-json 共用）。"""
+    capabilities = capabilities or {}
+    safety = {
+        str(budgets[0]): _safety_margin(baseline, base_real, capabilities),
+        str(budgets[-1]): _safety_margin(candidate, cand_real, capabilities),
+    }
     # 评审 r1 S3：基线 overlap 用**冻结常量**，不再两档都从同一个
     # args.overlap_units 取值自证；候选档必须仍然等于 200。
     gate_baseline = _gate_input(
         baseline, budget=budgets[0], real=base_real,
-        overlap_units=DEFAULT_OVERLAP_UNITS)
+        overlap_units=DEFAULT_OVERLAP_UNITS, safety=safety[str(budgets[0])])
     gate_candidate = _gate_input(
         candidate, budget=budgets[-1], real=cand_real,
-        overlap_units=candidate["overlap_units"])
+        overlap_units=candidate["overlap_units"],
+        safety=safety[str(budgets[-1])])
     # worst-of-N 用逐轮对齐差（更严格）：两档各自的最差值相减会漏掉
     # “某一轮单独崩、另一轮恰好很好”的情况。
     entity_aligned = _round_aligned_delta_pt(
         baseline, candidate, "entity_relaxed")
     raw_entity_aligned = _round_aligned_raw_delta_pt(baseline, candidate)
+    strict_entity_aligned = _round_aligned_strict_delta_pt(baseline, candidate)
     relation_full_aligned = _round_aligned_delta_pt(
         baseline, candidate, "relation")
     raw_relation_full_aligned = _round_aligned_raw_relation_delta_pt(
@@ -792,6 +902,8 @@ def _derive_comparison(
     gate_candidate["entity_macro_f1_worst_delta_pt"] = min(entity_aligned)
     gate_candidate["raw_entity_macro_f1_worst_delta_pt"] = min(
         raw_entity_aligned)
+    gate_candidate["entity_strict_f1_worst_delta_pt"] = min(
+        strict_entity_aligned)
     gate_candidate["relation_f1_worst_delta_pt"] = min(relation_full_aligned)
     gate_candidate["raw_relation_f1_worst_delta_pt"] = min(
         raw_relation_full_aligned)
@@ -812,6 +924,7 @@ def _derive_comparison(
     delta_summary = {
         "entity_macro_f1": _delta_summary_pt(entity_aligned),
         "raw_entity_macro_f1": _delta_summary_pt(raw_entity_aligned),
+        "entity_strict_f1": _delta_summary_pt(strict_entity_aligned),
         "relation_full": _delta_summary_pt(relation_full_aligned),
         "relation_raw_full": _delta_summary_pt(raw_relation_full_aligned),
         "relation_covered_recall": _delta_summary_pt(covered_recall_aligned),
@@ -834,6 +947,7 @@ def _derive_comparison(
              / baseline["chunk_calls_total_mean"]) * 100, 2)
     return {
         "gate": gate,
+        "safety_margin": safety,
         "calls_drop_pct": calls_drop_pct,
         "overlap_observed": {
             "baseline": {
@@ -851,6 +965,7 @@ def _derive_comparison(
         "round_aligned_deltas_pt": {
             "entity_macro_f1": entity_aligned,
             "raw_entity_macro_f1": raw_entity_aligned,
+            "entity_strict_f1": strict_entity_aligned,
             "relation_full": relation_full_aligned,
             "relation_raw_full": raw_relation_full_aligned,
             "relation_covered_recall": covered_recall_aligned,
@@ -885,15 +1000,27 @@ def _recompute_from_payload(
         return 2
     results = payload["budgets"]
     real_results = payload["real_docs"]
+    # 评审 r6 F4：旧 JSON 没有 raw_entity_by_type 时，从 corpus 金标与
+    # 已持久化的 predicted_entities 重建；拿不到 corpus 就保持缺失，
+    # 不伪造数字（gate 不依赖该字段）。
+    enrich_cases = None
+    stress_path = (payload.get("corpus") or {}).get("stress_path")
+    if stress_path:
+        try:
+            enrich_cases = load_stress_dir(stress_path)
+        except Exception:  # noqa: BLE001 仅影响报告字段，不让重算失败
+            enrich_cases = None
     for budget in budgets:
-        _enrich_result_derived(results[str(budget)])
+        _enrich_result_derived(results[str(budget)], cases=enrich_cases)
     baseline = results[str(budgets[0])]
     candidate = results[str(budgets[-1])]
     base_real = real_results[str(budgets[0])]
     cand_real = real_results[str(budgets[-1])]
     derived = _derive_comparison(
-        baseline, candidate, base_real, cand_real, budgets=budgets)
+        baseline, candidate, base_real, cand_real, budgets=budgets,
+        capabilities=payload.get("model_capabilities") or {})
     payload["thresholds"] = gate_thresholds()
+    payload["safety_margin"] = derived["safety_margin"]
     payload["calls_drop_pct"] = derived["calls_drop_pct"]
     payload["delta_summary"] = derived["delta_summary"]
     payload["round_aligned_deltas_pt"] = derived["round_aligned_deltas_pt"]
@@ -1006,11 +1133,13 @@ async def main() -> int:
     cand_real = real_results[candidate_key]
 
     derived = _derive_comparison(
-        baseline, candidate, base_real, cand_real, budgets=budgets)
+        baseline, candidate, base_real, cand_real, budgets=budgets,
+        capabilities=capabilities)
     gate = derived["gate"]
     delta_summary = derived["delta_summary"]
     gate_frozen_overlap = derived["overlap_frozen_baseline"]
     calls_drop_pct = derived["calls_drop_pct"]
+    safety = derived["safety_margin"]
     real_doc_coverage = {
         str(b): _real_doc_coverage(real_results[str(b)], candidate_budget=b)
         for b in budgets
@@ -1021,12 +1150,6 @@ async def main() -> int:
             cases, max_units=b, overlap_units=args.overlap_units)
         for b in budgets
     }
-    safety = {
-        str(b): _safety_margin(results[str(b)], real_results[str(b)],
-                               capabilities)
-        for b in budgets
-    }
-
     payload = {
         "experiment": "工单 04：分块预算 1500 vs 3500 A/B（真实 LLM，slim+本地回填）",
         "generated_at": datetime.now(timezone.utc).isoformat(),

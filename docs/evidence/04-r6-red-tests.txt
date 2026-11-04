@@ -1,0 +1,170 @@
+FFFFFF.FFFFFFF                                                           [100%]
+=================================== FAILURES ===================================
+______________________ test_gate_checks_context_headroom _______________________
+
+    def test_gate_checks_context_headroom():
+        gate = evaluate_gate(gate_metrics(), passing_candidate())
+>       assert gate["checks"]["context_within_window"] is True
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'context_within_window'
+
+tests/test_chunk_budget_r6_fixes.py:44: KeyError
+__________ test_gate_fails_closed_when_context_capability_is_missing ___________
+
+    def test_gate_fails_closed_when_context_capability_is_missing():
+        candidate = passing_candidate()
+        candidate.pop("context_window")
+        gate = evaluate_gate(gate_metrics(), candidate)
+>       assert gate["checks"]["context_within_window"] is False
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'context_within_window'
+
+tests/test_chunk_budget_r6_fixes.py:56: KeyError
+____________ test_gate_fails_closed_when_context_capability_is_none ____________
+
+    def test_gate_fails_closed_when_context_capability_is_none():
+        candidate = passing_candidate(context_window=None)
+        gate = evaluate_gate(gate_metrics(), candidate)
+>       assert gate["checks"]["context_within_window"] is False
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'context_within_window'
+
+tests/test_chunk_budget_r6_fixes.py:63: KeyError
+_________________ test_gate_rejects_worst_delta_without_rounds _________________
+
+    def test_gate_rejects_worst_delta_without_rounds():
+>       with pytest.raises(ValueError, match="rounds"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_chunk_budget_r6_fixes.py:71: Failed
+____________ test_gate_rejects_explicit_worst_delta_without_rounds _____________
+
+    def test_gate_rejects_explicit_worst_delta_without_rounds():
+>       with pytest.raises(ValueError, match="rounds"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_chunk_budget_r6_fixes.py:76: Failed
+______________ test_gate_requires_and_checks_strict_entity_fields ______________
+
+    def test_gate_requires_and_checks_strict_entity_fields():
+        baseline = gate_metrics()
+        candidate = passing_candidate()
+        baseline.pop("entity_strict_f1_worst")
+>       with pytest.raises(ValueError, match="entity_strict_f1_worst"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_chunk_budget_r6_fixes.py:89: Failed
+____________ test_raw_entity_by_type_aggregates_from_persisted_rows ____________
+
+    def test_raw_entity_by_type_aggregates_from_persisted_rows():
+>       from tools.chunk_budget_ab import _raw_entity_by_type_from_rows
+E       ImportError: cannot import name '_raw_entity_by_type_from_rows' from 'tools.chunk_budget_ab' (/tmp/opencode/r6-red/tools/chunk_budget_ab.py)
+
+tests/test_chunk_budget_r6_fixes.py:115: ImportError
+______ test_from_json_regenerates_gate_with_new_context_and_strict_checks ______
+
+tmp_path = PosixPath('/tmp/pytest-of-dell/pytest-811/test_from_json_regenerates_gat0')
+
+    def test_from_json_regenerates_gate_with_new_context_and_strict_checks(tmp_path):
+        out = tmp_path / "regen.json"
+        payload = evidence_payload()
+        source = tmp_path / "source.json"
+        source.write_text(json.dumps(payload), encoding="utf-8")
+    
+        proc = subprocess.run(
+            [sys.executable, str(_REPO_ROOT / "tools/chunk_budget_ab.py"),
+             "--from-json", str(source), "--json-out", str(out)],
+            cwd=_REPO_ROOT,
+            env={"PYTHONPATH": str(_REPO_ROOT / "src"),
+                 "ARK_API_KEY": "dummy", "PATH": "/usr/bin:/bin"},
+            capture_output=True, text=True, timeout=120,
+        )
+        assert proc.returncode == 0, proc.stderr
+        regen = json.loads(out.read_text(encoding="utf-8"))
+>       assert "context_within_window" in regen["gate"]["checks"]
+E       AssertionError: assert 'context_within_window' in {'entity_raw_mean_within_0_5pt': True, 'entity_raw_worst_within_0_5pt': True, 'entity_normalized_mean_within_0_5pt': True, 'entity_normalized_worst_within_0_5pt': True, ...}
+
+tests/test_chunk_budget_r6_fixes.py:151: AssertionError
+__________ test_overlap_stats_names_denominator_as_min_ratio_document __________
+
+    def test_overlap_stats_names_denominator_as_min_ratio_document():
+        from tools.chunk_budget_ab import _overlap_stats
+    
+        stats = _overlap_stats({"rounds": [{"cases": [
+            {"n_chunks": 9, "overlap_pairs": 7},
+            {"n_chunks": 3, "overlap_pairs": 0},
+        ]}]})
+        assert stats["min_overlap_pairs"] == 0
+>       assert stats["min_ratio_document_possible_pairs"] == 2
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'min_ratio_document_possible_pairs'
+
+tests/test_chunk_budget_r6_fixes.py:169: KeyError
+______________ test_enrichment_does_not_write_dead_overlap_fields ______________
+
+    def test_enrichment_does_not_write_dead_overlap_fields():
+        from tools.chunk_budget_ab import _enrich_result_derived
+    
+        result = {"rounds": [{"cases": [
+            {"n_chunks": 9, "overlap_pairs": 7}]}]}
+        _enrich_result_derived(result)
+>       assert "overlap_pairs_possible_min" not in result
+E       AssertionError: assert 'overlap_pairs_possible_min' not in {'rounds': [{'cases': [{'n_chunks': 9, 'overlap_pairs': 7}]}], 'raw_relation_f1_mean': None, 'raw_relation_f1_worst': None, 'overlap_pairs_possible_min': 8, ...}
+
+tests/test_chunk_budget_r6_fixes.py:179: AssertionError
+_________________ test_gate_thresholds_reuse_budget_constants __________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x70c811b66db0>
+
+    def test_gate_thresholds_reuse_budget_constants(monkeypatch):
+        import tools.chunk_budget_ab as tool
+    
+>       monkeypatch.setattr(tool, "MAX_ENTITY_F1_DROP_PT", 0.25)
+E       AttributeError: <module 'tools.chunk_budget_ab' from '/tmp/opencode/r6-red/tools/chunk_budget_ab.py'> has no attribute 'MAX_ENTITY_F1_DROP_PT'
+
+tests/test_chunk_budget_r6_fixes.py:189: AttributeError
+_________________ test_r5_fix_evidence_uses_existing_venv_path _________________
+
+    def test_r5_fix_evidence_uses_existing_venv_path():
+        text = (_REPO_ROOT / "docs/evidence/04-r5-fix-evidence.md").read_text(
+            encoding="utf-8")
+>       assert "src .venv/bin/python" not in text
+E       AssertionError: assert 'src .venv/bin/python' not in '# 工单 04 评审 ....json\n```\n'
+E         
+E         'src .venv/bin/python' is contained here:
+E           YTHONPATH=src .venv/bin/python -m pytest \
+E             tests/test_chunking.py tests/test_chunk_budget.py \
+E             tests/test_chunk_budget_r1_fixes.py tests/test_chunk_budget_r2_fixes.py \
+E             tests/test_chunk_budget_r4_fixes.py tests/test_chunk_budget_r5_fixes.py -q
+E           # 93 passed...
+E         
+E         ...Full output truncated (6 lines hidden), use '-vv' to show
+
+tests/test_chunk_budget_r6_fixes.py:205: AssertionError
+____________ test_report_separates_estimated_units_from_real_tokens ____________
+
+    def test_report_separates_estimated_units_from_real_tokens():
+        text = (_REPO_ROOT / "docs/evidence/04-budget-ab.md").read_text(
+            encoding="utf-8")
+>       assert "最大块估算 3,597 units 来自压力语料" in text
+E       AssertionError: assert '最大块估算 3,597 units 来自压力语料' in '# 工单 04：分块预算 1500 → 3500 A/B 与上线判据（评审 r5 修复后：关系 raw+normalized 双口径 gate + overlap 证据修正）\n\n- 分支/worktree：`yzc/tmp-yzd...红记录，保留 |\n| `docs/evidence/04-green-tests.txt` | 首版定向用例，保留 |\n| `docs/evidence/04-full-suite.txt` | 首版全量 pytest，保留 |\n'
+
+tests/test_chunk_budget_r6_fixes.py:212: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_chunk_budget_r6_fixes.py::test_gate_checks_context_headroom
+FAILED tests/test_chunk_budget_r6_fixes.py::test_gate_fails_closed_when_context_capability_is_missing
+FAILED tests/test_chunk_budget_r6_fixes.py::test_gate_fails_closed_when_context_capability_is_none
+FAILED tests/test_chunk_budget_r6_fixes.py::test_gate_rejects_worst_delta_without_rounds
+FAILED tests/test_chunk_budget_r6_fixes.py::test_gate_rejects_explicit_worst_delta_without_rounds
+FAILED tests/test_chunk_budget_r6_fixes.py::test_gate_requires_and_checks_strict_entity_fields
+FAILED tests/test_chunk_budget_r6_fixes.py::test_raw_entity_by_type_aggregates_from_persisted_rows
+FAILED tests/test_chunk_budget_r6_fixes.py::test_from_json_regenerates_gate_with_new_context_and_strict_checks
+FAILED tests/test_chunk_budget_r6_fixes.py::test_overlap_stats_names_denominator_as_min_ratio_document
+FAILED tests/test_chunk_budget_r6_fixes.py::test_enrichment_does_not_write_dead_overlap_fields
+FAILED tests/test_chunk_budget_r6_fixes.py::test_gate_thresholds_reuse_budget_constants
+FAILED tests/test_chunk_budget_r6_fixes.py::test_r5_fix_evidence_uses_existing_venv_path
+FAILED tests/test_chunk_budget_r6_fixes.py::test_report_separates_estimated_units_from_real_tokens
+13 failed, 1 passed in 1.59s
