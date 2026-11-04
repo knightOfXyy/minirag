@@ -129,14 +129,14 @@ raw 关系口径要两处同步。已抽成
 
 ```bash
 cd /home/dell/orca/workspaces/minirag/tmp-yzd-feat-relation-202610-04
-ARK_API_KEY=dummy PYTHONPATH=src .venv/bin/python -m pytest \
+ARK_API_KEY=dummy PYTHONPATH=src ../moray/.venv/bin/python -m pytest \
   tests/test_chunking.py tests/test_chunk_budget.py \
   tests/test_chunk_budget_r1_fixes.py tests/test_chunk_budget_r2_fixes.py \
   tests/test_chunk_budget_r4_fixes.py tests/test_chunk_budget_r5_fixes.py -q
 # 93 passed
-ARK_API_KEY=dummy PYTHONPATH=src .venv/bin/python -m pytest -q
+ARK_API_KEY=dummy PYTHONPATH=src ../moray/.venv/bin/python -m pytest -q
 # 543 passed / 66 skipped
-PYTHONPATH=src .venv/bin/python tools/chunk_budget_ab.py \
+PYTHONPATH=src ../moray/.venv/bin/python tools/chunk_budget_ab.py \
   --from-json docs/evidence/04-budget-ab.json \
   --json-out docs/evidence/04-budget-ab.json
 ```
