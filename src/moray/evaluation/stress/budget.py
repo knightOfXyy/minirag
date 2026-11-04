@@ -7,12 +7,13 @@
   并单独统计「头尾首次出现相隔超过一个块预算」的文档级远距类别。残余项
   逐条列出，供报告如实披露；本单明确不处理它们，也不能静默丢弃。
 * :func:`evaluate_budget_gate` —— 把 1500/3500 两档的指标塞进同一套门槛：
-  实体（类型前缀标签归一化后）macro-F1 的 mean/worst 跌幅都 ≤0.5pt、
-  **全量关系 F1 的 mean/worst 不下降**（工单验收 2）、**关系「金标覆盖
-  子集」的 recall mean/worst 不下降、precision mean/worst 跌幅 ≤0.5pt**、
-  候选档截断块为 0、overlap 配置不变且实际仍发生重叠、单文档调用数下降。
-  任一不满足即 ``passed=False``，并逐项给出失败原因——门槛写在代码里，
-  不能靠报告手写一句“达标”放行。
+  **实体原始（未归一化）macro-F1 与类型前缀标签归一化后的 macro-F1 两套
+  口径的 mean/worst 跌幅都 ≤0.5pt**（评审 r4 B1：辅助口径不能替代验收
+  口径）、**全量关系 F1 的 mean/worst 不下降**（工单验收 2）、**关系
+  「金标覆盖子集」的 recall mean/worst 不下降、precision mean/worst 跌幅
+  ≤0.5pt**、候选档截断块为 0、overlap 配置不变且实际仍发生重叠、单文档
+  调用数下降、两档预算必须不同。任一不满足即 ``passed=False``，并逐项给出
+  失败原因——门槛写在代码里，不能靠报告手写一句“达标”放行。
 
   全量口径（含 02 金标刻意未标注句面上的 FP）与覆盖子集口径并列列报；
   两者都参与放行（评审 r2 F2 修复：此前全量 F1 只列报，导致全量掉 7pt
@@ -87,6 +88,11 @@ def relation_chunk_profile(
                 _same_chunk(chunks, h, head_len, t, tail_len)
                 for h in head_positions for t in tail_positions
             )
+            # 同一 first-occurrence gap 只算一次（评审 r4 N2）。
+            first_gap = None
+            if head_positions and tail_positions:
+                a, b = sorted((head_positions[0], tail_positions[0]))
+                first_gap = estimate_tokens(case.text[a:b])
             if covered:
                 co_chunk += 1
             else:
@@ -98,26 +104,19 @@ def relation_chunk_profile(
                     "head_occurrences": len(head_positions),
                     "tail_occurrences": len(tail_positions),
                 }
-                first_gap = None
-                if head_positions and tail_positions:
-                    a, b = sorted((head_positions[0], tail_positions[0]))
-                    first_gap = estimate_tokens(case.text[a:b])
                 row["first_occurrence_gap_units"] = first_gap
                 residual.append(row)
 
-            if head_positions and tail_positions:
-                a, b = sorted((head_positions[0], tail_positions[0]))
-                gap = estimate_tokens(case.text[a:b])
-                if gap > max_units:
-                    far_first += 1
-                    far_examples.append({
-                        "document": case.name,
-                        "head": relation.head,
-                        "predicate": relation.predicate,
-                        "tail": relation.tail,
-                        "first_occurrence_gap_units": gap,
-                        "covered_by_repeated_mention": covered,
-                    })
+            if first_gap is not None and first_gap > max_units:
+                far_first += 1
+                far_examples.append({
+                    "document": case.name,
+                    "head": relation.head,
+                    "predicate": relation.predicate,
+                    "tail": relation.tail,
+                    "first_occurrence_gap_units": first_gap,
+                    "covered_by_repeated_mention": covered,
+                })
 
     def _ratio(n: int) -> float:
         return round(n / total, 6) if total else 0.0
@@ -146,7 +145,10 @@ def relation_chunk_profile(
 
 _REQUIRED_GATE_KEYS = (
     "budget", "overlap_units", "overlap_pairs_min", "chunk_calls",
+    # 实体轴双口径：raw 是验收口径，normalized 是辅助口径；两套都必填、
+    # 都进 checks。评审 r4 B1：不允许只填归一化辅助口径就放行。
     "entity_macro_f1_mean", "entity_macro_f1_worst",
+    "raw_entity_macro_f1_mean", "raw_entity_macro_f1_worst",
     "relation_covered_recall_mean", "relation_covered_recall_worst",
     "relation_covered_precision_mean", "relation_covered_precision_worst",
     # 工单 04 验收 2 明确要求“关系 F1 不下降”，全量口径必须参与放行。
@@ -155,23 +157,56 @@ _REQUIRED_GATE_KEYS = (
 # 评审 r2 F11：只有候选档读 ``truncated_chunks``，基线不再被强制要求。
 _REQUIRED_CANDIDATE_KEYS = ("truncated_chunks",)
 
+# 调用方提供的 explicit worst delta 与 rounds 的对应关系（评审 r4 N3）。
+_WORST_DELTA_ROUND_KEY = {
+    "entity_macro_f1_worst_delta_pt": "entity_macro_f1",
+    "raw_entity_macro_f1_worst_delta_pt": "raw_entity_macro_f1",
+    "relation_f1_worst_delta_pt": "relation_f1",
+    "relation_covered_recall_worst_delta_pt": "relation_covered_recall",
+    "relation_covered_precision_worst_delta_pt": "relation_covered_precision",
+}
+
+
+def _round_aligned_worst_delta(
+    baseline_rounds: list[dict[str, float]],
+    candidate_rounds: list[dict[str, float]],
+    key: str,
+) -> float:
+    """逐轮对齐后最坏的一轮差（百分点）；两档轮数必须一致。"""
+    if len(baseline_rounds) != len(candidate_rounds):
+        raise ValueError(
+            "baseline_rounds 与 candidate_rounds 轮数不一致: "
+            f"{len(baseline_rounds)} vs {len(candidate_rounds)}")
+    if not baseline_rounds:
+        raise ValueError("rounds 不能为空")
+    deltas = [
+        round((float(cand[key]) - float(base[key])) * 100, 4)
+        for base, cand in zip(baseline_rounds, candidate_rounds)
+    ]
+    return min(deltas)
+
 
 def evaluate_budget_gate(
     baseline: dict[str, Any],
     candidate: dict[str, Any],
     *,
     max_entity_drop_pt: float = MAX_ENTITY_F1_DROP_PT,
+    baseline_rounds: list[dict[str, float]] | None = None,
+    candidate_rounds: list[dict[str, float]] | None = None,
 ) -> dict[str, Any]:
     """按工单 04 的放量门槛判定候选块预算能否切换默认值。
 
     放行条件（全部满足）：
-    * 实体（类型前缀标签归一化后）macro-F1 的 mean/worst 跌幅 ≤0.5pt；
+    * 实体 **原始未归一化** macro-F1 的 mean/worst 跌幅 ≤0.5pt（验收口径）；
+    * 实体 **类型前缀标签归一化后** macro-F1 的 mean/worst 跌幅 ≤0.5pt
+      （辅助口径；两套都进 ``checks``，评审 r4 B1）；
     * **全量关系 F1 的 mean/worst 不下降**（工单验收 2 的原始判据，F2）；
     * 关系「金标覆盖子集」recall 的 mean/worst 不下降；
     * 关系「金标覆盖子集」precision 的 mean/worst 跌幅 ≤0.5pt；
     * 候选档截断块为 0；
     * overlap 配置不变（冻结基线，不接受调用方自证）且实际仍有重叠；
-    * 单文档调用数下降。
+    * 单文档调用数下降；
+    * 两档预算必须不同（评审 r4 N3：1500-vs-1500 不能 passed）。
 
     覆盖子集与全量口径**并列**：F2 修复后，全量 F1 也进 ``checks``，
     不再出现“全量 F1 掉 7pt 仍 passed”的情况。
@@ -180,14 +215,19 @@ def evaluate_budget_gate(
     F1、再跨篇/跨轮平均”的 macro；覆盖子集是“TP/FP/FN 跨篇池化”的 micro。
     ``caliber`` 字段显式标注，报告主表不能把两列当成同一口径比较。
 
-    ``candidate`` 如显式提供 ``entity_macro_f1_worst_delta_pt`` 等逐轮
-    最坏差，优先使用它；否则退回“两档各自最差值相减”。门槛参数只能收紧，
-    不能放宽（``max_entity_drop_pt > 0.5`` 直接报错）。
+    ``candidate`` 如显式提供 ``*_worst_delta_pt``，必须与
+    ``baseline_rounds`` / ``candidate_rounds`` 的逐轮对齐差一致；二者都提供
+    时由 gate 复算并校验，防止调用方用两档各自最差值相减糊弄（评审 r4 N3）。
+    未提供 explicit 值时也用 rounds 复算。门槛参数只能收紧，不能放宽
+    （``max_entity_drop_pt > 0.5`` 直接报错）。
     """
     if max_entity_drop_pt > MAX_ENTITY_F1_DROP_PT:
         raise ValueError(
             f"max_entity_drop_pt={max_entity_drop_pt} 超过硬上限 "
             f"{MAX_ENTITY_F1_DROP_PT}；门槛不可放宽")
+    if (baseline_rounds is None) != (candidate_rounds is None):
+        raise ValueError(
+            "baseline_rounds 与 candidate_rounds 必须同时提供或同时省略")
     missing = [key for key in _REQUIRED_GATE_KEYS
                if key not in baseline or key not in candidate]
     missing += [key for key in _REQUIRED_CANDIDATE_KEYS
@@ -199,6 +239,17 @@ def evaluate_budget_gate(
         return round((after - before) * 100, 4)
 
     def _delta(key: str, explicit_key: str | None = None) -> float:
+        if explicit_key and baseline_rounds is not None:
+            computed = _round_aligned_worst_delta(
+                baseline_rounds, candidate_rounds,
+                _WORST_DELTA_ROUND_KEY[explicit_key])
+            explicit = candidate.get(explicit_key)
+            if explicit is not None and abs(
+                    round(float(explicit), 4) - computed) > 0.0001:
+                raise ValueError(
+                    f"{explicit_key}={explicit} 与 rounds 逐轮对齐复算值 "
+                    f"{computed} 不一致；gate 不接受调用方自证")
+            return computed
         if explicit_key and candidate.get(explicit_key) is not None:
             return round(candidate[explicit_key], 4)
         return _pt(baseline[key], candidate[key])
@@ -206,6 +257,9 @@ def evaluate_budget_gate(
     entity_mean_delta = _delta("entity_macro_f1_mean")
     entity_worst_delta = _delta(
         "entity_macro_f1_worst", "entity_macro_f1_worst_delta_pt")
+    raw_entity_mean_delta = _delta("raw_entity_macro_f1_mean")
+    raw_entity_worst_delta = _delta(
+        "raw_entity_macro_f1_worst", "raw_entity_macro_f1_worst_delta_pt")
     covered_recall_mean_delta = _delta("relation_covered_recall_mean")
     covered_recall_worst_delta = _delta(
         "relation_covered_recall_worst",
@@ -222,8 +276,14 @@ def evaluate_budget_gate(
         candidate["overlap_units"] == baseline["overlap_units"])
     overlap_observed = int(candidate["overlap_pairs_min"]) > 0
     checks = {
-        "entity_mean_within_0_5pt": entity_mean_delta >= -max_entity_drop_pt,
-        "entity_worst_within_0_5pt": entity_worst_delta >= -max_entity_drop_pt,
+        "entity_raw_mean_within_0_5pt": (
+            raw_entity_mean_delta >= -max_entity_drop_pt),
+        "entity_raw_worst_within_0_5pt": (
+            raw_entity_worst_delta >= -max_entity_drop_pt),
+        "entity_normalized_mean_within_0_5pt": (
+            entity_mean_delta >= -max_entity_drop_pt),
+        "entity_normalized_worst_within_0_5pt": (
+            entity_worst_delta >= -max_entity_drop_pt),
         "relation_full_f1_mean_not_lower": full_mean_delta >= 0.0,
         "relation_full_f1_worst_not_lower": full_worst_delta >= 0.0,
         "relation_covered_recall_mean_not_lower": covered_recall_mean_delta >= 0.0,
@@ -237,6 +297,8 @@ def evaluate_budget_gate(
         "overlap_observed": overlap_observed,
         "chunk_calls_decreased": (
             candidate["chunk_calls"] < baseline["chunk_calls"]),
+        "budgets_differ": (
+            baseline.get("budget") != candidate.get("budget")),
     }
     failures = [name for name, ok in checks.items() if not ok]
     return {
@@ -245,6 +307,9 @@ def evaluate_budget_gate(
         "failures": failures,
         "entity_macro_f1_mean_delta_pt": entity_mean_delta,
         "entity_macro_f1_worst_delta_pt": entity_worst_delta,
+        # 验收口径（原始未归一化）：与 normalized 并列且同样进 checks（B1）。
+        "raw_entity_macro_f1_mean_delta_pt": raw_entity_mean_delta,
+        "raw_entity_macro_f1_worst_delta_pt": raw_entity_worst_delta,
         "relation_covered_recall_mean_delta_pt": covered_recall_mean_delta,
         "relation_covered_recall_worst_delta_pt": covered_recall_worst_delta,
         "relation_covered_precision_mean_delta_pt": covered_precision_mean_delta,
@@ -252,6 +317,13 @@ def evaluate_budget_gate(
         # 全量口径：与覆盖子集并列列报，并参与 checks（F2）。
         "relation_full_mean_delta_pt": full_mean_delta,
         "relation_full_worst_delta_pt": full_worst_delta,
+        # 评审 r4 B1：实体轴双口径显式标注，raw 是验收口径。
+        "entity_caliber": {
+            "acceptance": "raw（原始未归一化）macro-F1",
+            "auxiliary": "normalized（类型前缀标签归一化后）macro-F1",
+            "rule": ("raw 与 normalized 的 mean/worst 都进 checks，"
+                     "任一跌幅超过 0.5pt 即 fail；辅助口径不能替代验收口径"),
+        },
         # 评审 r2 F7：两轴口径不同，报告不得按同一列直接比较。
         "caliber": {
             "entity_macro_f1": (
@@ -269,4 +341,5 @@ def evaluate_budget_gate(
             "baseline": baseline.get("budget"),
             "candidate": candidate.get("budget"),
         },
+        "rounds_used_for_explicit_deltas": baseline_rounds is not None,
     }

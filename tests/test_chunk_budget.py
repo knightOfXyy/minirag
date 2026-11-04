@@ -5,9 +5,10 @@
 1. 配置层：默认预算/重叠不变；3500 可经现有配置项设置，且只改预算、不动 overlap；
 2. 几何层：跨块关系（头尾无法落进同一块）与「文档级远距首现」被显式统计，
    残余项不静默丢弃；
-3. 判据层：A/B 门槛（实体 macro-F1 跌 ≤0.5pt、全量关系 F1 不降、
-   金标覆盖子集 recall 不降且 precision 跌 ≤0.5pt、截断 0、overlap 不变、
-   调用数下降）任一不满足都必须判失败——防止后续为了让结果过关而放宽门槛。
+3. 判据层：A/B 门槛（实体 raw 与 normalized 两套 macro-F1 的 mean/worst 都跌
+    ≤0.5pt、全量关系 F1 不降、金标覆盖子集 recall 不降且 precision 跌 ≤0.5pt、
+   截断 0、overlap 不变、调用数下降、两档预算不同）任一不满足都必须判失败——
+   防止后续为了让结果过关而放宽门槛或只报辅助口径。
 """
 
 from __future__ import annotations
@@ -22,6 +23,8 @@ from moray.evaluation.stress.budget import (
     relation_chunk_profile,
 )
 from moray.extraction import Chunker, estimate_tokens
+
+from gate_fixtures import GATE_FAILURE_CASES, gate_metrics, passing_candidate
 
 
 def _clear_chunk_env(monkeypatch):
@@ -175,47 +178,8 @@ def test_relation_chunk_profile_uses_any_occurrence_pair():
 # ---------------------------------------------------------------------------
 # 判据层：门槛不可被悄悄放宽
 # ---------------------------------------------------------------------------
-def _metrics(**overrides):
-    base = {
-        "budget": 1500,
-        "overlap_units": 200,
-        "overlap_pairs_min": 8,
-        "chunk_calls": 14,
-        "truncated_chunks": 3,
-        "entity_macro_f1_mean": 0.9000,
-        "entity_macro_f1_worst": 0.8800,
-        "relation_covered_recall_mean": 0.8000,
-        "relation_covered_recall_worst": 0.7500,
-        "relation_covered_precision_mean": 0.9000,
-        "relation_covered_precision_worst": 0.8500,
-        "relation_f1_mean": 0.5000,
-        "relation_f1_worst": 0.4500,
-    }
-    base.update(overrides)
-    return base
-
-
-def _passing_candidate(**overrides):
-    candidate = _metrics(
-        budget=3500,
-        overlap_pairs_min=7,
-        chunk_calls=6,
-        truncated_chunks=0,
-        entity_macro_f1_mean=0.8960,   # -0.40pt
-        entity_macro_f1_worst=0.8760,  # -0.40pt
-        relation_covered_recall_mean=0.8000,
-        relation_covered_recall_worst=0.7500,
-        relation_covered_precision_mean=0.8950,   # -0.50pt 边界
-        relation_covered_precision_worst=0.8450,
-        relation_f1_mean=0.5000,       # 全量口径也不下降
-        relation_f1_worst=0.4500,
-    )
-    candidate.update(overrides)
-    return candidate
-
-
 def test_budget_gate_passes_only_when_all_thresholds_met():
-    gate = evaluate_budget_gate(_metrics(), _passing_candidate())
+    gate = evaluate_budget_gate(gate_metrics(), passing_candidate())
     assert gate["passed"] is True
     assert all(gate["checks"].values())
     assert gate["entity_macro_f1_mean_delta_pt"] == pytest.approx(-0.4)
@@ -225,37 +189,19 @@ def test_budget_gate_passes_only_when_all_thresholds_met():
     assert gate["checks"]["relation_full_f1_mean_not_lower"] is True
 
 
-@pytest.mark.parametrize(
-    ("overrides", "failed_check"),
-    [
-        ({"entity_macro_f1_mean": 0.8949}, "entity_mean_within_0_5pt"),
-        ({"entity_macro_f1_worst": 0.8749}, "entity_worst_within_0_5pt"),
-        ({"relation_covered_recall_mean": 0.7999},
-         "relation_covered_recall_mean_not_lower"),
-        ({"relation_covered_recall_worst": 0.7499},
-         "relation_covered_recall_worst_not_lower"),
-        ({"relation_covered_precision_mean": 0.8949},
-         "relation_covered_precision_mean_within_0_5pt"),
-        ({"relation_covered_precision_worst": 0.8449},
-         "relation_covered_precision_worst_within_0_5pt"),
-        ({"relation_f1_mean": 0.4999}, "relation_full_f1_mean_not_lower"),
-        ({"relation_f1_worst": 0.4499}, "relation_full_f1_worst_not_lower"),
-        ({"truncated_chunks": 1}, "truncated_chunks_zero"),
-        ({"overlap_units": 0}, "overlap_unchanged"),
-        ({"overlap_pairs_min": 0}, "overlap_observed"),
-        ({"chunk_calls": 14}, "chunk_calls_decreased"),
-    ],
-)
+@pytest.mark.parametrize(("overrides", "failed_check"), GATE_FAILURE_CASES)
 def test_budget_gate_fails_when_any_threshold_breaks(overrides, failed_check):
-    gate = evaluate_budget_gate(_metrics(), _passing_candidate(**overrides))
+    gate = evaluate_budget_gate(gate_metrics(), passing_candidate(**overrides))
     assert gate["passed"] is False
     assert gate["checks"][failed_check] is False
 
 
 def test_budget_gate_boundary_exactly_half_point_passes():
-    gate = evaluate_budget_gate(_metrics(), _passing_candidate(
+    gate = evaluate_budget_gate(gate_metrics(), passing_candidate(
         entity_macro_f1_mean=0.8950,
         entity_macro_f1_worst=0.8750,
+        raw_entity_macro_f1_mean=0.8950,
+        raw_entity_macro_f1_worst=0.8750,
         relation_covered_precision_mean=0.8950,
         relation_covered_precision_worst=0.8450,
     ))
@@ -265,12 +211,15 @@ def test_budget_gate_boundary_exactly_half_point_passes():
 
 def test_budget_gate_prefers_explicit_worst_round_delta():
     """worst-of-N 用逐轮对齐差（严格），不能拿两档各自最差值相减糊弄过去。"""
-    gate = evaluate_budget_gate(_metrics(), _passing_candidate(
+    gate = evaluate_budget_gate(gate_metrics(), passing_candidate(
         entity_macro_f1_worst_delta_pt=-0.8,
+        raw_entity_macro_f1_worst_delta_pt=-0.8,
         relation_covered_recall_worst_delta_pt=-0.2,
     ))
     assert gate["entity_macro_f1_worst_delta_pt"] == pytest.approx(-0.8)
-    assert gate["checks"]["entity_worst_within_0_5pt"] is False
+    assert gate["raw_entity_macro_f1_worst_delta_pt"] == pytest.approx(-0.8)
+    assert gate["checks"]["entity_normalized_worst_within_0_5pt"] is False
+    assert gate["checks"]["entity_raw_worst_within_0_5pt"] is False
     assert gate["checks"]["relation_covered_recall_worst_not_lower"] is False
     assert gate["passed"] is False
 

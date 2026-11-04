@@ -29,6 +29,8 @@ from moray.evaluation.stress import (
 from moray.evaluation.stress.budget import evaluate_budget_gate
 from moray.schema import Entity, EntityMention, ExtractionResult, Relation, Span
 
+from gate_fixtures import GATE_FAILURE_CASES, gate_metrics, passing_candidate
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT))
 
@@ -148,50 +150,10 @@ def test_gold_covered_subset_keeps_gold_recall_denominator():
 
 
 # ---------------------------------------------------------------------------
-# 判据层：新门槛（实体归一化 + 关系覆盖子集，全量口径仅列报）
+# 判据层：新门槛（实体双口径 + 关系覆盖子集 + 全量 F1）
 # ---------------------------------------------------------------------------
-def _metrics(**overrides):
-    base = {
-        "budget": 1500,
-        "overlap_units": 200,
-        "overlap_pairs_min": 8,
-        "chunk_calls": 14,
-        "truncated_chunks": 3,
-        "entity_macro_f1_mean": 0.9000,
-        "entity_macro_f1_worst": 0.8800,
-        "relation_covered_recall_mean": 0.8000,
-        "relation_covered_recall_worst": 0.7500,
-        "relation_covered_precision_mean": 0.9000,
-        "relation_covered_precision_worst": 0.8500,
-        # 全量口径：只列报，不参与放行
-        "relation_f1_mean": 0.5000,
-        "relation_f1_worst": 0.4500,
-    }
-    base.update(overrides)
-    return base
-
-
-def _passing_candidate(**overrides):
-    base = _metrics(
-        budget=3500,
-        overlap_pairs_min=7,
-        chunk_calls=6,
-        truncated_chunks=0,
-        entity_macro_f1_mean=0.8960,        # -0.40pt
-        entity_macro_f1_worst=0.8760,       # -0.40pt
-        relation_covered_recall_mean=0.8000,
-        relation_covered_recall_worst=0.7500,
-        relation_covered_precision_mean=0.8950,   # -0.50pt 边界
-        relation_covered_precision_worst=0.8450,  # -0.50pt 边界
-        relation_f1_mean=0.5000,            # 全量口径也必须不下降
-        relation_f1_worst=0.4500,
-    )
-    base.update(overrides)
-    return base
-
-
 def test_gate_passes_with_normalized_entity_and_covered_relation_caliber():
-    gate = evaluate_budget_gate(_metrics(), _passing_candidate())
+    gate = evaluate_budget_gate(gate_metrics(), passing_candidate())
     assert gate["passed"] is True
     assert all(gate["checks"].values())
     # 全量口径仍出现在结果里，且全量 F1 也参与放行（F2）
@@ -200,29 +162,9 @@ def test_gate_passes_with_normalized_entity_and_covered_relation_caliber():
     assert gate["relation_covered_recall_mean_delta_pt"] == pytest.approx(0.0)
 
 
-@pytest.mark.parametrize(
-    ("overrides", "failed_check"),
-    [
-        ({"entity_macro_f1_mean": 0.8949}, "entity_mean_within_0_5pt"),
-        ({"entity_macro_f1_worst": 0.8749}, "entity_worst_within_0_5pt"),
-        ({"relation_covered_recall_mean": 0.7999},
-         "relation_covered_recall_mean_not_lower"),
-        ({"relation_covered_recall_worst": 0.7499},
-         "relation_covered_recall_worst_not_lower"),
-        ({"relation_covered_precision_mean": 0.8949},
-         "relation_covered_precision_mean_within_0_5pt"),
-        ({"relation_covered_precision_worst": 0.8449},
-         "relation_covered_precision_worst_within_0_5pt"),
-        ({"relation_f1_mean": 0.4999}, "relation_full_f1_mean_not_lower"),
-        ({"relation_f1_worst": 0.4499}, "relation_full_f1_worst_not_lower"),
-        ({"truncated_chunks": 1}, "truncated_chunks_zero"),
-        ({"overlap_units": 0}, "overlap_unchanged"),
-        ({"overlap_pairs_min": 0}, "overlap_observed"),
-        ({"chunk_calls": 14}, "chunk_calls_decreased"),
-    ],
-)
+@pytest.mark.parametrize(("overrides", "failed_check"), GATE_FAILURE_CASES)
 def test_gate_fails_when_any_new_threshold_breaks(overrides, failed_check):
-    gate = evaluate_budget_gate(_metrics(), _passing_candidate(**overrides))
+    gate = evaluate_budget_gate(gate_metrics(), passing_candidate(**overrides))
     assert gate["passed"] is False
     assert gate["checks"][failed_check] is False
 
@@ -230,7 +172,7 @@ def test_gate_fails_when_any_new_threshold_breaks(overrides, failed_check):
 def test_gate_entity_threshold_cannot_be_loosened_by_caller():
     with pytest.raises(ValueError):
         evaluate_budget_gate(
-            _metrics(), _passing_candidate(entity_macro_f1_mean=0.8500),
+            gate_metrics(), passing_candidate(entity_macro_f1_mean=0.8500),
             max_entity_drop_pt=99.0)
 
 

@@ -1,0 +1,173 @@
+FFFFFFFFFF.                                                              [100%]
+=================================== FAILURES ===================================
+_____________ test_gate_includes_raw_and_normalized_entity_checks ______________
+
+    def test_gate_includes_raw_and_normalized_entity_checks():
+        gate = evaluate_budget_gate(gate_metrics(), passing_candidate())
+        for name in (
+            "entity_raw_mean_within_0_5pt",
+            "entity_raw_worst_within_0_5pt",
+            "entity_normalized_mean_within_0_5pt",
+            "entity_normalized_worst_within_0_5pt",
+        ):
+>           assert gate["checks"][name] is True
+                   ^^^^^^^^^^^^^^^^^^^^
+E           KeyError: 'entity_raw_mean_within_0_5pt'
+
+tests/test_chunk_budget_r4_fixes.py:39: KeyError
+_______ test_gate_fails_when_raw_entity_drops_even_if_normalized_passes ________
+
+    def test_gate_fails_when_raw_entity_drops_even_if_normalized_passes():
+        candidate = passing_candidate(
+            # 归一化辅助口径全绿（+），但原始验收口径掉 3pt。
+            entity_macro_f1_mean=0.9300,
+            entity_macro_f1_worst=0.9100,
+            raw_entity_macro_f1_mean=0.8700,
+            raw_entity_macro_f1_worst=0.8500,
+        )
+        gate = evaluate_budget_gate(gate_metrics(), candidate)
+>       assert gate["checks"]["entity_normalized_mean_within_0_5pt"] is True
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'entity_normalized_mean_within_0_5pt'
+
+tests/test_chunk_budget_r4_fixes.py:55: KeyError
+_____________________ test_gate_requires_raw_entity_fields _____________________
+
+    def test_gate_requires_raw_entity_fields():
+        baseline = gate_metrics()
+        candidate = passing_candidate()
+        baseline.pop("raw_entity_macro_f1_mean")
+>       with pytest.raises(ValueError, match="raw_entity_macro_f1_mean"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_chunk_budget_r4_fixes.py:65: Failed
+_________________ test_gate_rejects_same_budget_on_both_sides __________________
+
+    def test_gate_rejects_same_budget_on_both_sides():
+        gate = evaluate_budget_gate(
+            gate_metrics(), passing_candidate(budget=1500))
+>       assert gate["checks"]["budgets_differ"] is False
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'budgets_differ'
+
+tests/test_chunk_budget_r4_fixes.py:75: KeyError
+____________ test_gate_recomputes_explicit_worst_delta_from_rounds _____________
+
+    def test_gate_recomputes_explicit_worst_delta_from_rounds():
+        baseline_rounds = [{"entity_macro_f1": 0.9000, "raw_entity_macro_f1": 0.9000,
+                            "relation_f1": 0.5000, "relation_covered_recall": 0.8000,
+                            "relation_covered_precision": 0.9000}]
+        candidate_rounds = [{"entity_macro_f1": 0.8800, "raw_entity_macro_f1": 0.8500,
+                             "relation_f1": 0.4990, "relation_covered_recall": 0.7990,
+                             "relation_covered_precision": 0.8990}]
+        with pytest.raises(ValueError, match="relation_f1_worst_delta_pt"):
+>           evaluate_budget_gate(
+                gate_metrics(), passing_candidate(relation_f1_worst_delta_pt=0.0),
+                baseline_rounds=baseline_rounds, candidate_rounds=candidate_rounds)
+E           TypeError: evaluate_budget_gate() got an unexpected keyword argument 'baseline_rounds'
+
+tests/test_chunk_budget_r4_fixes.py:87: TypeError
+_________ test_gate_uses_round_recomputed_worst_when_no_explicit_delta _________
+
+    def test_gate_uses_round_recomputed_worst_when_no_explicit_delta():
+        baseline_rounds = [
+            {"entity_macro_f1": 0.9000, "raw_entity_macro_f1": 0.9000,
+             "relation_f1": 0.5000, "relation_covered_recall": 0.8000,
+             "relation_covered_precision": 0.9000},
+            {"entity_macro_f1": 0.8900, "raw_entity_macro_f1": 0.8900,
+             "relation_f1": 0.4900, "relation_covered_recall": 0.7900,
+             "relation_covered_precision": 0.8900},
+        ]
+        candidate_rounds = [
+            {"entity_macro_f1": 0.8960, "raw_entity_macro_f1": 0.8960,
+             "relation_f1": 0.5000, "relation_covered_recall": 0.8000,
+             "relation_covered_precision": 0.8950},
+            {"entity_macro_f1": 0.8760, "raw_entity_macro_f1": 0.8760,
+             "relation_f1": 0.4490, "relation_covered_recall": 0.7500,
+             "relation_covered_precision": 0.8450},
+        ]
+>       gate = evaluate_budget_gate(
+            gate_metrics(), passing_candidate(),
+            baseline_rounds=baseline_rounds, candidate_rounds=candidate_rounds)
+E       TypeError: evaluate_budget_gate() got an unexpected keyword argument 'baseline_rounds'
+
+tests/test_chunk_budget_r4_fixes.py:109: TypeError
+______ test_relation_endpoint_fallback_does_not_strip_when_type_is_absent ______
+
+    def test_relation_endpoint_fallback_does_not_strip_when_type_is_absent():
+        text = "编号 X 是机构代号，王五负责对接。"
+        pred = ExtractionResult(
+            entities=[Entity(name="王五", type="PER")],
+            relations=[Relation(head="王五", predicate="对接", tail="编号 X")],
+        )
+        gold = ExtractionResult(
+            entities=[Entity(name="王五", type="PER")],
+            relations=[Relation(head="王五", predicate="对接", tail="X")],
+        )
+        ev = evaluate_case("no-event", 1, pred, gold, text=text,
+                           normalize_type_labels=True)
+        # 文档里没有 EVENT 实体：不能把 PER/MISC 的“编号 X”也剥成“X”造假 TP。
+>       assert ev.report.relation.tp == 0
+E       AssertionError: assert 1 == 0
+E        +  where 1 = PRF(tp=1, fp=0, fn=0).tp
+E        +    where PRF(tp=1, fp=0, fn=0) = EvalReport(entity_strict=PRF(tp=0, fp=0, fn=0), entity_relaxed=PRF(tp=1, fp=0, fn=0), relation=PRF(tp=1, fp=0, fn=0)).relation
+E        +      where EvalReport(entity_strict=PRF(tp=0, fp=0, fn=0), entity_relaxed=PRF(tp=1, fp=0, fn=0), relation=PRF(tp=1, fp=0, fn=0)) = CaseEvaluation(name='no-event', seed=1, pred=ExtractionResult(entities=[Entity(name='王五', type='PER', aliases=[], ment...n=PRF(tp=1, fp=0, fn=0)), relation_covered=PRF(tp=1, fp=0, fn=0), gold_covered_sentences=1, uncovered_gold_relations=0).report
+
+tests/test_chunk_budget_r4_fixes.py:133: AssertionError
+_________ test_evidence_thresholds_describe_full_relation_f1_as_gating _________
+
+    def test_evidence_thresholds_describe_full_relation_f1_as_gating():
+>       from tools.chunk_budget_ab import gate_thresholds
+E       ImportError: cannot import name 'gate_thresholds' from 'tools.chunk_budget_ab' (/tmp/opencode/04-red-baseline/tools/chunk_budget_ab.py)
+
+tests/test_chunk_budget_r4_fixes.py:142: ImportError
+_________________ test_from_json_regenerates_gate_without_llm __________________
+
+tmp_path = PosixPath('/tmp/pytest-of-dell/pytest-781/test_from_json_regenerates_gat0')
+
+    def test_from_json_regenerates_gate_without_llm(tmp_path):
+        out = tmp_path / "regen.json"
+        source = _REPO_ROOT / "docs/evidence/04-budget-ab.json"
+        env = {"PYTHONPATH": str(_REPO_ROOT / "src"), "ARK_API_KEY": "dummy"}
+        proc = subprocess.run(
+            [sys.executable, str(_REPO_ROOT / "tools/chunk_budget_ab.py"),
+             "--from-json", str(source), "--json-out", str(out)],
+            cwd=_REPO_ROOT, env={**env, "PATH": "/usr/bin:/bin"},
+            capture_output=True, text=True, timeout=120,
+        )
+>       assert proc.returncode == 0, proc.stderr
+E       AssertionError: usage: chunk_budget_ab.py [-h] [--gold GOLD] [--real-gold REAL_GOLD]
+E                                   [--samples SAMPLES] [--real-doc REAL_DOC]
+E                                   [--env-file ENV_FILE] [--budgets BUDGETS]
+E                                   [--overlap-units OVERLAP_UNITS]
+E                                   [--concurrency CONCURRENCY] [--repeat REPEAT]
+E                                   [--limit LIMIT] [--temperature TEMPERATURE]
+E                                   [--json-out JSON_OUT]
+E         chunk_budget_ab.py: error: unrecognized arguments: --from-json /tmp/opencode/04-red-baseline/docs/evidence/04-budget-ab.json
+E         
+E       assert 2 == 0
+E        +  where 2 = CompletedProcess(args=['/home/dell/orca/workspaces/minirag/moray/.venv/bin/python', '/tmp/opencode/04-red-baseline/too...get_ab.py: error: unrecognized arguments: --from-json /tmp/opencode/04-red-baseline/docs/evidence/04-budget-ab.json\n').returncode
+
+tests/test_chunk_budget_r4_fixes.py:163: AssertionError
+_____________ test_deployment_switch_steps_name_both_default_sites _____________
+
+    def test_deployment_switch_steps_name_both_default_sites():
+        text = (_REPO_ROOT / "docs/DEPLOYMENT.md").read_text(encoding="utf-8")
+        block = text.split("## 2c.")[1].split("## 3.")[0]
+>       assert "Chunker" in block
+E       AssertionError: assert 'Chunker' in ' 分块预算（默认 1500；3500 需 A/B 达标后单独切换）\n\n分块预算走现有 env，默认值**保持不变**（`max_units=1500`、`overlap_units=200`）：\n\n```bash\nMORAY...**（只改 `config.chunk_settings()` 的\n默认那一处），回滚直接 `git revert <该 commit>`。当前该 commit **未添加**\n（A/B 准确率门槛未通过，见报告“结论”）。\n\n'
+
+tests/test_chunk_budget_r4_fixes.py:179: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_chunk_budget_r4_fixes.py::test_gate_includes_raw_and_normalized_entity_checks
+FAILED tests/test_chunk_budget_r4_fixes.py::test_gate_fails_when_raw_entity_drops_even_if_normalized_passes
+FAILED tests/test_chunk_budget_r4_fixes.py::test_gate_requires_raw_entity_fields
+FAILED tests/test_chunk_budget_r4_fixes.py::test_gate_rejects_same_budget_on_both_sides
+FAILED tests/test_chunk_budget_r4_fixes.py::test_gate_recomputes_explicit_worst_delta_from_rounds
+FAILED tests/test_chunk_budget_r4_fixes.py::test_gate_uses_round_recomputed_worst_when_no_explicit_delta
+FAILED tests/test_chunk_budget_r4_fixes.py::test_relation_endpoint_fallback_does_not_strip_when_type_is_absent
+FAILED tests/test_chunk_budget_r4_fixes.py::test_evidence_thresholds_describe_full_relation_f1_as_gating
+FAILED tests/test_chunk_budget_r4_fixes.py::test_from_json_regenerates_gate_without_llm
+FAILED tests/test_chunk_budget_r4_fixes.py::test_deployment_switch_steps_name_both_default_sites
+10 failed, 1 passed in 1.62s

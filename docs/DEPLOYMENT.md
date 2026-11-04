@@ -117,9 +117,21 @@ MORAY_CHUNK_CONCURRENCY=4
 
 工单 04 的真实 LLM A/B（1500 vs 3500）与门槛核对见
 `docs/evidence/04-budget-ab.md`。在门槛全部通过前，生产保持 1500；
-通过后把默认值切换做成**单独一个 commit**（只改 `config.chunk_settings()` 的
-默认那一处），回滚直接 `git revert <该 commit>`。当前该 commit **未添加**
-（A/B 准确率门槛未通过，见报告“结论”）。
+**本轮 gate 未通过（原始实体口径与全量关系 F1 均退化），所以没有切换
+commit，默认值仍是 1500/200。** 若后续用更合适的评测口径/扩标后达标，
+切换动作是**单独一个 commit**，且必须同步改**两处**默认值，否则两处默认
+漂移、`test_default_budget_and_overlap_are_unchanged` 会变红：
+
+1. `src/moray/config.py::chunk_settings()` 中 `MORAY_CHUNK_MAX_UNITS` 的
+   缺省值 `1500 → 3500`；
+2. `src/moray/extraction/chunking.py::Chunker.__init__` 的 `max_units`
+   默认值 `1500 → 3500`（或让 `Chunker` 默认读 `chunk_settings()`）；
+3. 同步更新 `tests/test_chunk_budget.py::test_default_budget_and_overlap_are_unchanged`
+   的期望值（该测试专门锁定两处默认一致）。
+
+`overlap_units` 保持 200 不动。回滚直接 `git revert <该 commit>`；也可以
+不改代码、只在部署环境设 `MORAY_CHUNK_MAX_UNITS=3500`，删掉该 env 即回滚。
+当前该 commit **未添加**（A/B 准确率门槛未通过，见报告“结论”）。
 
 ## 3. Docker 镜像
 
