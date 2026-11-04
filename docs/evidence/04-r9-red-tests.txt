@@ -1,0 +1,212 @@
+FFFFFFFF                                                                 [100%]
+=================================== FAILURES ===================================
+_______________ test_gate_fails_when_baseline_has_failed_chunks ________________
+
+    def test_gate_fails_when_baseline_has_failed_chunks():
+        gate = evaluate_gate(
+            gate_metrics(failed_chunks=5),
+            passing_candidate(failed_chunks=0),
+        )
+>       assert gate["checks"]["baseline_failed_chunks_zero"] is False
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'baseline_failed_chunks_zero'
+
+tests/test_chunk_budget_r9_fixes.py:43: KeyError
+_______________ test_gate_requires_failed_chunks_on_baseline_too _______________
+
+    def test_gate_requires_failed_chunks_on_baseline_too():
+        baseline = gate_metrics()
+        baseline.pop("failed_chunks")
+>       with pytest.raises(ValueError, match="failed_chunks"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'failed_chunks'
+E         Actual message: 'entity_macro_f1_worst_delta_pt 需要 baseline_rounds 与 candidate_rounds 逐轮对齐；无 rounds 时不允许用两档各自最差值相减'
+
+tests/test_chunk_budget_r9_fixes.py:51: AssertionError
+_________ test_from_json_rejects_missing_failed_chunks_in_stress_rows __________
+
+tmp_path = PosixPath('/tmp/pytest-of-dell/pytest-853/test_from_json_rejects_missing0')
+
+    def test_from_json_rejects_missing_failed_chunks_in_stress_rows(tmp_path):
+        payload = evidence_payload()
+        payload["budgets"]["3500"].pop("failed_chunks_max")
+        for rnd in payload["budgets"]["3500"]["rounds"]:
+            for row in rnd["cases"]:
+                row.pop("failed_chunks")
+        proc = _run_from_json(payload, tmp_path)
+>       assert proc.returncode != 0
+E       assert 0 != 0
+E        +  where 0 = CompletedProcess(args=['/home/dell/orca/workspaces/minirag/moray/.venv/bin/python', '/home/dell/orca/workspaces/minira...超过候选预算 3500 的长文（最大文档 5360 units，最大块 3483 units），候选档分块已被真实压到。"\n    }\n  },\n  "calls_drop_pct": 57.14\n}\n', stderr='').returncode
+
+tests/test_chunk_budget_r9_fixes.py:79: AssertionError
+__________ test_from_json_rejects_missing_failed_chunks_in_real_rows ___________
+
+tmp_path = PosixPath('/tmp/pytest-of-dell/pytest-853/test_from_json_rejects_missing1')
+
+    def test_from_json_rejects_missing_failed_chunks_in_real_rows(tmp_path):
+        payload = evidence_payload()
+        payload["real_docs"]["3500"].pop("failed_chunks_total")
+        for row in payload["real_docs"]["3500"]["rows"]:
+            row.pop("failed_chunks", None)
+        proc = _run_from_json(payload, tmp_path)
+>       assert proc.returncode != 0
+E       assert 0 != 0
+E        +  where 0 = CompletedProcess(args=['/home/dell/orca/workspaces/minirag/moray/.venv/bin/python', '/home/dell/orca/workspaces/minira...超过候选预算 3500 的长文（最大文档 5360 units，最大块 3483 units），候选档分块已被真实压到。"\n    }\n  },\n  "calls_drop_pct": 57.14\n}\n', stderr='').returncode
+
+tests/test_chunk_budget_r9_fixes.py:89: AssertionError
+________________ test_enrichment_delegates_overlap_aggregation _________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x707655a06090>
+
+    def test_enrichment_delegates_overlap_aggregation(monkeypatch):
+        from tools import chunk_budget_ab
+    
+        calls = []
+    
+        def fake_aggregate(rounds):
+            calls.append(rounds)
+            return {
+                "overlap_documents_with_multiple_chunks": 11,
+                "overlap_pairs_min": 4,
+            }
+    
+        monkeypatch.setattr(
+            chunk_budget_ab, "_overlap_aggregate", fake_aggregate)
+        result = {"rounds": [{"cases": []}]}
+        chunk_budget_ab._enrich_result_derived(result)
+>       assert result["overlap_documents_with_multiple_chunks"] == 11
+E       assert 0 == 11
+
+tests/test_chunk_budget_r9_fixes.py:112: AssertionError
+_____________ test_empty_real_docs_return_failed_chunks_total_zero _____________
+
+    def test_empty_real_docs_return_failed_chunks_total_zero():
+        from tools.chunk_budget_ab import _run_real_docs
+    
+        result = asyncio.run(_run_real_docs(
+            [], budget=3500, overlap=200, concurrency=1, domain=None))
+>       assert result["failed_chunks_total"] == 0
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'failed_chunks_total'
+
+tests/test_chunk_budget_r9_fixes.py:125: KeyError
+___________ test_gate_input_handles_empty_real_docs_without_keyerror ___________
+
+    def test_gate_input_handles_empty_real_docs_without_keyerror():
+        from tools.chunk_budget_ab import _gate_input, _run_real_docs
+    
+        real = asyncio.run(_run_real_docs(
+            [], budget=3500, overlap=200, concurrency=1, domain=None))
+        result = {
+            "overlap_pairs_min": 0,
+            "overlap_documents_with_multiple_chunks": 0,
+            "chunk_calls_total_mean": 1.0,
+            "truncated_chunks_max": 0,
+            "failed_chunks_max": 0,
+            "entity_macro_f1_mean": 0.9,
+            "entity_macro_f1_worst": 0.9,
+            "raw_entity_macro_f1_mean": 0.9,
+            "raw_entity_macro_f1_worst": 0.9,
+            "entity_strict_f1_mean": 0.96,
+            "entity_strict_f1_worst": 0.96,
+            "relation_covered_recall_mean": 0.8,
+            "relation_covered_recall_worst": 0.8,
+            "relation_covered_precision_mean": 0.9,
+            "relation_covered_precision_worst": 0.9,
+            "relation_f1_mean": 0.7,
+            "relation_f1_worst": 0.7,
+            "raw_relation_f1_mean": 0.7,
+            "raw_relation_f1_worst": 0.7,
+        }
+>       gate_input = _gate_input(
+            result, budget=3500, real=real, overlap_units=200)
+
+tests/test_chunk_budget_r9_fixes.py:154: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = {'overlap_pairs_min': 0, 'overlap_documents_with_multiple_chunks': 0, 'chunk_calls_total_mean': 1.0, 'truncated_chunks_max': 0, ...}
+budget = 3500
+real = {'documents': 0, 'rows': [], 'truncated_chunks_total': 0, 'max_chunk_input_tokens': 0, ...}
+overlap_units = 200, safety = {}
+
+    def _gate_input(
+        result: dict,
+        *,
+        budget: int,
+        real: dict,
+        overlap_units: int,
+        safety: dict | None = None,
+    ) -> dict:
+        """一份 gate 输入（评审 r5 N4：live / ``--from-json`` 共用）。
+    
+        此前 baseline/candidate 各手写一份 17 键 dict，新增 raw 关系口径要在
+        两处同步；收敛到这里后，新增口径只改这一个函数。
+        """
+        safety = safety or {}
+        # 评审 r7 S2：覆盖率不再只写进 gate 报告，而是作为 gate 输入进 checks。
+        coverage = _real_doc_coverage(real, candidate_budget=budget)
+        return {
+            "budget": budget,
+            # 评审 r6 F1：上下文余量能力。缺失时保持 None，由 gate fail closed。
+            "context_window": safety.get("context_window"),
+            "max_context_input_tokens": safety.get("max_chunk_input_tokens"),
+            "max_context_output_tokens": safety.get("max_chunk_output_tokens"),
+            "overlap_units": overlap_units,
+            "overlap_pairs_min": result["overlap_pairs_min"],
+            "overlap_documents_with_multiple_chunks": result.get(
+                "overlap_documents_with_multiple_chunks", 0),
+            "real_doc_documents": coverage["documents"],
+            "real_doc_max_document_units": coverage["max_document_units"],
+            "chunk_calls": result["chunk_calls_total_mean"],
+            "truncated_chunks": (
+                result["truncated_chunks_max"]
+                + real["truncated_chunks_total"]),
+            # 评审 r8 S1：real-doc 批次逐块容错，失败块不会产生 finish_reason，
+            # 因此 truncated=0 仍成立；失败块必须单独进 gate，否则验收 #4/#5
+            # 的证据可整批空转。压力语料取逐轮最大，真实文档取本轮合计。
+            "failed_chunks": (
+>               result["failed_chunks_max"] + real["failed_chunks_total"]),
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            "entity_macro_f1_mean": result["entity_macro_f1_mean"],
+            "entity_macro_f1_worst": result["entity_macro_f1_worst"],
+            "raw_entity_macro_f1_mean": result["raw_entity_macro_f1_mean"],
+            "raw_entity_macro_f1_worst": result["raw_entity_macro_f1_worst"],
+            # 评审 r6 F3：strict 与 relaxed 并列，两者都必填。
+            "entity_strict_f1_mean": result["entity_strict_f1_mean"],
+            "entity_strict_f1_worst": result["entity_strict_f1_worst"],
+            "relation_covered_recall_mean": result[
+                "relation_covered_recall_mean"],
+            "relation_covered_recall_worst": result[
+                "relation_covered_recall_worst"],
+            "relation_covered_precision_mean": result[
+                "relation_covered_precision_mean"],
+            "relation_covered_precision_worst": result[
+                "relation_covered_precision_worst"],
+            "relation_f1_mean": result["relation_f1_mean"],
+            "relation_f1_worst": result["relation_f1_worst"],
+            "raw_relation_f1_mean": result["raw_relation_f1_mean"],
+            "raw_relation_f1_worst": result["raw_relation_f1_worst"],
+        }
+E       KeyError: 'failed_chunks_total'
+
+tools/chunk_budget_ab.py:940: KeyError
+________________________ test_report_documents_r9_fixes ________________________
+
+    def test_report_documents_r9_fixes():
+        text = (_REPO_ROOT / "docs/evidence/04-budget-ab.md").read_text(
+            encoding="utf-8")
+>       assert "评审 r9 修复" in text
+E       AssertionError: assert '评审 r9 修复' in '# 工单 04：分块预算 1500 → 3500 A/B 与上线判据（评审 r8 修复后：失败块进 gate、overlap case-run 计数与可重叠对数收敛）\n\n- 分支/worktree：`yzc/tmp-yzd-fea...红记录，保留 |\n| `docs/evidence/04-green-tests.txt` | 首版定向用例，保留 |\n| `docs/evidence/04-full-suite.txt` | 首版全量 pytest，保留 |\n'
+
+tests/test_chunk_budget_r9_fixes.py:165: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_chunk_budget_r9_fixes.py::test_gate_fails_when_baseline_has_failed_chunks
+FAILED tests/test_chunk_budget_r9_fixes.py::test_gate_requires_failed_chunks_on_baseline_too
+FAILED tests/test_chunk_budget_r9_fixes.py::test_from_json_rejects_missing_failed_chunks_in_stress_rows
+FAILED tests/test_chunk_budget_r9_fixes.py::test_from_json_rejects_missing_failed_chunks_in_real_rows
+FAILED tests/test_chunk_budget_r9_fixes.py::test_enrichment_delegates_overlap_aggregation
+FAILED tests/test_chunk_budget_r9_fixes.py::test_empty_real_docs_return_failed_chunks_total_zero
+FAILED tests/test_chunk_budget_r9_fixes.py::test_gate_input_handles_empty_real_docs_without_keyerror
+FAILED tests/test_chunk_budget_r9_fixes.py::test_report_documents_r9_fixes - ...
+8 failed in 2.47s

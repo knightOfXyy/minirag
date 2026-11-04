@@ -179,12 +179,31 @@ def _possible_pairs(row: dict) -> int:
     return int(value or 0)
 
 
+def _failed_chunks_from_rows(rows: list[dict], *, context: str) -> int:
+    """从逐篇行严格汇总失败块；缺字段直接报错（评审 r9 S2）。
+
+    ``--from-json`` 重建时用 ``row.get("failed_chunks", 0)`` 会把“证据缺失”
+    静默当成“没有失败块”，与“缺失直接报错”的注释相反。这里对每一行做
+    必填校验，避免删光失败证据后 gate 仍 passed。
+    """
+    total = 0
+    for index, row in enumerate(rows):
+        if "failed_chunks" not in row:
+            raise ValueError(
+                f"{context} 第 {index} 篇缺少 failed_chunks；"
+                "--from-json 不允许把缺失的失败块证据静默按 0 处理")
+        total += int(row["failed_chunks"] or 0)
+    return total
+
+
 def _overlap_aggregate(rounds: list[dict]) -> dict:
-    """live 聚合：每轮多块文档数的最小值 + 多块文档的最小实际重叠对数。
+    """每轮多块文档数的最小值 + 多块文档的最小实际重叠对数。
 
     评审 r8 N3：``_run_corpus`` 此前没有 ``n_chunks-1`` 回退，同一份输入在
     live 与 ``--from-json`` 两条路径可能给出不同结果；这里与
     ``_enrich_result_derived`` 共用 ``_possible_pairs``。
+    评审 r9 N1：``_enrich_result_derived`` 不再自己算一遍，两边都只调用
+    本函数，避免规则再次漂移。
     """
     return {
         "overlap_documents_with_multiple_chunks": min(
@@ -321,28 +340,20 @@ def _enrich_result_derived(result: dict, *, cases=None) -> None:
     rows = [row for rnd in rounds for row in rnd.get("cases", [])]
     # 评审 r8 S1：旧证据没有顶层 failed_chunks_max 时，从逐篇行重建，
     # 让 --from-json 不会把失败块静默当成 0。
+    # 评审 r9 S2：逐篇行缺 ``failed_chunks`` 必须直接报错，不能 row.get
+    # 默认 0；否则删光失败证据后 gate 仍会 passed。
     if "failed_chunks_max" not in result:
         result["failed_chunks_max"] = max(
-            (sum(int(row.get("failed_chunks", 0) or 0)
-                 for row in rnd.get("cases", []))
-             for rnd in rounds),
+            (_failed_chunks_from_rows(
+                rnd.get("cases", []),
+                context=f"压力语料第 {rnd.get('round', index + 1)} 轮")
+             for index, rnd in enumerate(rounds)),
             default=0)
     # 评审 r7 N3：单块文档没有可重叠的相邻对，不能参与 overlap 最小值，
-    # 否则一篇单块文档就会让整档 overlap_observed 误判为 0。评审 r8 N3：
-    # 回退逻辑收敛到 ``_possible_pairs``，与 live 聚合共用一份。
-    multi_chunk_rows = [row for row in rows if _possible_pairs(row) > 0]
-    # 按“每轮有多少篇多块文档”取最小值；同一篇文档被 repeat 多次不重复计数。
-    per_round_multi = [
-        sum(1 for row in rnd.get("cases", []) if _possible_pairs(row) > 0)
-        for rnd in rounds
-    ]
-    result["overlap_documents_with_multiple_chunks"] = min(
-        per_round_multi, default=0)
-    result["overlap_pairs_min"] = min(
-        (int(row.get("overlap_pairs", 0) or 0)
-         for row in multi_chunk_rows),
-        default=0,
-    )
+    # 否则一篇单块文档就会让整档 overlap_observed 误判为 0。
+    # 评审 r8 N3 + r9 N1：聚合只保留 ``_overlap_aggregate`` 一份实现，
+    # 这里直接复用，不再自己维护一份 n_chunks-1 回退。
+    result.update(_overlap_aggregate(rounds))
     if rows and not result.get("raw_entity_by_type"):
         result["raw_entity_by_type"] = _raw_entity_by_type_from_rows(
             rows, cases)
@@ -704,8 +715,16 @@ async def _run_real_docs(
 ) -> dict:
     """真实文档批次只跑一轮：验截断护栏与最大单块真实 token。"""
     if not docs:
-        return {"documents": 0, "rows": [], "truncated_chunks_total": 0,
-                "max_chunk_input_tokens": 0, "max_chunk_output_tokens": 0}
+        return {"documents": 0, "rows": [],
+                "truncated_chunks_total": 0,
+                "truncation_signals_total": 0,
+                # 评审 r9 N2：空批次也必须给出失败块合计，否则 live 的
+                # ``_gate_input`` 直接取值会 KeyError（应为可解释的 gate
+                # fail，而不是崩溃）。
+                "failed_chunks_total": 0,
+                "max_chunk_input_tokens": 0,
+                "max_chunk_output_tokens": 0,
+                "chunk_calls_total": 0}
     extractor = Extractor(domain, max_retries=2, local_backfill=True)
     pipeline = ChunkedExtractionPipeline(extractor, concurrency=concurrency)
     rows = []
@@ -871,7 +890,8 @@ def gate_thresholds() -> dict:
         "failed_chunks": (
             "候选档压力语料 failed_chunks_max 与真实文档 failed_chunks_total "
             "之和必须为 0；失败块不产生 finish_reason，不能靠 truncated=0 "
-            "或 real-doc 覆盖间接放行（评审 r8 S1，验收 #4/#5）"),
+            "或 real-doc 覆盖间接放行（评审 r8 S1，验收 #4/#5）。基线档"
+            "失败块同样必须为 0，否则相对 F1 判据不可比（评审 r9 S1）"),
         "real_doc_coverage": (
             "real-doc 批次必须非空且最大文档 units 超过候选预算；空批次或"
             "只有短桩时 real_doc_coverage_exercises_budget fail（评审 r7 S2，"
@@ -1117,11 +1137,12 @@ def _recompute_from_payload(
         _enrich_result_derived(results[str(budget)], cases=enrich_cases)
     # 评审 r8 S1：旧证据没有真实文档 failed_chunks_total 时，从逐篇行重建，
     # 再由 _gate_input 与压力语料合并且严格取值（缺失直接报错，不静默按 0）。
-    for real in real_results.values():
+    # 评审 r9 S2：逐篇行缺 ``failed_chunks`` 同样直接报错，不能 row.get 当 0。
+    for budget, real in real_results.items():
         if "failed_chunks_total" not in real:
-            real["failed_chunks_total"] = sum(
-                int(row.get("failed_chunks", 0) or 0)
-                for row in real.get("rows", []))
+            real["failed_chunks_total"] = _failed_chunks_from_rows(
+                real.get("rows", []),
+                context=f"真实文档 {budget} 档")
     baseline = results[str(budgets[0])]
     candidate = results[str(budgets[-1])]
     base_real = real_results[str(budgets[0])]

@@ -173,7 +173,7 @@ def test_overlap_stats_names_denominator_as_min_ratio_document():
 def test_enrichment_does_not_write_dead_overlap_fields():
     from tools.chunk_budget_ab import _enrich_result_derived
 
-    result = {"rounds": [{"cases": [
+    result = {"failed_chunks_max": 0, "rounds": [{"cases": [
         {"n_chunks": 9, "overlap_pairs": 7}]}]}
     _enrich_result_derived(result)
     assert "overlap_pairs_possible_min" not in result

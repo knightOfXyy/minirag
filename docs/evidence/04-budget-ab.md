@@ -1,14 +1,14 @@
-# 工单 04：分块预算 1500 → 3500 A/B 与上线判据（评审 r8 修复后：失败块进 gate、overlap case-run 计数与可重叠对数收敛）
+# 工单 04：分块预算 1500 → 3500 A/B 与上线判据（评审 r9 修复后：基线失败块进 gate、失败证据严格取值、overlap 聚合单实现）
 
 - 分支/worktree：`yzc/tmp-yzd-feat-relation-202610-04`
   （`/home/dell/orca/workspaces/minirag/tmp-yzd-feat-relation-202610-04`）
-- 代码提交：本轮 r8 修复 `7ebfcd1`（S1 + N1–N3，基于 r7 的 `0f7efa7`）；
-  上一轮 r7 代码为 `0f7efa7`（基于 r6 的 `acac46f`）；原始 A/B 数据采集自
+- 代码提交：本轮 r9 修复 `c98ee6b`（S1/S2 + N1/N2，基于 r8 的 `7ebfcd1`）；
+  上一轮 r8 代码为 `7ebfcd1`（基于 r7 的 `0f7efa7`）；原始 A/B 数据采集自
   `e78dd35`、采集时 `git_dirty=false`
 - 证据提交：r7 证据为 `a7dbdfe` 起、`ff0f33c` 止（报告/日志/修复说明 +
   重生成 JSON；gate/thresholds/safety/strict/raw-by-type/real-doc/overlap
-  均由 `--from-json` 从既有逐轮数据复算，未重跑 LLM）；本轮 r8 证据提交
-  紧随下方 r8 代码提交
+  均由 `--from-json` 从既有逐轮数据复算，未重跑 LLM）；本轮 r9 证据提交
+  紧随下方 r9 代码提交
 - 模型：`deepseek-flash`（provider `deepseek`，`api.deepseek.com`），temperature=0，
   **5 轮独立重复**（无 seed）；压力语料 3 篇 / 3 seed / 79,362 字；
   真实文档 **12 篇**（6 篇黄金集短样本 + 5 篇 samples + 1 篇 5,360-unit 长文
@@ -67,7 +67,7 @@ PYTHONPATH=src .venv/bin/python tools/chunk_budget_ab.py \
 （本轮实际用装有 agentscope 的 venv：`/home/dell/orca/workspaces/minirag/moray/.venv/bin/python`；
 密钥只从 `../moray/.env` 读取，不落仓。）
 
-评审 r4–r7 只改判据、不重跑 LLM；gate/thresholds 由既有逐轮数据重算：
+评审 r4–r9 只改判据、不重跑 LLM；gate/thresholds 由既有逐轮数据重算：
 
 ```bash
 PYTHONPATH=src .venv/bin/python tools/chunk_budget_ab.py \
@@ -603,12 +603,47 @@ JSON 由 `--from-json` 从既有逐轮数据重生成。
 本轮 gate 只新增 1 条 check（`failed_chunks_zero`），数值 0 通过；
 `gate.failures` 仍是原有 **10 条**（验收 #2 未达成，默认不切换）。
 
+## 评审 r9 修复（S1/S2 + N1/N2）
+
+本轮代码提交 `c98ee6b`（基于 `7ebfcd1`），证据提交紧随其后；未重跑 LLM，
+JSON 由 `--from-json` 从既有逐轮数据重生成。
+
+- **S1（should）**：基线档失败块也进 gate。r8 只把
+  `failed_chunks_zero` 建在候选档上；实测基线档 `failed_chunks=5` 时 gate
+  仍 `passed=true`，而基线 F1 是在缺块/半成品上算的，“候选减基线”的所有
+  相对判据都会被放宽。`failed_chunks` 现同时必填两档，gate 新增
+  `baseline_failed_chunks_zero`，与候选档 `failed_chunks_zero` 并列；
+  `gate` 落盘 `baseline_failed_chunks` 供复审核对。本轮两档均为 0，两条
+  check 都通过，`gate.failures` 仍是 **10 条**。
+- **S2（should）**：`--from-json` 失败证据缺失必须报错。旧实现用
+  `row.get("failed_chunks", 0)` 重建压力语料/真实文档的逐篇失败块，删光
+  失败证据仍按 0 放行，与注释“缺失直接报错”相反。现抽出
+  `_failed_chunks_from_rows`：逐篇行缺 `failed_chunks` 直接抛
+  `ValueError`（错误信息带批次与行号），压力语料与真实文档两条重建路径
+  共用；实测把两档逐篇 `failed_chunks` 全删后 `--from-json` 退出非 0。
+- **N1（nit）**：overlap 聚合只保留 `_overlap_aggregate` 一份实现。
+  `_enrich_result_derived` 不再自己算 `overlap_documents_with_multiple_chunks`
+  / `overlap_pairs_min`，改为 `result.update(_overlap_aggregate(rounds))`；
+  live 与 from-json 的计数/最小值不会再因两套代码漂移。
+- **N2（nit）**：空真实文档批次的 live KeyError。`_run_real_docs([])` 现在
+  显式返回 `failed_chunks_total=0`（同时补齐
+  `truncation_signals_total` / `chunk_calls_total`），`_gate_input` 不再
+  KeyError；空批次仍会被 `real_doc_coverage_exercises_budget` fail closed，
+  不会因补 0 而放行。
+
+本轮 gate 新增 1 条 check（`baseline_failed_chunks_zero`），两档失败块均为
+0、通过；`gate.failures` 仍是原有 **10 条**（验收 #2 未达成，默认不切换）。
+
 ## 证据文件
 
 | 文件 | 内容 |
 |---|---|
 | `docs/evidence/04-budget-ab.json` | 逐轮/逐篇聚合与单块极值、逐篇预测面（原始+归一化关系端点）、类型 P/R、双口径关系指标、overlap 实际/可重叠对数、残差明细、上下文余量、gate（实体与关系均 raw+normalized、失败块、caliber、gate_recompute）、CI |
 | `docs/evidence/04-budget-ab.md` | 本报告 |
+| `docs/evidence/04-r9-red-tests.txt` | 先红：评审 r9 新增测试在 `d28b3c7` 上的失败输出（8 failed） |
+| `docs/evidence/04-r9-green-tests.txt` | 后绿：评审 r9 定向用例（148 passed） |
+| `docs/evidence/04-r9-full-suite.txt` | 全量 pytest（离线，604 passed / 66 skipped） |
+| `docs/evidence/04-r9-fix-evidence.md` | S1/S2 + N1/N2 逐条处理结果与证据 |
 | `docs/evidence/04-r8-red-tests.txt` | 先红：评审 r8 新增测试在 `0f7efa7` 上的失败输出（13 failed） |
 | `docs/evidence/04-r8-green-tests.txt` | 后绿：评审 r8 定向用例（164 passed / 2 skipped） |
 | `docs/evidence/04-r8-full-suite.txt` | 全量 pytest（离线，596 passed / 66 skipped） |

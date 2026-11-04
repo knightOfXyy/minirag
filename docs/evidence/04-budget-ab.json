@@ -73,7 +73,7 @@
     "relation_full_scope": "全量口径（含 02 金标刻意未标注句面的 FP）的 raw（原始未归一化，验收口径）与 normalized（类型前缀标签归一化，辅助口径）两套 mean/worst 都参与放行（gate.checks），与覆盖子集并列列报；辅助口径不能替代验收口径",
     "relation_note": "评审 r5 S1：raw_relation_f1_* 必填并进 checks，不再只列报",
     "truncated_chunks": "候选档必须为 0（压力语料 + 真实文档）",
-    "failed_chunks": "候选档压力语料 failed_chunks_max 与真实文档 failed_chunks_total 之和必须为 0；失败块不产生 finish_reason，不能靠 truncated=0 或 real-doc 覆盖间接放行（评审 r8 S1，验收 #4/#5）",
+    "failed_chunks": "候选档压力语料 failed_chunks_max 与真实文档 failed_chunks_total 之和必须为 0；失败块不产生 finish_reason，不能靠 truncated=0 或 real-doc 覆盖间接放行（评审 r8 S1，验收 #4/#5）。基线档失败块同样必须为 0，否则相对 F1 判据不可比（评审 r9 S1）",
     "real_doc_coverage": "real-doc 批次必须非空且最大文档 units 超过候选预算；空批次或只有短桩时 real_doc_coverage_exercises_budget fail（评审 r7 S2，验收 #4）",
     "overlap": "冻结基线 200 不变；overlap_observed 只做 >0 冒烟检查，单块文档不参与最小值（不再误判 0 对），但没有任何多块文档时 fail closed（评审 r7 N3）；实际重叠对数/可重叠对数见 overlap_observed（长句可致并非逐对重叠）",
     "chunk_calls": "候选档必须下降",
@@ -53611,6 +53611,7 @@
       "relation_covered_precision_worst_within_0_5pt": false,
       "truncated_chunks_zero": true,
       "failed_chunks_zero": true,
+      "baseline_failed_chunks_zero": true,
       "real_doc_coverage_exercises_budget": true,
       "overlap_unchanged": true,
       "overlap_observed": true,
@@ -53642,6 +53643,7 @@
     "real_doc_max_document_units": 5360,
     "real_doc_coverage_exercises_budget": true,
     "failed_chunks": 0,
+    "baseline_failed_chunks": 0,
     "relation_covered_recall_mean_delta_pt": 8.3,
     "relation_covered_recall_worst_delta_pt": 2.63,
     "relation_covered_precision_mean_delta_pt": -12.28,
@@ -53668,7 +53670,7 @@
       "context_margin": "provider 真实 tokenizer：max_chunk_input + max_chunk_output <= /models context_window；能力缺失或 usage 计数为 0 时 fail closed（评审 r7 S1）",
       "real_doc_coverage": "real-doc 批次必须非空且最大文档 units 超过候选预算；空批次或只有短桩时 fail（评审 r7 S2，验收 #4）",
       "overlap_observed": "只统计有多块文档的实际重叠对；单块文档不参与最小值，但没有任何多块文档时 fail closed（评审 r7 N3）",
-      "failed_chunks": "候选档压力语料 failed_chunks_max 与真实文档 failed_chunks_total 之和必须为 0；失败块不产生 finish_reason，truncated=0 不能代替它（评审 r8 S1）"
+      "failed_chunks": "候选档压力语料 failed_chunks_max 与真实文档 failed_chunks_total 之和必须为 0；失败块不产生 finish_reason，truncated=0 不能代替它（评审 r8 S1）；基线档同样必须为 0，否则相对 F1 判据不可比（评审 r9 S1）"
     },
     "overlap_unchanged": true,
     "overlap_observed": true,
@@ -53703,10 +53705,10 @@
     "source_json": "docs/evidence/04-budget-ab.json",
     "source_git_sha": "e78dd35d70bcc2c7f1d29f89973914439e6fbfb4",
     "source_generated_at": "2026-11-03T08:46:42.466076+00:00",
-    "regenerated_at": "2026-11-04T02:07:56.480148+00:00",
+    "regenerated_at": "2026-11-04T02:17:59.704822+00:00",
     "regenerator": {
-      "git_sha": "38790db9302909f940f289c7a4352057fa4600b3",
-      "git_describe": "38790db",
+      "git_sha": "953f199be6198239a38dd8ed9b36fdd51bbbe65b",
+      "git_describe": "953f199",
       "git_dirty": false,
       "git_status_porcelain": ""
     },

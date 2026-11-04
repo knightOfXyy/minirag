@@ -103,7 +103,7 @@ def test_enrichment_and_live_aggregate_agree_without_possible_field():
         {"n_chunks": 3, "overlap_pairs": 2},
         {"n_chunks": 2, "overlap_pairs": 1},
     ]}]
-    result = {"rounds": rounds}
+    result = {"failed_chunks_max": 0, "rounds": rounds}
     _enrich_result_derived(result)
     aggregate = _overlap_aggregate(rounds)
     assert result["overlap_documents_with_multiple_chunks"] == 2
@@ -123,7 +123,7 @@ def test_report_header_references_existing_evidence_commits():
     assert "9400e6d" not in header
     assert "a7dbdfe" in header and "ff0f33c" in header
     assert "评审 r4 只改判据" not in text
-    assert "评审 r4–r7 只改判据" in text
+    assert "评审 r4–r9 只改判据" in text
 
 
 # ---------------------------------------------------------------------------
