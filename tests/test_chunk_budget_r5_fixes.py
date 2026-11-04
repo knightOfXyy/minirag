@@ -23,7 +23,10 @@ from pathlib import Path
 
 import pytest
 
-from gate_fixtures import GATE_FAILURE_CASES, gate_metrics, passing_candidate
+from gate_fixtures import (
+    GATE_FAILURE_CASES, evaluate_gate, evidence_payload, gate_metrics,
+    passing_candidate,
+)
 from moray.evaluation.stress.budget import evaluate_budget_gate
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -48,7 +51,7 @@ def test_gate_fails_when_raw_relation_drops_even_if_normalized_passes():
         raw_relation_f1_mean=0.4800,
         raw_relation_f1_worst=0.4300,
     )
-    gate = evaluate_budget_gate(gate_metrics(), candidate)
+    gate = evaluate_gate(gate_metrics(), candidate)
     assert gate["checks"]["relation_full_f1_mean_not_lower"] is True
     assert gate["checks"]["relation_full_f1_worst_not_lower"] is True
     assert gate["checks"]["relation_raw_full_f1_mean_not_lower"] is False
@@ -61,25 +64,25 @@ def test_gate_fails_when_raw_relation_drops_even_if_normalized_passes():
 def test_gate_recomputes_raw_relation_worst_delta_from_rounds():
     baseline_rounds = [
         {"entity_macro_f1": 0.9000, "raw_entity_macro_f1": 0.9000,
-         "relation_f1": 0.5000, "raw_relation_f1": 0.5000,
+         "entity_strict_f1": 0.9000, "relation_f1": 0.5000, "raw_relation_f1": 0.5000,
          "relation_covered_recall": 0.8000,
          "relation_covered_precision": 0.9000},
         {"entity_macro_f1": 0.9000, "raw_entity_macro_f1": 0.9000,
-         "relation_f1": 0.5000, "raw_relation_f1": 0.5000,
+         "entity_strict_f1": 0.9000, "relation_f1": 0.5000, "raw_relation_f1": 0.5000,
          "relation_covered_recall": 0.8000,
          "relation_covered_precision": 0.9000},
     ]
     candidate_rounds = [
         {"entity_macro_f1": 0.8960, "raw_entity_macro_f1": 0.8960,
-         "relation_f1": 0.5000, "raw_relation_f1": 0.4900,
+         "entity_strict_f1": 0.8960, "relation_f1": 0.5000, "raw_relation_f1": 0.4900,
          "relation_covered_recall": 0.8000,
          "relation_covered_precision": 0.8950},
         {"entity_macro_f1": 0.8960, "raw_entity_macro_f1": 0.8960,
-         "relation_f1": 0.5000, "raw_relation_f1": 0.4800,
+         "entity_strict_f1": 0.8960, "relation_f1": 0.5000, "raw_relation_f1": 0.4800,
          "relation_covered_recall": 0.8000,
          "relation_covered_precision": 0.8950},
     ]
-    gate = evaluate_budget_gate(
+    gate = evaluate_gate(
         gate_metrics(), passing_candidate(),
         baseline_rounds=baseline_rounds, candidate_rounds=candidate_rounds)
     assert gate["relation_raw_full_worst_delta_pt"] == pytest.approx(-2.0)
@@ -99,13 +102,14 @@ def test_evidence_thresholds_describe_raw_relation_gate():
 # S2：overlap 证据要给出实际对数/可重叠对数，不能宣称逐对
 # ---------------------------------------------------------------------------
 def test_from_json_reports_overlap_pairs_over_possible(tmp_path):
-    out = tmp_path / "regen.json"
-    payload = _run_from_json(out)
-    observed = payload["overlap_observed"]
+    # 评审 r6 N6：不再从 2MB 生成证据里读死数字，改用内联小 payload。
+    regen = _run_inline_from_json(
+        evidence_payload(overlap={1500: (8, 25), 3500: (7, 8)}), tmp_path)
+    observed = regen["overlap_observed"]
     assert observed["baseline"]["min_overlap_pairs"] == 8
-    assert observed["baseline"]["min_possible_pairs"] == 25
+    assert observed["baseline"]["min_ratio_document_possible_pairs"] == 25
     assert observed["candidate"]["min_overlap_pairs"] == 7
-    assert observed["candidate"]["min_possible_pairs"] == 8
+    assert observed["candidate"]["min_ratio_document_possible_pairs"] == 8
     assert "not every" in observed["note"] or "不是每对" in observed["note"]
     assert "smoke" in observed["gate_check"] or "冒烟" in observed["gate_check"]
 
@@ -115,24 +119,29 @@ def test_from_json_reports_overlap_pairs_over_possible(tmp_path):
 # ---------------------------------------------------------------------------
 def test_from_json_regenerates_raw_relation_gate_and_per_budget_coverage(
         tmp_path):
-    out = tmp_path / "regen.json"
-    payload = _run_from_json(out)
-    gate = payload["gate"]
+    regen = _run_inline_from_json(
+        evidence_payload(candidate_overrides={
+            "raw_relation_f1_mean": 0.4800,
+            "raw_relation_f1_worst": 0.4300,
+        }), tmp_path)
+    gate = regen["gate"]
     assert gate["checks"]["relation_raw_full_f1_mean_not_lower"] is False
     assert gate["checks"]["relation_raw_full_f1_worst_not_lower"] is False
     assert gate["relation_raw_full_mean_delta_pt"] == pytest.approx(
-        -10.88, abs=0.01)
+        -2.0, abs=0.01)
     assert gate["relation_raw_full_worst_delta_pt"] == pytest.approx(
-        -19.28, abs=0.01)
-    assert payload["budgets"]["3500"]["raw_relation_f1_mean"] == pytest.approx(
-        0.5954, abs=0.001)
-    assert payload["real_doc_coverage"]["1500"]["candidate_budget"] == 1500
-    assert payload["real_doc_coverage"]["3500"]["candidate_budget"] == 3500
+        -2.0, abs=0.01)
+    assert regen["budgets"]["3500"]["raw_relation_f1_mean"] == pytest.approx(
+        0.48, abs=0.001)
+    assert regen["real_doc_coverage"]["1500"]["candidate_budget"] == 1500
+    assert regen["real_doc_coverage"]["3500"]["candidate_budget"] == 3500
     assert gate["passed"] is False
 
 
-def _run_from_json(out: Path) -> dict:
-    source = _REPO_ROOT / "docs/evidence/04-budget-ab.json"
+def _run_inline_from_json(payload: dict, tmp_path: Path) -> dict:
+    source = tmp_path / "source.json"
+    out = tmp_path / "regen.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
     env = {"PYTHONPATH": str(_REPO_ROOT / "src"), "ARK_API_KEY": "dummy",
            "PATH": "/usr/bin:/bin"}
     proc = subprocess.run(
@@ -183,6 +192,8 @@ def test_gate_input_helper_fills_all_required_keys_from_one_place():
         "entity_macro_f1_worst": 0.9,
         "raw_entity_macro_f1_mean": 0.9,
         "raw_entity_macro_f1_worst": 0.9,
+        "entity_strict_f1_mean": 0.96,
+        "entity_strict_f1_worst": 0.96,
         "relation_covered_recall_mean": 0.8,
         "relation_covered_recall_worst": 0.8,
         "relation_covered_precision_mean": 0.9,

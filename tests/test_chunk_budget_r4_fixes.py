@@ -17,7 +17,9 @@ from pathlib import Path
 
 import pytest
 
-from gate_fixtures import GATE_FAILURE_CASES, gate_metrics, passing_candidate
+from gate_fixtures import (
+    GATE_FAILURE_CASES, evaluate_gate, gate_metrics, passing_candidate,
+)
 from moray.evaluation.stress import evaluate_case
 from moray.evaluation.stress.budget import evaluate_budget_gate
 from moray.schema import Entity, ExtractionResult, Relation
@@ -29,7 +31,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 # B1：实体轴必须双口径，raw 不得被归一化辅助口径替代
 # ---------------------------------------------------------------------------
 def test_gate_includes_raw_and_normalized_entity_checks():
-    gate = evaluate_budget_gate(gate_metrics(), passing_candidate())
+    gate = evaluate_gate(gate_metrics(), passing_candidate())
     for name in (
         "entity_raw_mean_within_0_5pt",
         "entity_raw_worst_within_0_5pt",
@@ -51,7 +53,7 @@ def test_gate_fails_when_raw_entity_drops_even_if_normalized_passes():
         raw_entity_macro_f1_mean=0.8700,
         raw_entity_macro_f1_worst=0.8500,
     )
-    gate = evaluate_budget_gate(gate_metrics(), candidate)
+    gate = evaluate_gate(gate_metrics(), candidate)
     assert gate["checks"]["entity_normalized_mean_within_0_5pt"] is True
     assert gate["checks"]["entity_raw_mean_within_0_5pt"] is False
     assert gate["checks"]["entity_raw_worst_within_0_5pt"] is False
@@ -70,7 +72,7 @@ def test_gate_requires_raw_entity_fields():
 # N3：gate 输入自证
 # ---------------------------------------------------------------------------
 def test_gate_rejects_same_budget_on_both_sides():
-    gate = evaluate_budget_gate(
+    gate = evaluate_gate(
         gate_metrics(), passing_candidate(budget=1500))
     assert gate["checks"]["budgets_differ"] is False
     assert gate["passed"] is False
@@ -78,15 +80,15 @@ def test_gate_rejects_same_budget_on_both_sides():
 
 def test_gate_recomputes_explicit_worst_delta_from_rounds():
     baseline_rounds = [{"entity_macro_f1": 0.9000, "raw_entity_macro_f1": 0.9000,
-                        "relation_f1": 0.5000, "raw_relation_f1": 0.5000,
+                        "entity_strict_f1": 0.9000, "relation_f1": 0.5000, "raw_relation_f1": 0.5000,
                         "relation_covered_recall": 0.8000,
                         "relation_covered_precision": 0.9000}]
     candidate_rounds = [{"entity_macro_f1": 0.8800, "raw_entity_macro_f1": 0.8500,
-                         "relation_f1": 0.4990, "raw_relation_f1": 0.4900,
+                         "entity_strict_f1": 0.8800, "relation_f1": 0.4990, "raw_relation_f1": 0.4900,
                          "relation_covered_recall": 0.7990,
                          "relation_covered_precision": 0.8990}]
     with pytest.raises(ValueError, match="relation_f1_worst_delta_pt"):
-        evaluate_budget_gate(
+        evaluate_gate(
             gate_metrics(), passing_candidate(relation_f1_worst_delta_pt=0.0),
             baseline_rounds=baseline_rounds, candidate_rounds=candidate_rounds)
 
@@ -94,25 +96,25 @@ def test_gate_recomputes_explicit_worst_delta_from_rounds():
 def test_gate_uses_round_recomputed_worst_when_no_explicit_delta():
     baseline_rounds = [
         {"entity_macro_f1": 0.9000, "raw_entity_macro_f1": 0.9000,
-         "relation_f1": 0.5000, "raw_relation_f1": 0.5000,
+         "entity_strict_f1": 0.9000, "relation_f1": 0.5000, "raw_relation_f1": 0.5000,
          "relation_covered_recall": 0.8000,
          "relation_covered_precision": 0.9000},
         {"entity_macro_f1": 0.8900, "raw_entity_macro_f1": 0.8900,
-         "relation_f1": 0.4900, "raw_relation_f1": 0.4900,
+         "entity_strict_f1": 0.8900, "relation_f1": 0.4900, "raw_relation_f1": 0.4900,
          "relation_covered_recall": 0.7900,
          "relation_covered_precision": 0.8900},
     ]
     candidate_rounds = [
         {"entity_macro_f1": 0.8960, "raw_entity_macro_f1": 0.8960,
-         "relation_f1": 0.5000, "raw_relation_f1": 0.5000,
+         "entity_strict_f1": 0.8960, "relation_f1": 0.5000, "raw_relation_f1": 0.5000,
          "relation_covered_recall": 0.8000,
          "relation_covered_precision": 0.8950},
         {"entity_macro_f1": 0.8760, "raw_entity_macro_f1": 0.8760,
-         "relation_f1": 0.4490, "raw_relation_f1": 0.4490,
+         "entity_strict_f1": 0.8760, "relation_f1": 0.4490, "raw_relation_f1": 0.4490,
          "relation_covered_recall": 0.7500,
          "relation_covered_precision": 0.8450},
     ]
-    gate = evaluate_budget_gate(
+    gate = evaluate_gate(
         gate_metrics(), passing_candidate(),
         baseline_rounds=baseline_rounds, candidate_rounds=candidate_rounds)
     # 第 2 轮全量关系 F1 -4.10pt；不能退回两档各自最差值相减。

@@ -26,10 +26,11 @@ from moray.evaluation.stress import (
     normalize_entity_name_aliases,
     relation_chunk_profile,
 )
-from moray.evaluation.stress.budget import evaluate_budget_gate
 from moray.schema import Entity, EntityMention, ExtractionResult, Relation, Span
 
-from gate_fixtures import GATE_FAILURE_CASES, gate_metrics, passing_candidate
+from gate_fixtures import (
+    GATE_FAILURE_CASES, evaluate_gate, gate_metrics, passing_candidate,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT))
@@ -153,7 +154,7 @@ def test_gold_covered_subset_keeps_gold_recall_denominator():
 # 判据层：新门槛（实体双口径 + 关系覆盖子集 + 全量 F1）
 # ---------------------------------------------------------------------------
 def test_gate_passes_with_normalized_entity_and_covered_relation_caliber():
-    gate = evaluate_budget_gate(gate_metrics(), passing_candidate())
+    gate = evaluate_gate(gate_metrics(), passing_candidate())
     assert gate["passed"] is True
     assert all(gate["checks"].values())
     # 全量口径仍出现在结果里，且全量 F1 也参与放行（F2）
@@ -164,14 +165,14 @@ def test_gate_passes_with_normalized_entity_and_covered_relation_caliber():
 
 @pytest.mark.parametrize(("overrides", "failed_check"), GATE_FAILURE_CASES)
 def test_gate_fails_when_any_new_threshold_breaks(overrides, failed_check):
-    gate = evaluate_budget_gate(gate_metrics(), passing_candidate(**overrides))
+    gate = evaluate_gate(gate_metrics(), passing_candidate(**overrides))
     assert gate["passed"] is False
     assert gate["checks"][failed_check] is False
 
 
 def test_gate_entity_threshold_cannot_be_loosened_by_caller():
     with pytest.raises(ValueError):
-        evaluate_budget_gate(
+        evaluate_gate(
             gate_metrics(), passing_candidate(entity_macro_f1_mean=0.8500),
             max_entity_drop_pt=99.0)
 

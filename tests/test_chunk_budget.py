@@ -19,12 +19,13 @@ import pytest
 
 from moray.config import chunk_settings
 from moray.evaluation.stress.budget import (
-    evaluate_budget_gate,
     relation_chunk_profile,
 )
 from moray.extraction import Chunker, estimate_tokens
 
-from gate_fixtures import GATE_FAILURE_CASES, gate_metrics, passing_candidate
+from gate_fixtures import (
+    GATE_FAILURE_CASES, evaluate_gate, gate_metrics, passing_candidate,
+)
 
 
 def _clear_chunk_env(monkeypatch):
@@ -179,7 +180,7 @@ def test_relation_chunk_profile_uses_any_occurrence_pair():
 # 判据层：门槛不可被悄悄放宽
 # ---------------------------------------------------------------------------
 def test_budget_gate_passes_only_when_all_thresholds_met():
-    gate = evaluate_budget_gate(gate_metrics(), passing_candidate())
+    gate = evaluate_gate(gate_metrics(), passing_candidate())
     assert gate["passed"] is True
     assert all(gate["checks"].values())
     assert gate["entity_macro_f1_mean_delta_pt"] == pytest.approx(-0.4)
@@ -191,13 +192,13 @@ def test_budget_gate_passes_only_when_all_thresholds_met():
 
 @pytest.mark.parametrize(("overrides", "failed_check"), GATE_FAILURE_CASES)
 def test_budget_gate_fails_when_any_threshold_breaks(overrides, failed_check):
-    gate = evaluate_budget_gate(gate_metrics(), passing_candidate(**overrides))
+    gate = evaluate_gate(gate_metrics(), passing_candidate(**overrides))
     assert gate["passed"] is False
     assert gate["checks"][failed_check] is False
 
 
 def test_budget_gate_boundary_exactly_half_point_passes():
-    gate = evaluate_budget_gate(gate_metrics(), passing_candidate(
+    gate = evaluate_gate(gate_metrics(), passing_candidate(
         entity_macro_f1_mean=0.8950,
         entity_macro_f1_worst=0.8750,
         raw_entity_macro_f1_mean=0.8950,
@@ -211,11 +212,31 @@ def test_budget_gate_boundary_exactly_half_point_passes():
 
 def test_budget_gate_prefers_explicit_worst_round_delta():
     """worst-of-N 用逐轮对齐差（严格），不能拿两档各自最差值相减糊弄过去。"""
-    gate = evaluate_budget_gate(gate_metrics(), passing_candidate(
+    baseline_rounds = [
+        {"entity_macro_f1": 0.9000, "raw_entity_macro_f1": 0.9000,
+         "entity_strict_f1": 0.9600, "relation_f1": 0.5000,
+         "raw_relation_f1": 0.5000, "relation_covered_recall": 0.8000,
+         "relation_covered_precision": 0.9000},
+        {"entity_macro_f1": 0.9000, "raw_entity_macro_f1": 0.9000,
+         "entity_strict_f1": 0.9600, "relation_f1": 0.5000,
+         "raw_relation_f1": 0.5000, "relation_covered_recall": 0.8000,
+         "relation_covered_precision": 0.9000},
+    ]
+    candidate_rounds = [
+        {"entity_macro_f1": 0.9000, "raw_entity_macro_f1": 0.9000,
+         "entity_strict_f1": 0.9600, "relation_f1": 0.5000,
+         "raw_relation_f1": 0.5000, "relation_covered_recall": 0.8000,
+         "relation_covered_precision": 0.9000},
+        {"entity_macro_f1": 0.8920, "raw_entity_macro_f1": 0.8920,
+         "entity_strict_f1": 0.9520, "relation_f1": 0.5000,
+         "raw_relation_f1": 0.5000, "relation_covered_recall": 0.7980,
+         "relation_covered_precision": 0.9000},
+    ]
+    gate = evaluate_gate(gate_metrics(), passing_candidate(
         entity_macro_f1_worst_delta_pt=-0.8,
         raw_entity_macro_f1_worst_delta_pt=-0.8,
         relation_covered_recall_worst_delta_pt=-0.2,
-    ))
+    ), baseline_rounds=baseline_rounds, candidate_rounds=candidate_rounds)
     assert gate["entity_macro_f1_worst_delta_pt"] == pytest.approx(-0.8)
     assert gate["raw_entity_macro_f1_worst_delta_pt"] == pytest.approx(-0.8)
     assert gate["checks"]["entity_normalized_worst_within_0_5pt"] is False
