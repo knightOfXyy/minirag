@@ -36,7 +36,6 @@ from .metrics import (
     evaluate_case,
     gold_covered_sentence_spans,
     normalize_entity_name_aliases,
-    relation_covered_prf,
     relation_covered_stats,
     relation_recall_for_predicates,
 )
@@ -60,7 +59,6 @@ __all__ = [
     "gold_covered_sentence_spans",
     "normalize_entity_name_aliases",
     "relation_chunk_profile",
-    "relation_covered_prf",
     "relation_covered_stats",
     "DECOY_PREFIX",
     "PREDICATE_TRIGGERS",

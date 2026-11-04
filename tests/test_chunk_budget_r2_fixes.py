@@ -1,7 +1,7 @@
 """工单 04 第 2 轮评审发现的可离线钉住行为（red → green）。
 
 对应评审编号：
-* F1 关系头/尾按「实体类型前缀标签」归一化（含实体缺失时的全表回退）；
+* F1 关系头/尾按「实体类型前缀标签」归一化（含文档内已声明类型的回退）；
 * F2 放行 gate 必须包含全量关系 F1 不下降（覆盖子集只作并列列报）；
 * F3 真实文档批次可显式追加长文，并如实标注是否压到候选预算；
 * F4 实体/关系归一化是 04 A/B 的 opt-in，默认不改变 02/03 既有口径；
@@ -28,6 +28,8 @@ from moray.evaluation.stress import (
 from moray.evaluation.stress.budget import evaluate_budget_gate
 from moray.evaluation.stress.metrics import relation_covered_stats
 from moray.schema import Entity, EntityMention, ExtractionResult, Relation, Span
+
+from gate_fixtures import gate_metrics, passing_candidate
 
 # ---------------------------------------------------------------------------
 # F1：关系端点归一化
@@ -75,16 +77,19 @@ def test_relation_endpoints_are_normalized_with_entity_type_prefix():
 
 
 def test_relation_endpoint_normalization_falls_back_to_prefix_table():
-    text = "案件编号 B2025-1 涉及王五。"
-    pred = ExtractionResult(relations=[
-        Relation(head="王五", predicate="涉案关联",
-                 tail="案件编号 B2025-1")])
-    gold = ExtractionResult(relations=[
-        Relation(head="王五", predicate="涉案关联", tail="B2025-1")])
+    text = "案件编号 C2026-9 涉及王五。案件编号 B2025-1 是案号。"
+    pred = ExtractionResult(
+        entities=[Entity(name="案件编号 C2026-9", type="EVENT")],
+        relations=[Relation(head="王五", predicate="涉案关联",
+                            tail="案件编号 B2025-1")])
+    gold = ExtractionResult(
+        entities=[Entity(name="C2026-9", type="EVENT")],
+        relations=[Relation(head="王五", predicate="涉案关联",
+                            tail="B2025-1")])
     ev = evaluate_case(
         "fallback", 1, pred, gold, text=text,
         normalize_type_labels=True)
-    # 关系端点在实体列表里查不到类型时，按前缀表全表剥。
+    # 端点 B2025-1 不在实体列表里；文档仍含 EVENT 实体，因此按 EVENT 前缀剥。
     assert ev.report.relation.tp == 1
     assert ev.report.relation.fp == 0
     assert ev.report.relation.fn == 0
@@ -112,47 +117,8 @@ def test_evaluate_case_default_keeps_legacy_raw_caliber():
 # ---------------------------------------------------------------------------
 # F2：全量关系 F1 也必须参与放行（覆盖子集不能替代）
 # ---------------------------------------------------------------------------
-def _metrics(**overrides):
-    base = {
-        "budget": 1500,
-        "overlap_units": 200,
-        "overlap_pairs_min": 8,
-        "chunk_calls": 14,
-        "truncated_chunks": 3,
-        "entity_macro_f1_mean": 0.9000,
-        "entity_macro_f1_worst": 0.8800,
-        "relation_covered_recall_mean": 0.8000,
-        "relation_covered_recall_worst": 0.7500,
-        "relation_covered_precision_mean": 0.9000,
-        "relation_covered_precision_worst": 0.8500,
-        "relation_f1_mean": 0.5000,
-        "relation_f1_worst": 0.4500,
-    }
-    base.update(overrides)
-    return base
-
-
-def _passing_candidate(**overrides):
-    candidate = _metrics(
-        budget=3500,
-        overlap_pairs_min=7,
-        chunk_calls=6,
-        truncated_chunks=0,
-        entity_macro_f1_mean=0.8960,
-        entity_macro_f1_worst=0.8760,
-        relation_covered_recall_mean=0.8000,
-        relation_covered_recall_worst=0.7500,
-        relation_covered_precision_mean=0.8950,
-        relation_covered_precision_worst=0.8450,
-        relation_f1_mean=0.5000,
-        relation_f1_worst=0.4500,
-    )
-    candidate.update(overrides)
-    return candidate
-
-
 def test_gate_passes_only_when_full_relation_f1_also_holds():
-    gate = evaluate_budget_gate(_metrics(), _passing_candidate())
+    gate = evaluate_budget_gate(gate_metrics(), passing_candidate())
     assert gate["passed"] is True
     assert gate["checks"]["relation_full_f1_mean_not_lower"] is True
     assert gate["checks"]["relation_full_f1_worst_not_lower"] is True
@@ -160,7 +126,7 @@ def test_gate_passes_only_when_full_relation_f1_also_holds():
 
 def test_gate_fails_when_full_relation_f1_drops_even_if_covered_subset_passes():
     gate = evaluate_budget_gate(
-        _metrics(), _passing_candidate(
+        gate_metrics(), passing_candidate(
             relation_f1_mean=0.4300, relation_f1_worst=0.4000))
     # 覆盖子集全过，但全量关系 F1 掉 7pt：工单要求“关系 F1 不下降”，必须拦下。
     assert gate["checks"]["relation_covered_recall_mean_not_lower"] is True
@@ -170,8 +136,8 @@ def test_gate_fails_when_full_relation_f1_drops_even_if_covered_subset_passes():
 
 
 def test_gate_requires_full_relation_f1_fields():
-    baseline = _metrics()
-    candidate = _passing_candidate()
+    baseline = gate_metrics()
+    candidate = passing_candidate()
     baseline.pop("relation_f1_mean")
     with pytest.raises(ValueError, match="relation_f1_mean"):
         evaluate_budget_gate(baseline, candidate)
@@ -236,10 +202,11 @@ def test_chunk_cases_does_not_collide_on_duplicate_names():
 # F7：gate 显式标注两轴口径
 # ---------------------------------------------------------------------------
 def test_gate_reports_macro_and_micro_calibers():
-    gate = evaluate_budget_gate(_metrics(), _passing_candidate())
+    gate = evaluate_budget_gate(gate_metrics(), passing_candidate())
     assert "macro" in gate["caliber"]["entity_macro_f1"]
     assert "micro" in gate["caliber"]["relation_covered_prf"]
     assert "macro" in gate["caliber"]["relation_full_f1"]
+    assert "raw" in gate["entity_caliber"]["acceptance"]
 
 
 # ---------------------------------------------------------------------------

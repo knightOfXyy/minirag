@@ -43,11 +43,21 @@ def normalize_entity_name_aliases(name: str, etype: str) -> str:
 def _normalize_relation_endpoint(
     name: str, entity_types: dict[str, str]
 ) -> str:
-    """按端点解析到的实体类型剥前缀；类型查不到时回退到前缀全表。"""
+    """按端点解析到的实体类型剥前缀；类型查不到时只回退到**文档中实际
+    出现过的声明类型**。
+
+    评审 r4 N6：旧实现对前缀表做全表回退，会把任何非 EVENT 端点的
+    ``编号 X`` 也剥成 ``X``，未来加类型/换语料时可能造出假 TP。限定为
+    文档里真正出现过的类型后，没有 EVENT 实体的文档不会被 EVENT 前缀规则
+    误伤。
+    """
     etype = entity_types.get(name)
     if etype is not None:
         return normalize_entity_name_aliases(name, etype)
-    for labels in TYPE_LABEL_PREFIXES.values():
+    present_types = set(entity_types.values())
+    for etype, labels in TYPE_LABEL_PREFIXES.items():
+        if etype not in present_types:
+            continue
         for label in labels:
             if name.startswith(label):
                 rest = name[len(label):].lstrip(" \t:：-—")
@@ -186,14 +196,6 @@ def relation_covered_stats(
         uncovered_gold_relations=(
             len(gold.relations) - len(covered_gold_relations)),
     )
-
-
-def relation_covered_prf(
-    text: str, pred: ExtractionResult, gold: ExtractionResult
-) -> tuple[PRF, int]:
-    """兼容旧调用方：返回 ``(PRF, covered_sentences)``。"""
-    stats = relation_covered_stats(text, pred, gold)
-    return stats.prf, stats.covered_sentences
 
 
 @dataclass
@@ -354,7 +356,6 @@ __all__ = [
     "aggregate_cases",
     "gold_covered_sentence_spans",
     "normalize_entity_name_aliases",
-    "relation_covered_prf",
     "relation_covered_stats",
     "relation_recall_for_predicates",
 ]

@@ -1,34 +1,39 @@
-# 工单 04：分块预算 1500 → 3500 A/B 与上线判据（评审 r2 修复后，双口径 + 全量 F1 gate）
+# 工单 04：分块预算 1500 → 3500 A/B 与上线判据（评审 r4 修复后：实体双口径 gate + 全量 F1）
 
 - 分支/worktree：`yzc/tmp-yzd-feat-relation-202610-04`
   （`/home/dell/orca/workspaces/minirag/tmp-yzd-feat-relation-202610-04`）
-- 代码提交：`e78dd35`（评审 r2 修复：关系端点归一化、全量关系 F1 入 gate、
-  归一化 opt-in、真实长文批次、口径/统计加固）；证据采集时 `git_dirty=false`
-- 证据提交：本分支 `devflow(04): 评审 r2 A/B 证据（关系端点修正、全量 F1 gate；默认仍 1500）`
+- 代码提交：`5036760`（本轮 r4 修复：B1/S1/S2/N1–N6）；原始 A/B 数据
+  采集自 `e78dd35`、采集时 `git_dirty=false`
+- 证据提交：本轮 evidence commit（gate 由 `--from-json` 重生成，本报告与
+  逐条证据同提交）
 - 模型：`deepseek-flash`（provider `deepseek`，`api.deepseek.com`），temperature=0，
   **5 轮独立重复**（无 seed）；压力语料 3 篇 / 3 seed / 79,362 字；
   真实文档 **12 篇**（6 篇黄金集短样本 + 5 篇 samples + 1 篇 5,360-unit 长文
   `docs/ARCHITECTURE.md`，用于真正压 3500 档）
 - 原始数据：`docs/evidence/04-budget-ab.json`（逐轮、逐篇、逐块明细 +
-  **逐篇预测实体/关系面（原始端点 + 归一化端点）**，全部由本次运行生成，无手改派生字段）
+  **逐篇预测实体/关系面（原始端点 + 归一化端点）**）；本轮未重跑 LLM，
+  gate/thresholds 由 `tools/chunk_budget_ab.py --from-json` 从既有逐轮数据
+  复算，JSON `gate_recompute` 记录源提交与重算时间。
 
 ## 结论（先看这里）
 
 1. **配置面达成**：现有配置项 `MORAY_CHUNK_MAX_UNITS=3500` 可设；`overlap_units`
    默认 200 与行为不变。**默认值仍为 1500，本单没有切换。**
-2. **实体轴：辅助口径改善，但不写成“验收通过”**。类型前缀标签
+2. **实体轴：两套口径都进 gate，原始口径不通过**。类型前缀标签
    （`案件编号 A2024-942` → `A2024-942`）归一化后，3500 档实体 macro-F1
-   **+6.09pt（mean）/ +3.36pt（逐轮对齐 worst-of-N）**；但原始未归一化口径仍是
-   **−2.92pt（mean）/ −4.08pt（各档自身最差值相减；逐轮对齐 worst −5.44pt）**，
-   不满足验收 2 的 0.5pt 门槛。归一化只是辅助口径，生产仍会吐带前缀的名字；
+   **+6.09pt（mean）/ +3.36pt（逐轮对齐 worst-of-N）**；但原始未归一化验收口径是
+   **−2.92pt（mean）/ −5.44pt（逐轮对齐 worst-of-N）**，不满足验收 2 的 0.5pt
+   门槛。评审 r4 B1 修复后，gate 的实体轴**同时**检查 raw 与 normalized 的
+   mean/worst（4 条 check），原始口径掉 2.92/5.44pt 时 raw 两条直接 fail，
+   辅助口径无法再单独放行。归一化只影响评测、生产仍会吐带前缀的名字；
    是否接受该规则/扩金标由 owner 决定（见文末）。
 3. **关系轴仍不放行，且 gate 已把全量 F1 加回**。修掉关系端点未归一化的评测
    bug 后（F1），3500 的 2,858 条预测关系里 **1,080 条（37.79%）**曾因头/尾带
    `案件编号 ` 前缀永远匹配不上 gold；修正后覆盖子集 recall 由“假失败”翻为
    **+8.30pt（mean）/ +2.63pt（worst）**，已通过“不下降”。但 precision 仍
    **−12.28pt / −28.66pt**，全量关系 F1 **−6.32pt / −16.33pt**；评审 r2 F2
-   把全量 F1 加回 `checks` 后，gate 仍 `passed=false`（4 条 failure）。
-   **默认保持 1500，未添加切换 commit。**
+   把全量 F1 加回 `checks` 后，gate 仍 `passed=false`（本轮 **6 条 failure**，
+   含实体 raw 两条）。**默认保持 1500，未添加切换 commit。**
 4. **成本面：调用/token 达成，墙钟未改善**。单文档调用 26 → 9（**−65.38%**），
    输入 token **−43.64%**，输出 token **−22.61%**；端到端墙钟 **+14.25%**
    （块变大、单次调用变长，如实列报）。压力语料与 12 篇真实文档截断块均 **0**；
@@ -50,6 +55,14 @@ PYTHONPATH=src .venv/bin/python tools/chunk_budget_ab.py \
 
 （本轮实际用装有 agentscope 的 venv：`/home/dell/orca/workspaces/minirag/moray/.venv/bin/python`；
 密钥只从 `../moray/.env` 读取，不落仓。）
+
+评审 r4 只改判据、不重跑 LLM；gate/thresholds 由既有逐轮数据重算：
+
+```bash
+PYTHONPATH=src .venv/bin/python tools/chunk_budget_ab.py \
+  --from-json docs/evidence/04-budget-ab.json \
+  --json-out docs/evidence/04-budget-ab.json
+```
 
 同一份 02 压力语料、同一个模型、同一组采样参数、同一个 `slim + 本地回填`
 抽取路径，只把 `Chunker(max_units=...)` 从 1500 换成 3500；`overlap_units`
@@ -74,7 +87,7 @@ Python，不发请求）；不含 12 篇真实文档批次（每篇 1–2 块）
 | 指标 | 1500 | 3500 | 变化（mean / worst-of-N） |
 |---|---:|---:|---:|
 | 实体 macro-F1（归一化后，辅助口径） | 0.8974 / 0.8874 | 0.9583 / 0.9346 | **+6.09pt / +3.36pt** |
-| 实体 macro-F1（原始未归一化） | 0.8974 / 0.8874 | 0.8682 / 0.8466 | **−2.92pt / −4.08pt**（own-worst；逐轮对齐 −5.44pt） |
+| 实体 macro-F1（原始未归一化，**验收口径 + gate**） | 0.8974 / 0.8874 | 0.8682 / 0.8466 | **−2.92pt / −5.44pt** |
 | 实体 strict-F1（mean） | 0.9624 | 0.9570 | −0.54pt |
 | 关系 F1（全量口径，macro） | 0.7042 / 0.5876 | 0.6410 / 0.6151 | **−6.32pt / −16.33pt** |
 | 关系 recall（金标覆盖子集，micro） | 0.7731 / 0.6842 | 0.8561 / 0.8275 | **+8.30pt / +2.63pt** |
@@ -107,7 +120,7 @@ Python，不发请求）；不含 12 篇真实文档批次（每篇 1–2 块）
 | 口径 | 均值差 | 95% CI | 最坏一轮 |
 |---|---:|---:|---:|
 | 实体 macro-F1（归一化后） | +6.09pt | [+4.03, +8.15] | +3.36pt |
-| 实体 macro-F1（原始） | −2.92pt | —（只作并列列报） | −4.08pt（own-worst；对齐 −5.44） |
+| 实体 macro-F1（原始，验收口径） | −2.92pt | [−4.84, −1.01] | −5.44pt |
 | 关系 F1（全量） | −6.32pt | [−17.38, +4.75] | −16.33pt |
 | 关系 recall（覆盖子集） | +8.30pt | [+1.35, +15.25] | +2.63pt |
 | 关系 precision（覆盖子集） | −12.28pt | [−29.45, +4.88] | −28.66pt |
@@ -144,24 +157,27 @@ relaxed 匹配前剥掉前缀（`案件编号 A2024-942` → `A2024-942`）。
 评审 r2 的两处加固：
 
 - **F1**：`apply_type_label_aliases` 现在同时归一化**关系头/尾**——先按端点
-  解析到的实体类型剥，类型查不到时按前缀表全表回退。A/B 工具落盘原始端点与
-  归一化端点，1080 条错配可逐条审计。
+  解析到的实体类型剥，类型查不到时只回退到**文档中实际出现过的声明类型**
+  （评审 r4 N6，避免未来类型/换语料时全表乱剥造假 TP）。A/B 工具落盘原始端点
+  与归一化端点，1080 条错配可逐条审计。
 - **F4**：归一化改为 `evaluate_case(..., normalize_type_labels=False)` 的
   **opt-in**；02/03 的入口（`stress/runner.py`、`tools/backfill_stress_ab.py`）
   保持默认 False，历史基线口径不被静默改写。只有 04 的
   `tools/chunk_budget_ab.py` 传 True。
 
-**F5：这是辅助口径，不写成“验收通过”。** 原始口径仍是 −2.92pt / −4.08pt
-（不满足 0.5pt），归一化规则只影响评测、不影响线上输出（生产仍会吐
-`案件编号 A2024-942`）。是否接受该规则、是否在生产侧归一化，或扩 02 金标后
-再判，仍待 owner 决定（见文末）。
+**B1 / F5：这是辅助口径，不能替代验收口径。** 评审 r4 B1 修复后，gate 的
+实体轴同时要求 **raw（验收）** 与 **normalized（辅助）** 两套 macro-F1 的
+mean/worst 都 ≤0.5pt；原始口径 −2.92pt / −5.44pt，因此 raw 两条 check 直接
+fail，不再出现“归一化全绿就放行”。归一化规则只影响评测、不影响线上输出
+（生产仍会吐 `案件编号 A2024-942`）。是否接受该规则、是否在生产侧归一化，
+或扩 02 金标后再判，仍待 owner 决定（见文末）。
 
 两口径并列（5 轮）：
 
 | 口径 | 1500 mean / worst | 3500 mean / worst | 变化 mean / worst |
 |---|---:|---:|---:|
-| 归一化后（辅助口径） | 0.8974 / 0.8874 | 0.9583 / 0.9346 | **+6.09pt / +3.36pt** |
-| 原始未归一化（验收口径） | 0.8974 / 0.8874 | 0.8682 / 0.8466 | **−2.92pt / −4.08pt**（逐轮对齐 −5.44） |
+| 归一化后（辅助口径，也进 gate） | 0.8974 / 0.8874 | 0.9583 / 0.9346 | **+6.09pt / +3.36pt** |
+| 原始未归一化（验收口径，也进 gate） | 0.8974 / 0.8874 | 0.8682 / 0.8466 | **−2.92pt / −5.44pt** |
 
 原始口径里 3500 的 EVENT 是 **P=0 / R=0**：120 条 gold 全漏、120 条预测
 （名字带 `案件编号 ` 前缀）全记 FP；归一化后 EVENT 变成 **P=1 / R=1**。
@@ -183,9 +199,14 @@ relaxed 匹配前剥掉前缀（`案件编号 A2024-942` → `A2024-942`）。
   仍是全部被覆盖的 gold 关系）。实现：
   `src/moray/evaluation/stress/metrics.py::relation_covered_stats`。
 - **F1 修复前后**：3500 档 2,858 条预测关系里 **1,080 条（37.79%）**原始头/尾
-  带 `案件编号 ` 前缀（1500 档 0 条）；旧实现只归一化实体、不归一化关系，
+  带 `案件编号 ` 前缀（1500 档 0/2,159 条）；旧实现只归一化实体、不归一化关系，
   这些关系永远匹配不上 gold，覆盖子集 recall 的 −0.94/−2.34pt 是**假失败**。
   修正端点后 recall 变为 **+8.30pt / +2.63pt**，五轮全为正。
+- **这是输出表面形态退化，不是评测噪声**（评审 r4 B1）：3500 档模型把
+  `案件编号 ` 并进实体名/关系端点的比例从 **0% 升到 37.79%**（EVENT 预测
+  120 条全部带前缀），入库后实体名会对不上；此前 Ingestor 建 MISC 占位就是
+  这类表面形态问题的后果。gate 因此必须同时看 raw 口径，不能只靠评测侧
+  归一化把差异抹平。
 - **F2 放行 gate**：工单验收 2 要求“关系 F1 不下降”，所以 gate 的 `checks`
   现在同时包含 **全量关系 F1 mean/worst 不下降** 与覆盖子集 recall/precision；
   全量口径不再只是“列报”。本轮全量 F1 −6.32/−16.33pt，因此即便覆盖子集
@@ -308,7 +329,7 @@ precision 驱动。本单不改 02 金标，默认保持 1500。
 | # | 验收条目 | 结果 |
 |---|---|---|
 | 1 | 3500 可经现有配置项设置；overlap 默认值与行为不变（配置级测试） | **达成**：默认 1500/200；3500 可设且 overlap 仍 200；相邻块逐对重叠 0<x≤200 |
-| 2 | 1500/3500 同口径：实体 macro-F1 跌 ≤0.5pt、关系 F1 不降、附类型 P/R | **未通过（不切换）**：实体原始口径 −2.92/−4.08（未过）；归一化后 +6.09/+3.36 只作辅助口径；全量关系 F1 −6.32/−16.33、覆盖子集 precision −12.28/−28.66（不过）；覆盖子集 recall +8.30/+2.63（过） |
+| 2 | 1500/3500 同口径：实体 macro-F1 跌 ≤0.5pt、关系 F1 不降、附类型 P/R | **未通过（不切换）**：实体原始验收口径 −2.92/−5.44（gate raw 两条 fail）；归一化后 +6.09/+3.36 只作辅助口径且同样进 gate；全量关系 F1 −6.32/−16.33、覆盖子集 precision −12.28/−28.66（不过）；覆盖子集 recall +8.30/+2.63（过） |
 | 3 | 同报告含调用数、输入/输出 token、端到端耗时，方向与探针一致 | **调用/token 达成，墙钟未改善**：调用 −65.38%，输入 −43.64%，输出 −22.61%，墙钟 +14.25%（如实） |
 | 4 | 3500 档压力语料 + 真实文档截断块为 0（或不高于 1500） | **达成**：压力 0/0；真实 12 篇 0/0，含 5,360-unit 长文在 3500 档切成 2 块、最大 3,483 units、截断 0；`exercises_candidate_budget=true` |
 | 5 | 真实 tokenizer 核算最大块总输入并给出安全余量 | **达成**：4,448 tokens（来自长文），input+output 余量 1,038,726（99.06%），见上表 |
@@ -322,44 +343,85 @@ precision 驱动。本单不改 02 金标，默认保持 1500。
 本轮 gate 的实际 failure（JSON `gate.failures`）：
 
 ```
-relation_full_f1_mean_not_lower            # -6.32pt（F2 新增）
-relation_full_f1_worst_not_lower           # -16.33pt（F2 新增）
+entity_raw_mean_within_0_5pt                  # -2.92pt（B1 新增）
+entity_raw_worst_within_0_5pt                 # -5.44pt（B1 新增）
+relation_full_f1_mean_not_lower                # -6.32pt（F2 新增）
+relation_full_f1_worst_not_lower               # -16.33pt（F2 新增）
 relation_covered_precision_mean_within_0_5pt   # -12.28pt
 relation_covered_precision_worst_within_0_5pt  # -28.66pt
 ```
 
-实体 mean/worst（归一化）、覆盖子集 recall mean/worst、截断 0、overlap 不变、
-调用数下降均通过；但全量关系 F1 与 precision 未过，**所以不加切换 commit**；
-线上行为不变。
+实体 normalized mean/worst（+6.09/+3.36）、覆盖子集 recall mean/worst、截断 0、
+overlap 不变、调用数下降均通过；但实体 **raw** mean/worst（−2.92/−5.44）、
+全量关系 F1 与 precision 未过，**所以不加切换 commit**；线上行为不变。
+gate 的 `entity_caliber` 字段明确写：raw 是验收口径、normalized 是辅助口径，
+两套都进 `checks`，任一超 0.5pt 即 fail。
 
-若后续用更合适的评测口径重新达标，切换动作是单独一个 commit、只改
-`src/moray/config.py::chunk_settings()` 里 `MORAY_CHUNK_MAX_UNITS` 的默认值
-`1500 → 3500`（overlap 不动），回滚直接 `git revert <该 commit>`；也可以不改
-代码、只在部署环境设 `MORAY_CHUNK_MAX_UNITS=3500`，删掉该 env 即回滚。
+若后续用更合适的评测口径重新达标，切换动作是单独一个 commit，且必须
+**同步改两处默认值**，否则两处默认漂移、锁定测试会变红：
 
-## 需要 owner 决策的下一步（不在本单改）
+1. `src/moray/config.py::chunk_settings()` 的 `MORAY_CHUNK_MAX_UNITS`
+   缺省值 `1500 → 3500`；
+2. `src/moray/extraction/chunking.py::Chunker.__init__` 的 `max_units`
+   默认值 `1500 → 3500`（或让 `Chunker` 默认读 `chunk_settings()`）；
+3. 同步更新 `tests/test_chunk_budget.py::test_default_budget_and_overlap_are_unchanged`
+   的期望值；overlap 保持 200 不动。
 
-F1 修复后，“覆盖子集 recall 下降”已证明是评测 bug，不再是阻塞项；要让 3500
-真正可切换，剩下的真实问题是 02 金标的刻意子集导致 precision/全量 F1 下降：
+回滚直接 `git revert <该 commit>`；也可以不改代码、只在部署环境设
+`MORAY_CHUNK_MAX_UNITS=3500`，删掉该 env 即回滚。
 
-1. **扩展 gold 覆盖**（推荐）：把卷四每案其余 4 名涉案人、每篇 18 句
-   “法定代表人{PER}”等句面关系纳入答案；会改变 02 语料版本与既有基线，
-   属另一个工单。**不要在本单顺手改 02 金标。**
-2. 或由 owner 明确预算 A/B 的关系判据改用更细的“金标覆盖子集/召回”粒度
-   （例如按标注三元组邻域而非整句），并写进门槛；本单不擅自改。
+## 需要 owner 决策的下一步（本单不做，另开工单）
+
+**B2（验收 #2 未达成）在本单如实保留为未达成，不通过扩金标或改口径把它
+“做绿”。** 块预算 3500 在吞吐上显著更好（调用 −65%、输入 token −43.6%、
+截断 0），但实体表面形态（37.79% 关系端点/EVENT 名带 `案件编号 ` 前缀）与
+金标覆盖上的关系精度退化，故**不建议**切换默认；切换与否留给后续专门工单
+处理前缀归一化与金标扩标后再评估。可选后续路径（二选一，另开工单）：
+
+1. **扩展 gold 覆盖**：把卷四每案其余 4 名涉案人、每篇 18 句
+   “法定代表人{PER}”等句面关系纳入答案；会改变 02 语料版本与既有基线。
+   **不要在本单顺手改 02 金标。**
+2. **正式改验收口径**：由 owner 明确预算 A/B 的关系判据改用更细的
+   “金标覆盖子集/召回”粒度（例如按标注三元组邻域而非整句），并写进门槛。
+   本单不擅自改。
 3. **F5 实体归一化规则**：当前只在 04 A/B 评测侧 opt-in，报告把它定位为
-   辅助口径、不写“验收通过”。请 owner 决定：接受该规则并同步工单验收口径、
-   或在生产侧归一化实体名、或扩 02 金标后再判。决定落地前，原始口径仍是
-   −2.92/−4.08pt，不能算实体轴通过。
+   辅助口径、不能替代 raw 验收口径。请 owner 决定：接受该规则并同步工单
+   验收口径、或在生产侧归一化实体名、或扩 02 金标后再判。决定落地前，
+   原始口径仍是 −2.92/−5.44pt，不能算实体轴通过。
 
-在这三项任一落地前，生产保持 1500；本单不擅自改语料、匹配逻辑或默认值。
+在任一落地前，生产保持 1500；本单不擅自改语料、匹配逻辑或默认值。
+
+## 评审 r4 修复（B1 / S1 / S2 + nits）
+
+- **B1（blocker）**：gate 实体轴改为 **raw + normalized 双口径**，4 条 check
+  （mean/worst 各两条），任一超 0.5pt 即 fail；`raw_entity_macro_f1_*` 成为
+  必填字段，`entity_caliber` 显式写验收/辅助口径。JSON 由
+  `--from-json` 从既有逐轮数据重算，`gate.failures` 新增实体 raw 两条。
+- **S1（should）**：`thresholds.relation_full_scope` 改为“全量口径 mean/worst
+  也参与放行（gate.checks）”，与实现一致；`gate_recompute` 记录重算来源。
+- **S2（should）**：`DEPLOYMENT.md` 与报告都改成“同步改 config + Chunker
+  两处默认并更新锁定测试”，不再只说改一处。
+- **N1** 删除无调用方的 `relation_covered_prf` 与未使用的 `_max`；
+  **N2** first-occurrence gap 每关系只算一次、A/B 工具复用 `evaluate_case`
+  返回的归一化副本，不再三次归一化；**N3** gate 校验两档预算不同、并在
+  提供 rounds 时复算/校验 explicit worst delta；**N4** gate 夹具收敛到
+  `tests/gate_fixtures.py` 一份；**N5** 过期“全量只列报”注释随夹具重构移除；
+  **N6** 关系端点回退只对文档中实际出现的声明类型生效，并补反向用例；
+  **N7** 真实文档 11/12 为短桩已在报告中披露（数据面，需 `--real-doc`
+  传更长脱敏案卷，不阻塞本单）。
+- **B2（blocker，owner 决策）**：本单不扩金标、不改验收口径，如实保留
+  “未达成”，默认保持 1500；后续路径见上一节。
 
 ## 证据文件
 
 | 文件 | 内容 |
 |---|---|
-| `docs/evidence/04-budget-ab.json` | 逐轮/逐篇/逐块原始数据、逐篇预测面（原始+归一化关系端点）、类型 P/R、双口径关系指标、残差明细、上下文余量、gate（含全量 F1 checks 与 caliber）、CI |
+| `docs/evidence/04-budget-ab.json` | 逐轮/逐篇/逐块原始数据、逐篇预测面（原始+归一化关系端点）、类型 P/R、双口径关系指标、残差明细、上下文余量、gate（实体 raw+normalized 双轴、全量 F1 checks、caliber、gate_recompute）、CI |
 | `docs/evidence/04-budget-ab.md` | 本报告 |
+| `docs/evidence/04-r4-red-tests.txt` | 先红：评审 r4 新增/修改测试在旧实现上的失败输出 |
+| `docs/evidence/04-r4-green-tests.txt` | 后绿：评审 r4 定向用例 |
+| `docs/evidence/04-r4-full-suite.txt` | 全量 pytest（离线） |
+| `docs/evidence/04-r4-fix-evidence.md` | 11 条评审发现逐条处理结果与证据 |
 | `docs/evidence/04-r2-red-tests.txt` | 先红：评审 r2 新增/修改测试在旧实现上的失败输出（21 failed） |
 | `docs/evidence/04-r2-green-tests.txt` | 后绿：评审 r2 定向用例（58 passed） |
 | `docs/evidence/04-r2-full-suite.txt` | 全量 pytest（离线，514 passed / 66 skipped） |

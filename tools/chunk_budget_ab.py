@@ -46,11 +46,9 @@ from moray.evaluation.gold import load_gold_dir
 from moray.evaluation.metrics import evaluate, macro_average
 from moray.evaluation.stress import (
     aggregate_cases,
-    apply_type_label_aliases,
     evaluate_budget_gate,
     evaluate_case,
     load_stress_dir,
-    normalize_entity_name_aliases,
     relation_chunk_profile,
 )
 from moray.extraction import Chunker, Document, Extractor, estimate_tokens
@@ -128,11 +126,6 @@ def _mean(values) -> float | None:
 def _min(values) -> float | None:
     vals = [v for v in values if isinstance(v, (int, float))]
     return min(vals) if vals else None
-
-
-def _max(values) -> float | None:
-    vals = [v for v in values if isinstance(v, (int, float))]
-    return max(vals) if vals else None
 
 
 # 双侧 95% t 临界值（小样本重复次数；n>10 用正态 1.96 近似）。
@@ -278,11 +271,12 @@ async def _run_corpus(
             wall_s = time.perf_counter() - started
 
             # 工单 04 的 A/B 显式 opt-in 归一化；02/03 调用方保持默认口径（F4）。
+            # 评审 r4 N2：evaluate_case 已经把归一化副本放进 ``ev.pred``，
+            # 不再在工具层重复 apply / 逐实体重算。
             ev = evaluate_case(
                 case.name, case.seed, out.result, case.gold, text=case.text,
                 normalize_type_labels=True)
             raw_report = evaluate(out.result, case.gold)
-            normalized_result = apply_type_label_aliases(out.result)
             evals.append(ev)
             all_evals.append(ev)
             raw_reports.append(raw_report)
@@ -308,10 +302,10 @@ async def _run_corpus(
                 "uncovered_gold_relations": ev.uncovered_gold_relations,
                 # S1：逐篇预测面落盘，FP 归因可审计（不只给聚合 PRF）
                 "predicted_entities": [
-                    {"type": e.type, "name": e.name,
-                     "normalized_name": normalize_entity_name_aliases(
-                         e.name, e.type)}
-                    for e in out.result.entities
+                    {"type": raw.type, "name": raw.name,
+                     "normalized_name": norm.name}
+                    for raw, norm in zip(
+                        out.result.entities, ev.pred.entities)
                 ],
                 # F1：同时保留原始端点与归一化端点，关系错配可逐条审计。
                 "predicted_relations": [
@@ -320,7 +314,7 @@ async def _run_corpus(
                      "normalized_head": norm.head,
                      "normalized_tail": norm.tail}
                     for raw, norm in zip(
-                        out.result.relations, normalized_result.relations)
+                        out.result.relations, ev.pred.relations)
                 ],
             }
             rows.append(row)
@@ -547,6 +541,16 @@ def _round_aligned_delta_pt(baseline: dict, candidate: dict,
     return out
 
 
+def _round_aligned_raw_delta_pt(baseline: dict, candidate: dict) -> list[float]:
+    """原始未归一化实体 macro-F1 的逐轮对齐差（百分点）。"""
+    out = []
+    for base_round, cand_round in zip(baseline["rounds"], candidate["rounds"]):
+        base_f1 = base_round["raw_macro"]["entity_relaxed"]["f1"]
+        cand_f1 = cand_round["raw_macro"]["entity_relaxed"]["f1"]
+        out.append(round((cand_f1 - base_f1) * 100, 4))
+    return out
+
+
 def _round_aligned_covered_delta_pt(baseline: dict, candidate: dict,
                                     field: str) -> list[float]:
     out = []
@@ -594,9 +598,221 @@ def _safety_margin(budget_result: dict, real_docs: dict, capabilities: dict) -> 
     return out
 
 
+def gate_thresholds() -> dict:
+    """gate 的公开阈值说明（写进 evidence JSON，必须与实现一致）。
+
+    评审 r4 S1：旧文本写“全量口径只列报，不参与放行”，与 ``checks`` 里的
+    ``relation_full_f1_*`` 正好相反；这里改成实现事实，并补充实体双口径。
+    """
+    return {
+        "entity_macro_f1_max_drop_pt": 0.5,
+        "entity_macro_f1_note": (
+            "raw（原始未归一化，验收口径）与 normalized（类型前缀标签归一化，"
+            "辅助口径）两套 macro-F1 的 mean/worst 都进 checks，任一跌幅 "
+            ">0.5pt 即 fail；辅助口径不能替代验收口径"),
+        "relation_gate": ("金标覆盖子集 recall mean/worst 不下降；"
+                          "precision mean/worst 跌幅 <=0.5pt"),
+        "relation_full_scope": ("全量口径（含 02 金标刻意未标注句面的 FP）"
+                                "mean/worst 也参与放行（gate.checks），"
+                                "与覆盖子集并列列报"),
+        "truncated_chunks": "候选档必须为 0（压力语料 + 真实文档）",
+        "overlap": "冻结基线 200 不变，且实际重叠对数 >0",
+        "chunk_calls": "候选档必须下降",
+        "budgets": "两档预算必须不同（1500-vs-1500 不能 passed）",
+    }
+
+
+def _gate_rounds(result: dict) -> list[dict[str, float]]:
+    """把逐轮 macro 值整理成 gate 复算 explicit worst delta 的输入。"""
+    return [
+        {
+            "entity_macro_f1": r["macro"]["entity_relaxed"]["f1"],
+            "raw_entity_macro_f1": r["raw_macro"]["entity_relaxed"]["f1"],
+            "relation_f1": r["macro"]["relation"]["f1"],
+            "relation_covered_recall": r["relation_covered_recall"],
+            "relation_covered_precision": r["relation_covered_precision"],
+        }
+        for r in result["rounds"]
+    ]
+
+
+def _derive_comparison(
+    baseline: dict,
+    candidate: dict,
+    base_real: dict,
+    cand_real: dict,
+    *,
+    budgets: list[int],
+) -> dict:
+    """由两档逐轮结果生成 gate 与所有派生对比字段（live / --from-json 共用）。"""
+    gate_baseline = {
+        "budget": budgets[0],
+        # 评审 r1 S3：基线 overlap 用**冻结常量**，不再两档都从同一个
+        # args.overlap_units 取值自证；候选档必须仍然等于 200。
+        "overlap_units": DEFAULT_OVERLAP_UNITS,
+        "overlap_pairs_min": baseline["overlap_pairs_min"],
+        "chunk_calls": baseline["chunk_calls_total_mean"],
+        "truncated_chunks": (
+            baseline["truncated_chunks_max"]
+            + base_real["truncated_chunks_total"]),
+        "entity_macro_f1_mean": baseline["entity_macro_f1_mean"],
+        "entity_macro_f1_worst": baseline["entity_macro_f1_worst"],
+        "raw_entity_macro_f1_mean": baseline["raw_entity_macro_f1_mean"],
+        "raw_entity_macro_f1_worst": baseline["raw_entity_macro_f1_worst"],
+        "relation_covered_recall_mean": baseline[
+            "relation_covered_recall_mean"],
+        "relation_covered_recall_worst": baseline[
+            "relation_covered_recall_worst"],
+        "relation_covered_precision_mean": baseline[
+            "relation_covered_precision_mean"],
+        "relation_covered_precision_worst": baseline[
+            "relation_covered_precision_worst"],
+        "relation_f1_mean": baseline["relation_f1_mean"],
+        "relation_f1_worst": baseline["relation_f1_worst"],
+    }
+    gate_candidate = {
+        "budget": budgets[-1],
+        "overlap_units": candidate["overlap_units"],
+        "overlap_pairs_min": candidate["overlap_pairs_min"],
+        "chunk_calls": candidate["chunk_calls_total_mean"],
+        "truncated_chunks": (
+            candidate["truncated_chunks_max"]
+            + cand_real["truncated_chunks_total"]),
+        "entity_macro_f1_mean": candidate["entity_macro_f1_mean"],
+        "entity_macro_f1_worst": candidate["entity_macro_f1_worst"],
+        "raw_entity_macro_f1_mean": candidate["raw_entity_macro_f1_mean"],
+        "raw_entity_macro_f1_worst": candidate["raw_entity_macro_f1_worst"],
+        "relation_covered_recall_mean": candidate[
+            "relation_covered_recall_mean"],
+        "relation_covered_recall_worst": candidate[
+            "relation_covered_recall_worst"],
+        "relation_covered_precision_mean": candidate[
+            "relation_covered_precision_mean"],
+        "relation_covered_precision_worst": candidate[
+            "relation_covered_precision_worst"],
+        "relation_f1_mean": candidate["relation_f1_mean"],
+        "relation_f1_worst": candidate["relation_f1_worst"],
+    }
+    # worst-of-N 用逐轮对齐差（更严格）：两档各自的最差值相减会漏掉
+    # “某一轮单独崩、另一轮恰好很好”的情况。
+    entity_aligned = _round_aligned_delta_pt(
+        baseline, candidate, "entity_relaxed")
+    raw_entity_aligned = _round_aligned_raw_delta_pt(baseline, candidate)
+    relation_full_aligned = _round_aligned_delta_pt(
+        baseline, candidate, "relation")
+    covered_recall_aligned = _round_aligned_covered_delta_pt(
+        baseline, candidate, "relation_covered_recall")
+    covered_precision_aligned = _round_aligned_covered_delta_pt(
+        baseline, candidate, "relation_covered_precision")
+    gate_candidate["entity_macro_f1_worst_delta_pt"] = min(entity_aligned)
+    gate_candidate["raw_entity_macro_f1_worst_delta_pt"] = min(
+        raw_entity_aligned)
+    gate_candidate["relation_f1_worst_delta_pt"] = min(relation_full_aligned)
+    gate_candidate["relation_covered_recall_worst_delta_pt"] = min(
+        covered_recall_aligned)
+    gate_candidate["relation_covered_precision_worst_delta_pt"] = min(
+        covered_precision_aligned)
+    # 评审 r4 N3：gate 用 rounds 复算并校验 explicit worst delta，不采信自证。
+    gate = evaluate_budget_gate(
+        gate_baseline, gate_candidate,
+        baseline_rounds=_gate_rounds(baseline),
+        candidate_rounds=_gate_rounds(candidate))
+    gate["real_docs_truncated_chunks"] = cand_real["truncated_chunks_total"]
+    gate["stress_truncated_chunks"] = candidate["truncated_chunks_max"]
+    gate["real_doc_coverage"] = _real_doc_coverage(
+        cand_real, candidate_budget=budgets[-1])
+
+    delta_summary = {
+        "entity_macro_f1": _delta_summary_pt(entity_aligned),
+        "raw_entity_macro_f1": _delta_summary_pt(raw_entity_aligned),
+        "relation_full": _delta_summary_pt(relation_full_aligned),
+        "relation_covered_recall": _delta_summary_pt(covered_recall_aligned),
+        "relation_covered_precision": _delta_summary_pt(
+            covered_precision_aligned),
+        "note": ("mean/95% CI 按 N 轮独立重复计算（无 seed，unpaired）；"
+                 "min_pt 是 round-aligned worst-of-N，不冒充配对检验"),
+    }
+    gate_frozen_overlap = {
+        "baseline_frozen_overlap_units": DEFAULT_OVERLAP_UNITS,
+        "candidate_config_overlap_units": candidate["overlap_units"],
+        "baseline_observed_overlap_pairs_min": baseline["overlap_pairs_min"],
+        "candidate_observed_overlap_pairs_min": candidate["overlap_pairs_min"],
+        "unchanged": (candidate["overlap_units"] == DEFAULT_OVERLAP_UNITS),
+    }
+    calls_drop_pct = None
+    if baseline["chunk_calls_total_mean"]:
+        calls_drop_pct = round(
+            (1 - candidate["chunk_calls_total_mean"]
+             / baseline["chunk_calls_total_mean"]) * 100, 2)
+    return {
+        "gate": gate,
+        "calls_drop_pct": calls_drop_pct,
+        "delta_summary": delta_summary,
+        "round_aligned_deltas_pt": {
+            "entity_macro_f1": entity_aligned,
+            "raw_entity_macro_f1": raw_entity_aligned,
+            "relation_full": relation_full_aligned,
+            "relation_covered_recall": covered_recall_aligned,
+            "relation_covered_precision": covered_precision_aligned,
+            "note": ("候选减基线，仅按轮次对齐；两档独立跑、无 seed，"
+                     "不构成配对检验"),
+        },
+        "overlap_frozen_baseline": gate_frozen_overlap,
+    }
+
+
 def _write_report(path: str | Path, payload: dict) -> None:
     Path(path).write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _recompute_from_payload(
+    payload: dict, *, source_path: str | Path, json_out: str
+) -> int:
+    """从既有证据 JSON 重算 gate/阈值派生字段，不调用 LLM。
+
+    评审 r4 B1/S1：修判据后必须重生成 gate 段；原始逐轮/逐篇数据已经在
+    JSON 里，``--from-json`` 保证派生字段仍由工具生成而不是手改。
+    """
+    budgets = [
+        int(b) for b in (
+            payload.get("chunking", {}).get("budgets")
+            or sorted(payload.get("budgets", {}), key=int))
+    ]
+    if len(budgets) < 2:
+        print("--from-json 需要至少两档预算", file=sys.stderr)
+        return 2
+    results = payload["budgets"]
+    real_results = payload["real_docs"]
+    baseline = results[str(budgets[0])]
+    candidate = results[str(budgets[-1])]
+    base_real = real_results[str(budgets[0])]
+    cand_real = real_results[str(budgets[-1])]
+    derived = _derive_comparison(
+        baseline, candidate, base_real, cand_real, budgets=budgets)
+    payload["thresholds"] = gate_thresholds()
+    payload["calls_drop_pct"] = derived["calls_drop_pct"]
+    payload["delta_summary"] = derived["delta_summary"]
+    payload["round_aligned_deltas_pt"] = derived["round_aligned_deltas_pt"]
+    payload["overlap_frozen_baseline"] = derived["overlap_frozen_baseline"]
+    payload["gate"] = derived["gate"]
+    payload["gate_recompute"] = {
+        "source_json": str(source_path),
+        "source_git_sha": payload.get("git_sha"),
+        "source_generated_at": payload.get("generated_at"),
+        "regenerated_at": datetime.now(timezone.utc).isoformat(),
+        "regenerator": _git_identity(),
+        "note": ("原始逐轮/逐篇数据未重跑 LLM；gate 与 thresholds 由当前"
+                 "实现从既有 JSON 复算，gate 用 rounds 校验 explicit deltas"),
+    }
+    _write_report(json_out, payload)
+    print(f"wrote {json_out}")
+    print(json.dumps({
+        "source_git_sha": payload.get("git_sha"),
+        "gate": derived["gate"],
+        "calls_drop_pct": derived["calls_drop_pct"],
+    }, ensure_ascii=False, indent=2))
+    return 0
 
 
 async def main() -> int:
@@ -615,7 +831,19 @@ async def main() -> int:
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--json-out", default="")
+    ap.add_argument(
+        "--from-json", default="",
+        help="从既有证据 JSON 重算 gate/thresholds（不调用 LLM，需配 --json-out）")
     args = ap.parse_args()
+
+    if args.from_json:
+        if not args.json_out:
+            print("--from-json 必须同时给 --json-out", file=sys.stderr)
+            return 2
+        payload = json.loads(
+            Path(args.from_json).read_text(encoding="utf-8"))
+        return _recompute_from_payload(
+            payload, source_path=args.from_json, json_out=args.json_out)
 
     if args.env_file:
         load_dotenv(args.env_file, override=False)
@@ -668,92 +896,16 @@ async def main() -> int:
     base_real = real_results[baseline_key]
     cand_real = real_results[candidate_key]
 
-    gate_baseline = {
-        "budget": budgets[0],
-        # 评审 r1 S3：基线 overlap 用**冻结常量**，不再两档都从同一个
-        # args.overlap_units 取值自证；候选档必须仍然等于 200。
-        "overlap_units": DEFAULT_OVERLAP_UNITS,
-        "overlap_pairs_min": baseline["overlap_pairs_min"],
-        "chunk_calls": baseline["chunk_calls_total_mean"],
-        "truncated_chunks": (
-            baseline["truncated_chunks_max"]
-            + base_real["truncated_chunks_total"]),
-        "entity_macro_f1_mean": baseline["entity_macro_f1_mean"],
-        "entity_macro_f1_worst": baseline["entity_macro_f1_worst"],
-        "relation_covered_recall_mean": baseline[
-            "relation_covered_recall_mean"],
-        "relation_covered_recall_worst": baseline[
-            "relation_covered_recall_worst"],
-        "relation_covered_precision_mean": baseline[
-            "relation_covered_precision_mean"],
-        "relation_covered_precision_worst": baseline[
-            "relation_covered_precision_worst"],
-        "relation_f1_mean": baseline["relation_f1_mean"],
-        "relation_f1_worst": baseline["relation_f1_worst"],
-    }
-    gate_candidate = {
-        "budget": budgets[-1],
-        "overlap_units": candidate["overlap_units"],
-        "overlap_pairs_min": candidate["overlap_pairs_min"],
-        "chunk_calls": candidate["chunk_calls_total_mean"],
-        "truncated_chunks": (
-            candidate["truncated_chunks_max"]
-            + cand_real["truncated_chunks_total"]),
-        "entity_macro_f1_mean": candidate["entity_macro_f1_mean"],
-        "entity_macro_f1_worst": candidate["entity_macro_f1_worst"],
-        "relation_covered_recall_mean": candidate[
-            "relation_covered_recall_mean"],
-        "relation_covered_recall_worst": candidate[
-            "relation_covered_recall_worst"],
-        "relation_covered_precision_mean": candidate[
-            "relation_covered_precision_mean"],
-        "relation_covered_precision_worst": candidate[
-            "relation_covered_precision_worst"],
-        "relation_f1_mean": candidate["relation_f1_mean"],
-        "relation_f1_worst": candidate["relation_f1_worst"],
-    }
-    # worst-of-N 用逐轮对齐差（更严格）：两档各自的最差值相减会漏掉
-    # “某一轮单独崩、另一轮恰好很好”的情况。
-    entity_aligned = _round_aligned_delta_pt(
-        baseline, candidate, "entity_relaxed")
-    relation_full_aligned = _round_aligned_delta_pt(
-        baseline, candidate, "relation")
-    covered_recall_aligned = _round_aligned_covered_delta_pt(
-        baseline, candidate, "relation_covered_recall")
-    covered_precision_aligned = _round_aligned_covered_delta_pt(
-        baseline, candidate, "relation_covered_precision")
-    gate_candidate["entity_macro_f1_worst_delta_pt"] = min(entity_aligned)
-    gate_candidate["relation_f1_worst_delta_pt"] = min(relation_full_aligned)
-    gate_candidate["relation_covered_recall_worst_delta_pt"] = min(
-        covered_recall_aligned)
-    gate_candidate["relation_covered_precision_worst_delta_pt"] = min(
-        covered_precision_aligned)
-    gate = evaluate_budget_gate(gate_baseline, gate_candidate)
-    gate["real_docs_truncated_chunks"] = cand_real["truncated_chunks_total"]
-    gate["stress_truncated_chunks"] = candidate["truncated_chunks_max"]
-    gate["real_doc_coverage"] = _real_doc_coverage(
-        cand_real, candidate_budget=budgets[-1])
-
-    delta_summary = {
-        "entity_macro_f1": _delta_summary_pt(entity_aligned),
-        "relation_full": _delta_summary_pt(relation_full_aligned),
-        "relation_covered_recall": _delta_summary_pt(covered_recall_aligned),
-        "relation_covered_precision": _delta_summary_pt(
-            covered_precision_aligned),
-        "note": ("mean/95% CI 按 N 轮独立重复计算（无 seed，unpaired）；"
-                 "min_pt 是 round-aligned worst-of-N，不冒充配对检验"),
-    }
+    derived = _derive_comparison(
+        baseline, candidate, base_real, cand_real, budgets=budgets)
+    gate = derived["gate"]
+    delta_summary = derived["delta_summary"]
+    gate_frozen_overlap = derived["overlap_frozen_baseline"]
+    calls_drop_pct = derived["calls_drop_pct"]
     real_doc_coverage = {
         str(b): _real_doc_coverage(real_results[str(b)],
                                    candidate_budget=budgets[-1])
         for b in budgets
-    }
-    gate_frozen_overlap = {
-        "baseline_frozen_overlap_units": DEFAULT_OVERLAP_UNITS,
-        "candidate_config_overlap_units": candidate["overlap_units"],
-        "baseline_observed_overlap_pairs_min": baseline["overlap_pairs_min"],
-        "candidate_observed_overlap_pairs_min": candidate["overlap_pairs_min"],
-        "unchanged": (candidate["overlap_units"] == DEFAULT_OVERLAP_UNITS),
     }
 
     residual = {
@@ -766,12 +918,6 @@ async def main() -> int:
                                capabilities)
         for b in budgets
     }
-
-    calls_drop_pct = None
-    if baseline["chunk_calls_total_mean"]:
-        calls_drop_pct = round(
-            (1 - candidate["chunk_calls_total_mean"]
-             / baseline["chunk_calls_total_mean"]) * 100, 2)
 
     payload = {
         "experiment": "工单 04：分块预算 1500 vs 3500 A/B（真实 LLM，slim+本地回填）",
@@ -802,30 +948,13 @@ async def main() -> int:
             "overlap_note": ("本单明确不动 overlap；两档都用同一个配置值，"
                              "overlap_pairs_min 是相邻块实际重叠对数的最小值。"),
         },
-        "thresholds": {
-            "entity_macro_f1_max_drop_pt": 0.5,
-            "entity_macro_f1_note": "实体名按类型前缀标签归一化后比较",
-            "relation_gate": ("金标覆盖子集 recall mean/worst 不下降；"
-                              "precision mean/worst 跌幅 <=0.5pt"),
-            "relation_full_scope": ("全量口径（含 02 金标刻意未标注句面的 FP）"
-                                    "只列报，不参与放行"),
-            "truncated_chunks": "候选档必须为 0（压力语料 + 真实文档）",
-            "overlap": "冻结基线 200 不变，且实际重叠对数 >0",
-            "chunk_calls": "候选档必须下降",
-        },
+        "thresholds": gate_thresholds(),
         "budgets": results,
         "real_docs": real_results,
         "real_doc_coverage": real_doc_coverage,
         "calls_drop_pct": calls_drop_pct,
         "delta_summary": delta_summary,
-        "round_aligned_deltas_pt": {
-            "entity_macro_f1": entity_aligned,
-            "relation_full": relation_full_aligned,
-            "relation_covered_recall": covered_recall_aligned,
-            "relation_covered_precision": covered_precision_aligned,
-            "note": ("候选减基线，仅按轮次对齐；两档独立跑、无 seed，"
-                     "不构成配对检验"),
-        },
+        "round_aligned_deltas_pt": derived["round_aligned_deltas_pt"],
         "overlap_frozen_baseline": gate_frozen_overlap,
         "residual_cross_chunk": residual,
         "safety_margin": safety,

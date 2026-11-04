@@ -65,12 +65,13 @@
   },
   "thresholds": {
     "entity_macro_f1_max_drop_pt": 0.5,
-    "entity_macro_f1_note": "实体名按类型前缀标签归一化后比较",
+    "entity_macro_f1_note": "raw（原始未归一化，验收口径）与 normalized（类型前缀标签归一化，辅助口径）两套 macro-F1 的 mean/worst 都进 checks，任一跌幅 >0.5pt 即 fail；辅助口径不能替代验收口径",
     "relation_gate": "金标覆盖子集 recall mean/worst 不下降；precision mean/worst 跌幅 <=0.5pt",
-    "relation_full_scope": "全量口径（含 02 金标刻意未标注句面的 FP）只列报，不参与放行",
+    "relation_full_scope": "全量口径（含 02 金标刻意未标注句面的 FP）mean/worst 也参与放行（gate.checks），与覆盖子集并列列报",
     "truncated_chunks": "候选档必须为 0（压力语料 + 真实文档）",
     "overlap": "冻结基线 200 不变，且实际重叠对数 >0",
-    "chunk_calls": "候选档必须下降"
+    "chunk_calls": "候选档必须下降",
+    "budgets": "两档预算必须不同（1500-vs-1500 不能 passed）"
   },
   "budgets": {
     "1500": {
@@ -51640,6 +51641,23 @@
       "max_pt": 7.86,
       "label": "unpaired independent repeats; worst-of-N = min over round-aligned repeats (no seed, not a paired test)"
     },
+    "raw_entity_macro_f1": {
+      "values": [
+        -5.44,
+        -2.71,
+        -1.23,
+        -2.83,
+        -2.4
+      ],
+      "n": 5,
+      "mean_pt": -2.922,
+      "sd_pt": 1.5435,
+      "ci95_low_pt": -4.8382,
+      "ci95_high_pt": -1.0058,
+      "min_pt": -5.44,
+      "max_pt": -1.23,
+      "label": "unpaired independent repeats; worst-of-N = min over round-aligned repeats (no seed, not a paired test)"
+    },
     "relation_full": {
       "values": [
         -3.68,
@@ -51700,6 +51718,13 @@
       7.86,
       6.29,
       6.67
+    ],
+    "raw_entity_macro_f1": [
+      -5.44,
+      -2.71,
+      -1.23,
+      -2.83,
+      -2.4
     ],
     "relation_full": [
       -3.68,
@@ -52163,8 +52188,10 @@
   "gate": {
     "passed": false,
     "checks": {
-      "entity_mean_within_0_5pt": true,
-      "entity_worst_within_0_5pt": true,
+      "entity_raw_mean_within_0_5pt": false,
+      "entity_raw_worst_within_0_5pt": false,
+      "entity_normalized_mean_within_0_5pt": true,
+      "entity_normalized_worst_within_0_5pt": true,
       "relation_full_f1_mean_not_lower": false,
       "relation_full_f1_worst_not_lower": false,
       "relation_covered_recall_mean_not_lower": true,
@@ -52174,9 +52201,12 @@
       "truncated_chunks_zero": true,
       "overlap_unchanged": true,
       "overlap_observed": true,
-      "chunk_calls_decreased": true
+      "chunk_calls_decreased": true,
+      "budgets_differ": true
     },
     "failures": [
+      "entity_raw_mean_within_0_5pt",
+      "entity_raw_worst_within_0_5pt",
       "relation_full_f1_mean_not_lower",
       "relation_full_f1_worst_not_lower",
       "relation_covered_precision_mean_within_0_5pt",
@@ -52184,12 +52214,19 @@
     ],
     "entity_macro_f1_mean_delta_pt": 6.09,
     "entity_macro_f1_worst_delta_pt": 3.36,
+    "raw_entity_macro_f1_mean_delta_pt": -2.92,
+    "raw_entity_macro_f1_worst_delta_pt": -5.44,
     "relation_covered_recall_mean_delta_pt": 8.3,
     "relation_covered_recall_worst_delta_pt": 2.63,
     "relation_covered_precision_mean_delta_pt": -12.28,
     "relation_covered_precision_worst_delta_pt": -28.66,
     "relation_full_mean_delta_pt": -6.32,
     "relation_full_worst_delta_pt": -16.33,
+    "entity_caliber": {
+      "acceptance": "raw（原始未归一化）macro-F1",
+      "auxiliary": "normalized（类型前缀标签归一化后）macro-F1",
+      "rule": "raw 与 normalized 的 mean/worst 都进 checks，任一跌幅超过 0.5pt 即 fail；辅助口径不能替代验收口径"
+    },
     "caliber": {
       "entity_macro_f1": "macro: 逐篇 F1 先平均，再跨轮平均",
       "relation_full_f1": "macro: 逐篇 F1 先平均，再跨轮平均",
@@ -52203,6 +52240,7 @@
       "baseline": 1500,
       "candidate": 3500
     },
+    "rounds_used_for_explicit_deltas": true,
     "real_docs_truncated_chunks": 0,
     "stress_truncated_chunks": 0,
     "real_doc_coverage": {
@@ -52219,5 +52257,18 @@
     "full_relation_fp_increase": 557,
     "full_entity_fp_increase": -21
   },
-  "cost_note": "只记录 provider 真实 token；金额以账单为准。token 为抽取请求本身，不含本地评测计算开销"
+  "cost_note": "只记录 provider 真实 token；金额以账单为准。token 为抽取请求本身，不含本地评测计算开销",
+  "gate_recompute": {
+    "source_json": "docs/evidence/04-budget-ab.json",
+    "source_git_sha": "e78dd35d70bcc2c7f1d29f89973914439e6fbfb4",
+    "source_generated_at": "2026-11-03T08:46:42.466076+00:00",
+    "regenerated_at": "2026-11-04T01:08:57.167036+00:00",
+    "regenerator": {
+      "git_sha": "503676038d85aed9c777400e3a278f586d7673a0",
+      "git_describe": "5036760",
+      "git_dirty": false,
+      "git_status_porcelain": ""
+    },
+    "note": "原始逐轮/逐篇数据未重跑 LLM；gate 与 thresholds 由当前实现从既有 JSON 复算，gate 用 rounds 校验 explicit deltas"
+  }
 }
