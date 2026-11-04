@@ -4,8 +4,9 @@
   （`/home/dell/orca/workspaces/minirag/tmp-yzd-feat-relation-202610-04`）
 - 代码提交：`4698445`（本轮 r5 修复：S1/S2 + N1–N4）；原始 A/B 数据
   采集自 `e78dd35`、采集时 `git_dirty=false`；上一轮 r4 修复为 `5036760`
-- 证据提交：本轮 evidence commit（gate 由 `--from-json` 重生成，本报告与
-  逐条证据同提交）
+- 证据提交：`d67d682`（报告/日志/修复说明）+ 本次重生成 JSON 的 evidence
+  commit（gate/thresholds/overlap/coverage 由 `--from-json` 从既有逐轮数据
+  复算，未重跑 LLM）
 - 模型：`deepseek-flash`（provider `deepseek`，`api.deepseek.com`），temperature=0，
   **5 轮独立重复**（无 seed）；压力语料 3 篇 / 3 seed / 79,362 字；
   真实文档 **12 篇**（6 篇黄金集短样本 + 5 篇 samples + 1 篇 5,360-unit 长文

@@ -67,9 +67,10 @@
     "entity_macro_f1_max_drop_pt": 0.5,
     "entity_macro_f1_note": "raw（原始未归一化，验收口径）与 normalized（类型前缀标签归一化，辅助口径）两套 macro-F1 的 mean/worst 都进 checks，任一跌幅 >0.5pt 即 fail；辅助口径不能替代验收口径",
     "relation_gate": "金标覆盖子集 recall mean/worst 不下降；precision mean/worst 跌幅 <=0.5pt",
-    "relation_full_scope": "全量口径（含 02 金标刻意未标注句面的 FP）mean/worst 也参与放行（gate.checks），与覆盖子集并列列报",
+    "relation_full_scope": "全量口径（含 02 金标刻意未标注句面的 FP）的 raw（原始未归一化，验收口径）与 normalized（类型前缀标签归一化，辅助口径）两套 mean/worst 都参与放行（gate.checks），与覆盖子集并列列报；辅助口径不能替代验收口径",
+    "relation_note": "评审 r5 S1：raw_relation_f1_* 必填并进 checks，不再只列报",
     "truncated_chunks": "候选档必须为 0（压力语料 + 真实文档）",
-    "overlap": "冻结基线 200 不变，且实际重叠对数 >0",
+    "overlap": "冻结基线 200 不变；overlap_observed 只做 >0 冒烟检查，实际重叠对数/可重叠对数见 overlap_observed（长句可致并非逐对重叠）",
     "chunk_calls": "候选档必须下降",
     "budgets": "两档预算必须不同（1500-vs-1500 不能 passed）"
   },
@@ -22879,7 +22880,11 @@
       "max_chunk_output_tokens": 5482,
       "max_chunk_units": 1500,
       "max_chunk_chars": 2292,
-      "overlap_pairs_min": 8
+      "overlap_pairs_min": 8,
+      "raw_relation_f1_mean": 0.7042,
+      "raw_relation_f1_worst": 0.5876,
+      "overlap_pairs_possible_min": 25,
+      "overlap_pairs_ratio_min": 0.32
     },
     "3500": {
       "budget": 3500,
@@ -51119,7 +51124,11 @@
       "max_chunk_output_tokens": 5402,
       "max_chunk_units": 3597,
       "max_chunk_chars": 4615,
-      "overlap_pairs_min": 7
+      "overlap_pairs_min": 7,
+      "raw_relation_f1_mean": 0.5954,
+      "raw_relation_f1_worst": 0.5908,
+      "overlap_pairs_possible_min": 8,
+      "overlap_pairs_ratio_min": 0.875
     }
   },
   "real_docs": {
@@ -51609,9 +51618,9 @@
       "documents": 12,
       "max_document_units": 5360,
       "max_chunk_units": 1497,
-      "candidate_budget": 3500,
+      "candidate_budget": 1500,
       "exercises_candidate_budget": true,
-      "note": "真实文档批次包含超过候选预算 3500 的长文（最大文档 5360 units，最大块 1497 units），候选档分块已被真实压到。"
+      "note": "真实文档批次包含超过候选预算 1500 的长文（最大文档 5360 units，最大块 1497 units），候选档分块已被真实压到。"
     },
     "3500": {
       "documents": 12,
@@ -51675,6 +51684,23 @@
       "max_pt": 5.58,
       "label": "unpaired independent repeats; worst-of-N = min over round-aligned repeats (no seed, not a paired test)"
     },
+    "relation_raw_full": {
+      "values": [
+        -8.95,
+        -18.06,
+        0.32,
+        -8.41,
+        -19.28
+      ],
+      "n": 5,
+      "mean_pt": -10.876,
+      "sd_pt": 8.0215,
+      "ci95_low_pt": -20.8344,
+      "ci95_high_pt": -0.9176,
+      "min_pt": -19.28,
+      "max_pt": 0.32,
+      "label": "unpaired independent repeats; worst-of-N = min over round-aligned repeats (no seed, not a paired test)"
+    },
     "relation_covered_recall": {
       "values": [
         7.01,
@@ -51732,6 +51758,13 @@
       5.58,
       -3.15,
       -14.0
+    ],
+    "relation_raw_full": [
+      -8.95,
+      -18.06,
+      0.32,
+      -8.41,
+      -19.28
     ],
     "relation_covered_recall": [
       7.01,
@@ -52194,6 +52227,8 @@
       "entity_normalized_worst_within_0_5pt": true,
       "relation_full_f1_mean_not_lower": false,
       "relation_full_f1_worst_not_lower": false,
+      "relation_raw_full_f1_mean_not_lower": false,
+      "relation_raw_full_f1_worst_not_lower": false,
       "relation_covered_recall_mean_not_lower": true,
       "relation_covered_recall_worst_not_lower": true,
       "relation_covered_precision_mean_within_0_5pt": false,
@@ -52209,6 +52244,8 @@
       "entity_raw_worst_within_0_5pt",
       "relation_full_f1_mean_not_lower",
       "relation_full_f1_worst_not_lower",
+      "relation_raw_full_f1_mean_not_lower",
+      "relation_raw_full_f1_worst_not_lower",
       "relation_covered_precision_mean_within_0_5pt",
       "relation_covered_precision_worst_within_0_5pt"
     ],
@@ -52222,10 +52259,17 @@
     "relation_covered_precision_worst_delta_pt": -28.66,
     "relation_full_mean_delta_pt": -6.32,
     "relation_full_worst_delta_pt": -16.33,
+    "relation_raw_full_mean_delta_pt": -10.88,
+    "relation_raw_full_worst_delta_pt": -19.28,
     "entity_caliber": {
       "acceptance": "raw（原始未归一化）macro-F1",
       "auxiliary": "normalized（类型前缀标签归一化后）macro-F1",
       "rule": "raw 与 normalized 的 mean/worst 都进 checks，任一跌幅超过 0.5pt 即 fail；辅助口径不能替代验收口径"
+    },
+    "relation_caliber": {
+      "acceptance": "raw（原始未归一化）全量关系 F1",
+      "auxiliary": "normalized（类型前缀标签归一化后）全量关系 F1",
+      "rule": "raw 与 normalized 全量关系 F1 的 mean/worst 都进 checks，任一低于基线即 fail；辅助口径不能替代验收口径"
     },
     "caliber": {
       "entity_macro_f1": "macro: 逐篇 F1 先平均，再跨轮平均",
@@ -52262,13 +52306,31 @@
     "source_json": "docs/evidence/04-budget-ab.json",
     "source_git_sha": "e78dd35d70bcc2c7f1d29f89973914439e6fbfb4",
     "source_generated_at": "2026-11-03T08:46:42.466076+00:00",
-    "regenerated_at": "2026-11-04T01:08:57.167036+00:00",
+    "regenerated_at": "2026-11-04T01:22:29.681686+00:00",
     "regenerator": {
-      "git_sha": "503676038d85aed9c777400e3a278f586d7673a0",
-      "git_describe": "5036760",
+      "git_sha": "d67d682f6817ef1531baa4aeb2f98a2a19df2f09",
+      "git_describe": "d67d682",
       "git_dirty": false,
       "git_status_porcelain": ""
     },
     "note": "原始逐轮/逐篇数据未重跑 LLM；gate 与 thresholds 由当前实现从既有 JSON 复算，gate 用 rounds 校验 explicit deltas"
+  },
+  "overlap_observed": {
+    "baseline": {
+      "budget": 1500,
+      "min_overlap_pairs": 8,
+      "min_possible_pairs": 25,
+      "min_pair_ratio": 0.32,
+      "documents_with_multiple_chunks": 15
+    },
+    "candidate": {
+      "budget": 3500,
+      "min_overlap_pairs": 7,
+      "min_possible_pairs": 8,
+      "min_pair_ratio": 0.875,
+      "documents_with_multiple_chunks": 15
+    },
+    "gate_check": "gate.overlap_observed 只做 min_overlap_pairs > 0 的冒烟检查；是否每对都重叠不是放行条件",
+    "note": "长句（> overlap units）会让 overlap_seed 为空，因此不是每对相邻块都重叠；这里列报实际重叠对数 / 可重叠对数（n_chunks-1），合成正文的逐对断言由 tests/test_chunk_budget.py 的配置测试覆盖"
   }
 }
