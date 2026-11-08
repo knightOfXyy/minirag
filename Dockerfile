@@ -6,7 +6,8 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     HF_ENDPOINT=https://hf-mirror.com \
-    HF_HUB_DISABLE_XET=1
+    HF_HUB_DISABLE_XET=1 \
+    FASTEMBED_CACHE_PATH=/opt/fastembed
 
 WORKDIR /app
 
@@ -18,6 +19,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY pyproject.toml ./
 COPY src ./src
 RUN pip install --no-cache-dir -e . --no-deps
+
+# 离线部署：构建期预下载嵌入模型（BAAI/bge-small-zh-v1.5），运行期不再访问 HuggingFace
+ARG BAKE_EMBEDDING=1
+RUN if [ "$BAKE_EMBEDDING" = "1" ]; then \
+      python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='BAAI/bge-small-zh-v1.5')"; \
+    fi
 
 # API 默认监听 8000；查询服务不需要 LLM（加 --llm 才开启实时抽取）
 EXPOSE 8000
