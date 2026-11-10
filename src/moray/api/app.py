@@ -423,4 +423,30 @@ def create_app(
             logger.warning("文档总结失败 filename=%s: %r", filename, exc)
             raise HTTPException(500, "文档总结失败") from exc
 
+    # ---------------------------------------------------------- 敌情线索抽取
+    @app.post("/threat-extract")
+    async def threat_extract(
+        file: UploadFile = File(...),
+        focus: str | None = Form(None),
+    ):
+        from ..summarize.service import ALLOWED_EXTENSIONS
+        from ..summarize.threat_service import extract_threat_clues
+
+        filename = file.filename or ""
+        ext = Path(filename).suffix.lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(400, f"不支持的文件类型: {ext or '(无扩展名)'}")
+
+        content = await file.read()
+        if len(content) > MAX_FILE_BYTES:
+            raise HTTPException(400, "文件超过 50MB 上限")
+
+        try:
+            return await extract_threat_clues(content, filename, focus)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001 解析/LLM 失败不外透内部细节
+            logger.warning("敌情线索抽取失败 filename=%s: %r", filename, exc)
+            raise HTTPException(500, "敌情线索抽取失败") from exc
+
     return app
