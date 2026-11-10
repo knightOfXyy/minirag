@@ -79,7 +79,9 @@ def main(argv: list[str] | None = None) -> None:
 
     # 依赖在 uvicorn 自己的事件循环里、经 lifespan 构建（连接池才绑定正确循环）
     app = create_app(deps_factory=factory)
-    uvicorn.run(app, host=args.host, port=args.port)
+    # 兼容旧内核（如 CentOS 7 / kernel 3.10）：显式禁用 uvloop/httptools 原生扩展，
+    # 否则在低版本内核上会 SIGABRT/SIGSEGV。纯 asyncio + h11 性能足够验证环境使用。
+    uvicorn.run(app, host=args.host, port=args.port, loop="asyncio", http="h11")
 
 
 if __name__ == "__main__":
