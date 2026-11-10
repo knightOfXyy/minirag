@@ -60,6 +60,32 @@ python -m moray.api.server --port 8000 --llm    # 额外开启 POST /extract 实
 # 交互式文档：http://127.0.0.1:8000/docs
 ```
 
+### 文档总结 `POST /summarize`
+
+通用非结构化文档总结（同步、无状态、不落库）。上传文件 + 可选 `focus` 侧重提示，
+返回四块结构：`summary` / `keyPoints` / `persons` / `riskClues`。
+
+- 支持扩展名：`.pdf` `.docx` `.xlsx` `.txt` `.md`，单文件上限 50MB。
+- 解析：markitdown 为主，PDF 以 pymupdf4llm 兜底；纯文本显式 utf-8。
+- 错误：扩展名/大小/空文本返回 `400`；解析或 LLM 失败返回 `500`（消息不外透）。
+
+```bash
+curl -X POST http://127.0.0.1:8000/summarize \
+  -F "file=@/path/to/report.pdf" \
+  -F "focus=重点关注涉密合作与海外关联"
+```
+
+响应（裸 dict，无 `{code,msg,data}` 信封）：
+
+```json
+{
+  "summary": "整篇文档的一段式摘要",
+  "keyPoints": ["要点1", "要点2"],
+  "persons": [{ "name": "张三", "identity": "某研究所研究员", "role": "项目负责人" }],
+  "riskClues": [{ "clue": "线索描述", "reason": "判定依据", "level": "高" }]
+}
+```
+
 ## 模型配置
 
 默认使用火山方舟 Coding Plan 网关（OpenAI 兼容，已实测 chat 与 function calling）：

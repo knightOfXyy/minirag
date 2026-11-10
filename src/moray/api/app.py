@@ -30,9 +30,10 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Awaitable, Callable
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 
 from ..extraction import ExtractionError
 from ..extraction.document import Document, ExtractionOutput, Usage
@@ -49,6 +50,9 @@ logger = logging.getLogger(__name__)
 
 # extractor_fn: async (text, feedback) -> ExtractionResult
 ExtractorFn = Callable[[str, str | None], Awaitable]
+
+# 文档总结单文件上限（50MB，与 talent-api 网关一致；ADR 0004）
+MAX_FILE_BYTES = 50 * 1024 * 1024
 
 
 @dataclass
@@ -393,5 +397,30 @@ def create_app(
         if d.dashboard is None:
             raise HTTPException(501, "未配置看板")
         return await d.dashboard.summary(domain_code=domain_code, source=source)
+
+    # ------------------------------------------------------------------ 总结
+    @app.post("/summarize")
+    async def summarize(
+        file: UploadFile = File(...),
+        focus: str | None = Form(None),
+    ):
+        from ..summarize.service import ALLOWED_EXTENSIONS, summarize_document
+
+        filename = file.filename or ""
+        ext = Path(filename).suffix.lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(400, f"不支持的文件类型: {ext or '(无扩展名)'}")
+
+        content = await file.read()
+        if len(content) > MAX_FILE_BYTES:
+            raise HTTPException(400, "文件超过 50MB 上限")
+
+        try:
+            return await summarize_document(content, filename, focus)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001 解析/LLM 失败不外透内部细节
+            logger.warning("文档总结失败 filename=%s: %r", filename, exc)
+            raise HTTPException(500, "文档总结失败") from exc
 
     return app
