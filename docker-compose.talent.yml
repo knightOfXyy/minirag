@@ -1,0 +1,70 @@
+# ============================================================================
+# moray（minirag）人才库专用精简部署（60 测试机）
+#   - 自带 pgvector 容器承载 moray_kb 知识库，与人才库 wz_talent 完全隔离
+#   - 只起 api（/summarize 同步直算 LLM，不需要 worker）
+#   - 加入共享网络 talentnet，供 wz-talent-api 以 http://moray:8000 访问
+#   - ARK 等 LLM 凭证经 .env 注入（不入库）
+# 启动：docker compose -f docker-compose.talent.yml up -d --build
+# 前置：docker network create talentnet
+# ============================================================================
+services:
+  moray-pg:
+    image: pgvector/pgvector:pg16
+    container_name: moray-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${MORAY_PG_USER:-moray}
+      POSTGRES_PASSWORD: ${MORAY_PG_PASSWORD:-moray_dev_2026}
+      POSTGRES_DB: ${MORAY_PG_DB:-moray_kb}
+    volumes:
+      - moray_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MORAY_PG_USER:-moray} -d ${MORAY_PG_DB:-moray_kb}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - talentnet
+
+  moray:
+    build: .
+    image: moray:talent
+    container_name: moray
+    restart: unless-stopped
+    command: ["python", "-m", "moray.api.server", "--host", "0.0.0.0", "--port", "8000"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # 容器内用服务名 + 容器端口
+      POSTGRES_HOST: moray-pg
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${MORAY_PG_USER:-moray}
+      POSTGRES_PASSWORD: ${MORAY_PG_PASSWORD:-moray_dev_2026}
+      POSTGRES_DB: ${MORAY_PG_DB:-moray_kb}
+      HF_ENDPOINT: https://hf-mirror.com
+      HF_HUB_DISABLE_XET: "1"
+    ports:
+      - "8000:8000"
+    volumes:
+      - moray_hf_cache:/root/.cache
+    depends_on:
+      moray-pg:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/healthz', timeout=5).status==200 else sys.exit(1)"]
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 30s
+    networks:
+      - talentnet
+
+volumes:
+  moray_pgdata:
+  moray_hf_cache:
+
+networks:
+  talentnet:
+    external: true
