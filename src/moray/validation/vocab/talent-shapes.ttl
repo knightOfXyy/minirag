@@ -1,0 +1,49 @@
+# talent 领域专有 SHACL 形状（一期）
+# 对齐 schema.org 词汇，约束 moray 抽取结果投影出的 RDF 图。
+# 设计取向：只放 Pydantic 管不了的「跨字段/图级/格式」约束；单对象必填类型仍由 Pydantic 兜底。
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix schema: <https://schema.org/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix ex: <http://talent.local/shape#> .
+
+# ---- 人物：必须有名称；邮箱若出现须合法；置信度 0~1（抽取侧已约束，这里图级再守一道）----
+ex:PersonShape a sh:NodeShape ;
+    sh:targetClass schema:Person ;
+    sh:property [
+        sh:path schema:name ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "人物实体必须提供非空名称(name)" ;
+    ] ;
+    sh:property [
+        sh:path schema:email ;
+        sh:pattern "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$" ;
+        sh:message "邮箱格式不合法" ;
+    ] .
+
+# ---- 机构：必须有名称 ----
+ex:OrganizationShape a sh:NodeShape ;
+    sh:targetClass schema:Organization ;
+    sh:property [
+        sh:path schema:name ;
+        sh:minCount 1 ;
+        sh:message "机构实体必须提供非空名称(name)" ;
+    ] .
+
+# ---- 地点：名称非空 ----
+ex:PlaceShape a sh:NodeShape ;
+    sh:targetClass schema:Place ;
+    sh:property [
+        sh:path schema:name ;
+        sh:minCount 1 ;
+        sh:message "地点实体必须提供非空名称(name)" ;
+    ] .
+
+# ---- 事件：名称非空 ----
+ex:EventShape a sh:NodeShape ;
+    sh:targetClass schema:Event ;
+    sh:property [
+        sh:path schema:name ;
+        sh:minCount 1 ;
+        sh:message "事件实体必须提供非空名称(name)" ;
+    ] .

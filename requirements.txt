@@ -28,6 +28,10 @@ python-multipart==0.0.32
 markitdown[pdf,docx,xlsx]==0.1.9
 pymupdf4llm==1.28.2
 
+# ===== 离线 SHACL 数据校验（schema.org 词汇随包 bake，纯 Python、无 C 扩展、运行期不联网）=====
+rdflib==7.6.0
+pyshacl==0.40.2
+
 # ===== 第 14 课起：服务化 =====
 # fastapi>=0.115.0
 # uvicorn>=0.30.0

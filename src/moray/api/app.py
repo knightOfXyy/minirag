@@ -68,6 +68,11 @@ class ThreatEmbedRequest(_BaseModel):
 # 复用 DedupPair（已带 camelCase alias），别名导出供端点注解
 ThreatDedupJudgeRequest = _DedupPair
 
+# 离线 SHACL 校验请求体（模块级定义，FastAPI 才能正确解析 JSON body）
+from ..validation.schemas import ValidationRequest as _ValidationRequest  # noqa: E402
+
+ValidationHttpRequest = _ValidationRequest
+
 
 @dataclass
 class AppDeps:
@@ -489,5 +494,14 @@ def create_app(
         except Exception as exc:  # noqa: BLE001 LLM 失败不外透内部细节
             logger.warning("敌情线索消歧裁决失败: %r", exc)
             raise HTTPException(500, "消歧裁决失败") from exc
+
+    # ------------------------------------------------- 离线 SHACL 数据校验
+    @app.post("/validate")
+    async def validate(req: ValidationHttpRequest):
+        from ..validation import validate_extraction
+
+        # validate_extraction 内部已做降级（故障返回 degraded=true，不抛 500）
+        result = await validate_extraction(req)
+        return result.model_dump(by_alias=True, exclude_none=True)
 
     return app
