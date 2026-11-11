@@ -31,6 +31,7 @@ _SHACL = Namespace("http://www.w3.org/ns/shacl#")
 # 领域代码 → 形状文件名；未登记领域回退通用形状
 _DOMAIN_SHAPES: dict[str, str] = {
     "general": "talent-shapes.ttl",
+    "talent-person": "talent-person-shapes.ttl",
 }
 _DEFAULT_SHAPES = "talent-shapes.ttl"
 

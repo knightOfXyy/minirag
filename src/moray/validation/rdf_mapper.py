@@ -15,7 +15,8 @@ from rdflib.namespace import RDF, SDO
 
 from .schemas import EntityIn, RelationIn
 
-# 项目扩展命名空间：schema.org 没有的领域专有属性挂这里，避免污染标准词汇
+# 项目扩展命名空间：schema.org 没有的领域专有属性挂这里，避免污染标准词汇。
+# 注意：SHACL 形状文件里用同名前缀 attr:，两者 IRI 必须完全一致，否则形状静默不匹配。
 EX = Namespace("http://talent.local/attr/")
 
 # moray 领域类型代码 → schema.org 类
@@ -28,14 +29,19 @@ TYPE_TO_SCHEMA: dict[str, URIRef] = {
 }
 
 # 领域属性键 → schema.org 标准属性（白名单，命中走标准谓词）
+# 同时兼容 snake_case 与 camelCase 两种键（talent 档案用 camelCase）
 ATTR_TO_SCHEMA: dict[str, URIRef] = {
     "title": SDO.jobTitle,
     "job_title": SDO.jobTitle,
+    "position": SDO.jobTitle,
     "email": SDO.email,
     "description": SDO.description,
     "birth_date": SDO.birthDate,
+    "birthDate": SDO.birthDate,
     "founded_date": SDO.foundingDate,
     "industry": SDO.industry,
+    "address": SDO.address,
+    "telephone": SDO.telephone,
     "legal_representative": EX.legalRepresentative,
 }
 

@@ -1,0 +1,73 @@
+# talent 人员档案 SHACL 形状（talent-person 领域）
+# 约束 Excel 批量导入 / 建档的 Person 数据。聚焦 Pydantic 管不了的
+# 「格式正则 + 受控枚举 + 条件必填」，单对象非空仍由入口 Pydantic 兜底。
+# 字段经 rdf_mapper 投影：标准属性走 schema:，talent 专有字段走 ex: 扩展命名空间。
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix schema: <https://schema.org/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix ex: <http://talent.local/shape#> .
+@prefix attr: <http://talent.local/attr/> .
+
+ex:TalentPersonShape a sh:NodeShape ;
+    sh:targetClass schema:Person ;
+
+    # 名称必填（非空字符串）
+    sh:property [
+        sh:path schema:name ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string ;
+        sh:minLength 1 ;
+        sh:message "人员姓名不能为空" ;
+    ] ;
+
+    # 性别受控枚举（出现就必须合法；不出现不约束）
+    sh:property [
+        sh:path attr:gender ;
+        sh:in ( "男" "女" ) ;
+        sh:message "性别只能取「男」或「女」" ;
+    ] ;
+
+    # 政治面貌受控枚举
+    sh:property [
+        sh:path attr:politicalStatus ;
+        sh:in ( "中共党员" "民主党派" "群众" "无党派人士" ) ;
+        sh:message "政治面貌取值不合法" ;
+    ] ;
+
+    # 全职/兼职受控枚举
+    sh:property [
+        sh:path attr:employmentType ;
+        sh:in ( "全职" "兼职" ) ;
+        sh:message "全职/兼职只能取「全职」或「兼职」" ;
+    ] ;
+
+    # 涉密等级受控枚举
+    sh:property [
+        sh:path attr:secretLevel ;
+        sh:in ( "绝密" "机密" "秘密" "非密" ) ;
+        sh:message "涉密等级取值不合法" ;
+    ] ;
+
+    # 风险等级受控枚举
+    sh:property [
+        sh:path attr:riskLevel ;
+        sh:in ( "低" "中" "高" ) ;
+        sh:message "风险等级只能取「低/中/高」" ;
+    ] ;
+
+    # 手机号格式（中国大陆 11 位）；留空不校验
+    sh:property [
+        sh:path attr:phone ;
+        sh:pattern "^1[3-9]\\d{9}$" ;
+        sh:message "手机号码格式不合法（应为 11 位大陆手机号）" ;
+    ] ;
+
+    # 身份证号：仅当填的是 18 位身份证时校验格式（末位可为 X）。
+    # 该字段也允许护照号，护照无统一正则，故 SHACL 只守身份证形态；
+    # 非身份证形态（如护照）由上层业务另行处理，不在此拦截。
+    # 注：mapper 会跳过空值，因此留空不触发本约束。
+    sh:property [
+        sh:path attr:idNumber ;
+        sh:pattern "^\\d{17}[0-9Xx]$" ;
+        sh:message "身份证号格式不合法（应为 18 位）；护照号请走专用字段/上层校验" ;
+    ] .
