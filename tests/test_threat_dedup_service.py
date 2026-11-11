@@ -17,10 +17,13 @@ class FakeEmbedder:
     def embed(self, texts):
         import numpy as np
 
-        self.calls.append(list(texts) if not isinstance(texts, str) else [texts])
-        n = 1 if isinstance(texts, str) else len(texts)
-        vecs = np.ones((n, 4), dtype="float32")
-        return vecs[0] if n == 1 else vecs
+        # 对齐真实 Embedder：list 输入恒返回 shape=(n, dim) 二维；str 单条返回一维
+        if isinstance(texts, str):
+            self.calls.append([texts])
+            return np.ones(4, dtype="float32")
+        items = list(texts)
+        self.calls.append(items)
+        return np.ones((len(items), 4), dtype="float32")
 
     def embed_one(self, text):
         return self.embed(text).tolist()
@@ -31,6 +34,14 @@ def fake_embedder(monkeypatch):
     fe = FakeEmbedder()
     monkeypatch.setattr(svc, "get_embedder", lambda *a, **k: fe)
     return fe
+
+
+def test_embed_texts_single_text_not_nested(fake_embedder):
+    # 回归：单条文本必须是二维 [[...512...]]，不能三层嵌套
+    out = svc.embed_texts(["only-one"])
+    assert len(out) == 1
+    assert len(out[0]) == 4
+    assert all(isinstance(x, float) for x in out[0])
 
 
 def test_embed_texts_batch_returns_normalized_vectors(fake_embedder):

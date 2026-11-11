@@ -28,14 +28,15 @@ _SYSTEM_PROMPT = (
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    """批量编码为 L2 归一化向量；空列表返回空列表。"""
+    """批量编码为 L2 归一化向量；空列表返回空列表。
+
+    Embedder.embed 对 list 输入恒返回 shape=(n, dim) 的二维数组（n=len(texts)），
+    因此统一按二维 tolist，不能对单条再包一层，否则产出三层嵌套向量。
+    """
     if not texts:
         return []
     embedder = get_embedder()
-    vecs = embedder.embed(texts)
-    # fastembed 已归一化，这里 tolist 前再保证是二维
-    if len(texts) == 1:
-        return [vecs.tolist()]
+    vecs = embedder.embed(list(texts))
     return [v.tolist() for v in vecs]
 
 
