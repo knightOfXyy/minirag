@@ -55,6 +55,20 @@ ExtractorFn = Callable[[str, str | None], Awaitable]
 MAX_FILE_BYTES = 50 * 1024 * 1024
 
 
+# 敌情线索语义消歧的 HTTP 请求体（模块级定义，FastAPI 才能正确解析 JSON body）
+from pydantic import BaseModel as _BaseModel  # noqa: E402
+
+from ..summarize.dedup_schema import DedupPair as _DedupPair  # noqa: E402
+
+
+class ThreatEmbedRequest(_BaseModel):
+    texts: list[str]
+
+
+# 复用 DedupPair（已带 camelCase alias），别名导出供端点注解
+ThreatDedupJudgeRequest = _DedupPair
+
+
 @dataclass
 class AppDeps:
     pool: object
@@ -448,5 +462,32 @@ def create_app(
         except Exception as exc:  # noqa: BLE001 解析/LLM 失败不外透内部细节
             logger.warning("敌情线索抽取失败 filename=%s: %r", filename, exc)
             raise HTTPException(500, "敌情线索抽取失败") from exc
+
+    # ------------------------------------------------- 敌情线索语义消歧
+    @app.post("/threat-embed")
+    async def threat_embed(req: ThreatEmbedRequest):
+        from ..summarize.dedup_service import embed_texts
+
+        try:
+            return {"embeddings": embed_texts(req.texts)}
+        except Exception as exc:  # noqa: BLE001 不外透内部细节
+            logger.warning("敌情线索向量编码失败: %r", exc)
+            raise HTTPException(500, "向量编码失败") from exc
+
+    @app.post("/threat-dedup-judge")
+    async def threat_dedup_judge(req: ThreatDedupJudgeRequest):
+        from ..summarize.dedup_service import judge_pair
+
+        try:
+            return await judge_pair(
+                new_title=req.new_title,
+                new_reason=req.new_reason,
+                existing_title=req.existing_title,
+                existing_reason=req.existing_reason,
+                similarity=req.similarity,
+            )
+        except Exception as exc:  # noqa: BLE001 LLM 失败不外透内部细节
+            logger.warning("敌情线索消歧裁决失败: %r", exc)
+            raise HTTPException(500, "消歧裁决失败") from exc
 
     return app
